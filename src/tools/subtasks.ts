@@ -1,21 +1,8 @@
 import { endpoints } from "@/endpoints";
+import { loadChoreById } from "@/tools/chore-lookup";
 import { resolveOne } from "@/resolve";
 import type { WriteContext } from "@/tools/write";
-import type { RawChore, RawSubTask } from "@/types";
-
-async function loadChoreById(chore_id: number | undefined, ctx: WriteContext): Promise<RawChore> {
-  if (typeof chore_id !== "number") {
-    throw new Error("chore_id is required. Resolve a name to an id with list_chores or get_chore first.");
-  }
-  const all = await ctx.service.chores();
-  const found = all.find((chore) => chore.id === chore_id);
-  if (!found) {
-    throw new Error(
-      `No chore with id ${chore_id} is visible on this account. It may have been deleted or archived since the chore list was last read.`,
-    );
-  }
-  return found;
-}
+import type { RawSubTask } from "@/types";
 
 function isDone(sub: RawSubTask): boolean {
   return Boolean(sub.completedAt);

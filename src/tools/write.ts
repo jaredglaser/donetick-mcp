@@ -7,6 +7,7 @@ import {
   type EditInput,
 } from "@/chore-request";
 import { endpoints } from "@/endpoints";
+import { loadChoreById } from "@/tools/chore-lookup";
 import { projectChore } from "@/projection";
 import type { DonetickService } from "@/service";
 import type { Member, Project, ProjectedChore, RawChore } from "@/types";
@@ -36,30 +37,6 @@ async function loadBuildContext(ctx: WriteContext): Promise<BuildContext> {
     ctx.service.projects(),
   ]);
   return { members, projects, now: ctx.now(), timezone: ctx.timezone };
-}
-
-/**
- * Shared by editChore and deleteChore. The merge base for a write must be the
- * chores list row, never GET /details, which omits assignStrategy, assignees,
- * frequency, frequencyMetadata, isRolling, isPrivate, labelsV2, notification,
- * notificationMetadata, points, and requireApproval. mergeEditRequest refuses a
- * details-shaped object, but resolving from the list here means the wrong shape
- * never reaches it. Name-based lookup is Task 6's resolver; this only accepts an id.
- */
-async function loadChoreById(chore_id: number | undefined, service: DonetickService): Promise<RawChore> {
-  if (typeof chore_id !== "number") {
-    throw new Error(
-      "chore_id is required. Name-based lookup is not available on this tool yet; use list_chores or get_chore to find the id.",
-    );
-  }
-  const all = await service.chores();
-  const found = all.find((chore) => chore.id === chore_id);
-  if (!found) {
-    throw new Error(
-      `No chore with id ${chore_id} is visible on this account. It may have been deleted or archived since the chore list was last read.`,
-    );
-  }
-  return found;
 }
 
 function isValidCreatedId(value: unknown): value is number {
@@ -141,7 +118,7 @@ export async function editChore(
   input: EditInput & { chore_id?: number },
   ctx: WriteContext,
 ): Promise<EditOutcome> {
-  const existing = await loadChoreById(input.chore_id, ctx.service);
+  const existing = await loadChoreById(input.chore_id, ctx);
   const buildCtx = await loadBuildContext(ctx);
   const body = mergeEditRequest(existing, input, buildCtx);
 
@@ -182,7 +159,7 @@ export async function deleteChore(
 ): Promise<DeleteOutcome> {
   // Resolved before any confirmation is offered, so a nonexistent id fails outright
   // instead of asking the user to confirm deleting a chore that is not there.
-  const existing = await loadChoreById(input.chore_id, ctx.service);
+  const existing = await loadChoreById(input.chore_id, ctx);
 
   if (answer === undefined) {
     return {

@@ -1,6 +1,7 @@
 import { mergeEditRequest, type BuildContext } from "@/chore-request";
 import { parseDueDate } from "@/dates";
 import { endpoints } from "@/endpoints";
+import { loadArchivedChoreById, loadChoreById } from "@/tools/chore-lookup";
 import { resolveMember } from "@/resolve";
 import type { WriteContext } from "@/tools/write";
 import type { RawChore } from "@/types";
@@ -49,24 +50,8 @@ export interface ArchiveOutcome {
   name: string;
 }
 
-async function loadChoreFrom(
-  chore_id: number | undefined,
-  fetchAll: () => Promise<RawChore[]>,
-  whichList: string,
-): Promise<RawChore> {
-  if (typeof chore_id !== "number") {
-    throw new Error("chore_id is required.");
-  }
-  const all = await fetchAll();
-  const found = all.find((chore) => chore.id === chore_id);
-  if (!found) {
-    throw new Error(`No chore with id ${chore_id} is in ${whichList}.`);
-  }
-  return found;
-}
-
 function loadActiveChore(chore_id: number | undefined, ctx: WriteContext): Promise<RawChore> {
-  return loadChoreFrom(chore_id, () => ctx.service.chores(), "the active chore list");
+  return loadChoreById(chore_id, ctx);
 }
 
 /**
@@ -75,7 +60,7 @@ function loadActiveChore(chore_id: number | undefined, ctx: WriteContext): Promi
  * unarchiveChore call fail with "not found" on exactly the chore it is meant to act on.
  */
 function loadArchivedChore(chore_id: number | undefined, ctx: WriteContext): Promise<RawChore> {
-  return loadChoreFrom(chore_id, () => ctx.service.archivedChores(), "the archived chore list");
+  return loadArchivedChoreById(chore_id, ctx);
 }
 
 export async function rescheduleChore(input: RescheduleInput, ctx: WriteContext): Promise<RescheduleOutcome> {
