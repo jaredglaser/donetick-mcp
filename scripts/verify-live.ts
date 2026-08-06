@@ -110,7 +110,20 @@ async function main(): Promise<void> {
    * this function gets the same shape assertion for free, so that check below
    * just calls this and reports what it got.
    */
-  async function createScratchChore(body: ChoreCreateBody): Promise<number> {
+  /**
+ * Recurrence, labels, points and the approval flag live only on the chores list row.
+ * GET /:id/details omits them, which the field-set check below proves. Reading a
+ * round-trip from /details reports a false regression, so every shape assertion
+ * about those fields must come from here.
+ */
+async function listRowById(id: number): Promise<Record<string, unknown>> {
+  const rows = (await client.get(endpoints.listChores())) as Array<Record<string, unknown>>;
+  const row = rows.find((r) => r.id === id);
+  if (!row) throw new Error(`chore ${id} is not in the chores list`);
+  return row;
+}
+
+async function createScratchChore(body: ChoreCreateBody): Promise<number> {
     const response = await client.post(endpoints.createChore(), body);
     if (typeof response !== "number" || !Number.isInteger(response) || response <= 0) {
       throw new Error(
@@ -168,7 +181,7 @@ async function main(): Promise<void> {
             frequencyMetadata: { unit: "days", timezone: config.timezone },
           }),
         );
-        const details = (await client.get(endpoints.choreDetails(id))) as Record<string, unknown>;
+        const details = await listRowById(id);
         if (details.frequencyType !== "interval") {
           throw new Error(`frequencyType round-tripped as ${JSON.stringify(details.frequencyType)}, not "interval"`);
         }
@@ -198,7 +211,7 @@ async function main(): Promise<void> {
             },
           }),
         );
-        const details = (await client.get(endpoints.choreDetails(id))) as Record<string, unknown>;
+        const details = await listRowById(id);
         const metadata = details.frequencyMetadata as Record<string, unknown> | null | undefined;
         if (details.frequencyType !== "day_of_the_month") {
           throw new Error(`frequencyType round-tripped as ${JSON.stringify(details.frequencyType)}, not "day_of_the_month"`);
