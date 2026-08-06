@@ -154,7 +154,9 @@ describe("DonetickService", () => {
   test("archivedChores() requests the includeArchived variant and is not cached", async () => {
     const fake = fakeClient({
       ...routes,
-      "/api/v1/chores/?includeSubtasks=true&includeArchived=true": [{ id: 1, name: "Trash" }],
+      "/api/v1/chores/?includeSubtasks=true&includeArchived=true": [
+        { id: 1, name: "Trash", isActive: false },
+      ],
     });
     const service = new DonetickService(fake.client as never, { cacheTtlMs: 10_000 });
 
@@ -164,6 +166,22 @@ describe("DonetickService", () => {
     expect(
       fake.calls.filter((c) => c === "GET /api/v1/chores/?includeSubtasks=true&includeArchived=true").length,
     ).toBe(2);
+  });
+
+  test("archivedChores() drops the active chores the includeArchived variant returns alongside them", async () => {
+    // Live check on 2026-08-06: includeArchived=true is a union of active and
+    // archived, so without a filter every active chore is reported as archived.
+    const fake = fakeClient({
+      ...routes,
+      "/api/v1/chores/?includeSubtasks=true&includeArchived=true": [
+        { id: 1, name: "Trash", isActive: false },
+        { id: 2, name: "Dishes", isActive: true },
+        { id: 3, name: "Field absent" },
+      ],
+    });
+    const service = new DonetickService(fake.client as never, { cacheTtlMs: 10_000 });
+
+    expect((await service.archivedChores()).map((c) => c.id)).toEqual([1]);
   });
 
   test("member and project caches outlive the chore cache ttl", async () => {

@@ -1,12 +1,13 @@
 #!/usr/bin/env bun
 import { z } from "zod";
-import { acceptedContent, inputRequired, McpServer, type ServerContext } from "@modelcontextprotocol/server";
+import { inputRequired, inputResponse, McpServer, type ServerContext } from "@modelcontextprotocol/server";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { DonetickClient } from "@/client";
 import { parseConfig } from "@/config";
 import { endpoints } from "@/endpoints";
 import { DonetickService } from "@/service";
 import { buildToolDefinitions } from "@/tools/index";
+import { CONFIRM_KEY, decideConfirmation } from "@/confirm";
 
 let probeFailure: string | undefined;
 
@@ -57,7 +58,9 @@ async function main(): Promise<void> {
               isError: true,
             };
           }
-          const confirmation = acceptedContent<{ confirm: boolean }>(ctx.mcpReq.inputResponses, "confirm");
+          const confirmation = decideConfirmation(
+            inputResponse(ctx.mcpReq.inputResponses, CONFIRM_KEY),
+          );
           const result = await tool.handler(args ?? {}, { confirmation });
           if (result.confirmRequired !== undefined) {
             const { key, message } = result.confirmRequired;

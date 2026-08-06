@@ -118,8 +118,14 @@ nothing behind. It exits non-zero if any check fails, and distinguishes a warnin
 confirm through the protocol's multi-round-trip flow rather than trusting an input
 flag, which means the client must declare `elicitation: {form: {}}` in its
 capabilities. A client that does not gets `-32021 MissingRequiredClientCapability`
-instead of a prompt, and cannot delete. Every other tool works regardless. Archiving
-is the alternative and keeps the chore's history.
+instead of a prompt, and cannot delete. A client that declares the capability but
+refuses the prompt gets a plain "nothing was deleted" result. Every other tool works
+regardless. Archiving is the alternative and keeps the chore's history.
+
+**`delete_chore` does not reach an archived chore.** It resolves ids against the
+active list, so deleting one that has been archived reports that the chore is not
+in that list. Unarchive it first, or leave it archived, which is already the
+non-destructive form of the same intent.
 
 These were verified against a live Donetick instance, not assumed from its source.
 
