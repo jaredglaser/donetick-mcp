@@ -318,6 +318,57 @@ describe("list_members and list_projects", () => {
   });
 });
 
+describe("list_chores archived scope", () => {
+  const archivedRow = {
+    id: 9,
+    name: "Deep clean fridge",
+    nextDueDate: null,
+    assignedTo: null,
+    priority: 0,
+    status: 0,
+    frequencyType: "once",
+    createdBy: 1,
+  };
+
+  test("scope=archived returns archived chores and does not consult the cached active list", async () => {
+    let choresCalled = false;
+    const fakeService = {
+      ...service,
+      chores: async () => {
+        choresCalled = true;
+        return [];
+      },
+      archivedChores: async () => [archivedRow],
+    };
+    const tools = buildToolDefinitions({ ...deps, service: fakeService as never });
+    const tool = tools.find((t) => t.name === "list_chores")!;
+
+    const result = await tool.handler({ scope: "archived" });
+    const parsed = jsonOf(result) as { chores: Array<{ id: number; name: string }> };
+
+    expect(parsed.chores.map((c) => c.id)).toEqual([9]);
+    expect(choresCalled).toBe(false);
+  });
+
+  test("scope other than archived still uses the cached active list", async () => {
+    let archivedCalled = false;
+    const fakeService = {
+      ...service,
+      chores: async () => [archivedRow],
+      archivedChores: async () => {
+        archivedCalled = true;
+        return [];
+      },
+    };
+    const tools = buildToolDefinitions({ ...deps, service: fakeService as never });
+    const tool = tools.find((t) => t.name === "list_chores")!;
+
+    await tool.handler({ scope: "all" });
+
+    expect(archivedCalled).toBe(false);
+  });
+});
+
 describe("failure isolation", () => {
   test("every tool's handler survives the service throwing, not just list_chores", async () => {
     const failing = {

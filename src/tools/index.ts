@@ -53,6 +53,7 @@ const SCOPES = [
   "due_this_week",
   "due_within_days",
   "unscheduled",
+  "archived",
 ] as const;
 
 /** Mirrors the keys Donetick's history endpoint actually returns; see corrections in the spec. */
@@ -134,7 +135,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
     {
       name: "list_chores",
       description:
-        "List chores from Donetick with filters. Use scope=overdue for what is late and scope=due_today for what is due now. Priority filters use Donetick's inverted scale where P1 is the most urgent and 'none' means unset. Returns a trimmed view; call get_chore for full detail.",
+        "List chores from Donetick with filters. Use scope=overdue for what is late, scope=due_today for what is due now, and scope=archived for chores that have been archived. Priority filters use Donetick's inverted scale where P1 is the most urgent and 'none' means unset. Returns a trimmed view; call get_chore for full detail.",
       inputSchema: {
         scope: z.enum(SCOPES).optional().describe("Which chores to include. Defaults to all."),
         days: z.number().int().positive().optional().describe("Window for scope=due_within_days."),
@@ -151,12 +152,18 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
         limit: z.number().int().positive().max(200).optional(),
       },
       handler: guard(async (args) => {
+        const scope = (args as { scope?: string }).scope;
+        // scope=archived fetches the uncached includeArchived variant instead of the
+        // regular cached list, which excludes archived chores entirely. That fetch has
+        // already narrowed the set, so it is passed to listChores as scope "all" rather
+        // than "archived", which bucket() does not know how to filter by.
         const [chores, members, projects] = await Promise.all([
-          service.chores(),
+          scope === "archived" ? service.archivedChores() : service.chores(),
           service.members(),
           service.projects(),
         ]);
-        return ok(listChores(args as ListArgs, { chores, members, projects, now: now(), timezone }));
+        const listArgs: ListArgs = scope === "archived" ? { ...(args as ListArgs), scope: "all" } : (args as ListArgs);
+        return ok(listChores(listArgs, { chores, members, projects, now: now(), timezone }));
       }),
     },
     {
