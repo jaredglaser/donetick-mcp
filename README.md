@@ -91,11 +91,26 @@ This server calls Donetick's internal `/api/v1` routes rather than the documente
 
 The tradeoff is that `/api/v1` is undocumented, and Donetick is on a beta version line where these routes can change without notice. This is mitigated by keeping every path this server calls in one place, `src/endpoints.ts`, and by a live verification script against a real instance.
 
-Verified against Donetick `v0.1.76` (commit `d4eca08`), on MCP protocol revision
+All 20 tools verified against Donetick `v0.1.76` (commit `d4eca08`), on MCP protocol revision
 `2026-07-28`. Check your own instance with `curl -s https://your-host/health`, which
 returns the version without needing a token. Note that unmatched paths return the
 frontend HTML with a 200, so a wrong `DONETICK_URL` fails by returning a web page
 rather than an error. The startup probe checks the response shape for this reason.
+
+## Checking the API contract
+
+This server targets Donetick's undocumented internal API, so the unit tests prove
+the code is self-consistent, not that Donetick still behaves as it was read. After a
+Donetick upgrade, run:
+
+```bash
+bun run verify:live
+```
+
+It exercises 16 contract facts against a real instance, creates scratch chores with a
+run-scoped name prefix, and deletes them in a `finally` so a mid-run failure leaves
+nothing behind. It exits non-zero if any check fails, and distinguishes a warning
+(something changed but nothing is broken) from a failure.
 
 ## Known limitations
 
