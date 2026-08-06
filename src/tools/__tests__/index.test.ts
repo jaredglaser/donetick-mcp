@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { z } from "zod";
 import { ASSIGN_STRATEGIES } from "@/chore-request";
 import { FREQUENCY_TYPES } from "@/frequency";
 import {
@@ -416,21 +417,29 @@ describe("failure isolation", () => {
       set_priority: { chore_id: 1, priority: "P1" },
       archive_chore: { chore_id: 1 },
       unarchive_chore: { chore_id: 1 },
+      complete_chore: { chore_id: 1 },
+      skip_chore: { chore_id: 1 },
+      undo_chore: { chore_id: 1 },
+      approve_chore: { chore_id: 1 },
+      reject_chore: { chore_id: 1 },
+      nudge_chore: { chore_id: 1 },
+      set_subtask_completed: { chore_id: 1, subtask: "wipe counters", completed: true },
     };
 
-    // Plan 2 Task 6 registers the eight write tools alongside the five read tools
-    // from Plan 1, so this count and the one below grow from 5 to 13 with it.
-    expect(tools).toHaveLength(13);
+    // Plan 2 Task 6 registered the eight write tools alongside the five read tools
+    // from Plan 1, growing this count from 5 to 13. Plan 3 Task 3 registers the
+    // seven action tools on top of that, growing it again to 20.
+    expect(tools).toHaveLength(20);
     for (const tool of tools) {
       const result = await tool.handler(argsByName[tool.name] ?? {});
       expect(result.isError).toBe(true);
     }
   });
 
-  test("tool names are unique and there are exactly 13", () => {
+  test("tool names are unique and there are exactly 20", () => {
     const names = buildToolDefinitions(deps).map((tool) => tool.name);
-    expect(names).toHaveLength(13);
-    expect(new Set(names).size).toBe(13);
+    expect(names).toHaveLength(20);
+    expect(new Set(names).size).toBe(20);
   });
 });
 
@@ -485,7 +494,7 @@ function fakeWriteService(opts: FakeWriteOptions = {}) {
 }
 
 describe("write tool registration", () => {
-  test("registers all eight write tools alongside the five read tools, totaling 13", () => {
+  test("registers all eight write tools alongside the five read tools", () => {
     const names = buildToolDefinitions(deps).map((tool) => tool.name);
     for (const name of [
       "create_chore",
@@ -499,8 +508,6 @@ describe("write tool registration", () => {
     ]) {
       expect(names).toContain(name);
     }
-    expect(names).toHaveLength(13);
-    expect(new Set(names).size).toBe(13);
   });
 
   test("create_chore's description documents the interval frequency type", () => {
@@ -620,6 +627,154 @@ describe("a chore id that does not exist", () => {
       expect(result.content[0]?.text).toMatch(/No chore with id 999999/);
       expect(result.content[0]?.text).not.toMatch(/instance returned an error/);
     }
+  });
+});
+
+// Plan 3 Task 3 coverage below: registration of the seven action tools
+// (complete_chore, skip_chore, undo_chore, approve_chore, reject_chore, nudge_chore,
+// set_subtask_completed) that bring the surface from 13 tools to 20.
+
+const actionChoreRow = {
+  id: 7,
+  name: "Take out trash",
+  nextDueDate: "2026-06-20T00:00:00Z",
+  assignedTo: 1,
+  assignees: [{ userId: 1 }],
+  priority: 2,
+  status: 0,
+  frequencyType: "interval",
+  frequency: 3,
+  requireApproval: false,
+  createdBy: 1,
+  subTasks: [{ id: 101, choreId: 7, name: "wipe counters", completedAt: null, orderId: 0 }],
+};
+
+describe("action tool registration", () => {
+  test("registers all seven action tools, bringing the total to 20", () => {
+    const names = buildToolDefinitions(deps).map((tool) => tool.name);
+    for (const name of [
+      "complete_chore",
+      "skip_chore",
+      "undo_chore",
+      "approve_chore",
+      "reject_chore",
+      "nudge_chore",
+      "set_subtask_completed",
+    ]) {
+      expect(names).toContain(name);
+    }
+    expect(names).toHaveLength(20);
+    expect(new Set(names).size).toBe(20);
+  });
+
+  test("undo_chore's input schema has no name key, and chore_id is required rather than optional", () => {
+    const tool = buildToolDefinitions(deps).find((t) => t.name === "undo_chore")!;
+    expect(Object.keys(tool.inputSchema)).not.toContain("name");
+
+    const schema = z.object(tool.inputSchema);
+    expect(schema.safeParse({}).success).toBe(false);
+    expect(schema.safeParse({ chore_id: 7 }).success).toBe(true);
+  });
+
+  test("complete_chore's description mentions approval", () => {
+    const tool = buildToolDefinitions(deps).find((t) => t.name === "complete_chore")!;
+    expect(tool.description).toMatch(/approval/i);
+  });
+
+  test("nudge_chore's description mentions needing another member", () => {
+    const tool = buildToolDefinitions(deps).find((t) => t.name === "nudge_chore")!;
+    expect(tool.description).toMatch(/another member/i);
+  });
+
+  test("undo_chore's description mentions the five-minute window", () => {
+    const tool = buildToolDefinitions(deps).find((t) => t.name === "undo_chore")!;
+    expect(tool.description).toMatch(/five minutes/i);
+  });
+
+  test("skip_chore's description mentions advancing to the next occurrence", () => {
+    const tool = buildToolDefinitions(deps).find((t) => t.name === "skip_chore")!;
+    expect(tool.description).toMatch(/next/i);
+    expect(tool.description).toMatch(/without recording/i);
+  });
+
+  test("approve_chore and reject_chore both mention the admin or manager role requirement", () => {
+    const tools = buildToolDefinitions(deps);
+    expect(tools.find((t) => t.name === "approve_chore")!.description).toMatch(/admin or manager/i);
+    expect(tools.find((t) => t.name === "reject_chore")!.description).toMatch(/admin or manager/i);
+  });
+
+  test("set_subtask_completed's description points at get_chore to see the checklist", () => {
+    const tool = buildToolDefinitions(deps).find((t) => t.name === "set_subtask_completed")!;
+    expect(tool.description).toMatch(/get_chore/);
+  });
+
+  test("nudge_chore's message and all_assignees are optional, and chore_id is required", () => {
+    const tool = buildToolDefinitions(deps).find((t) => t.name === "nudge_chore")!;
+    const schema = z.object(tool.inputSchema);
+    expect(schema.safeParse({ chore_id: 7 }).success).toBe(true);
+    expect(schema.safeParse({}).success).toBe(false);
+  });
+
+  test("set_subtask_completed requires subtask and completed, not just chore_id", () => {
+    const tool = buildToolDefinitions(deps).find((t) => t.name === "set_subtask_completed")!;
+    const schema = z.object(tool.inputSchema);
+    expect(schema.safeParse({ chore_id: 7 }).success).toBe(false);
+    expect(schema.safeParse({ chore_id: 7, subtask: "wipe counters", completed: true }).success).toBe(true);
+  });
+
+  test("complete_chore requires chore_id but completed_at, note, and completed_by are optional", () => {
+    const tool = buildToolDefinitions(deps).find((t) => t.name === "complete_chore")!;
+    const schema = z.object(tool.inputSchema);
+    expect(schema.safeParse({}).success).toBe(false);
+    expect(schema.safeParse({ chore_id: 7 }).success).toBe(true);
+  });
+});
+
+describe("complete_chore pending-approval regression at the registration layer", () => {
+  test("a response at status 3 surfaces pending_approval rather than reporting success", async () => {
+    const { service: fakeService } = fakeWriteService({
+      chores: [{ ...actionChoreRow, requireApproval: true }],
+      post: () => ({ ...actionChoreRow, requireApproval: true, status: 3 }),
+    });
+    const tools = buildToolDefinitions({ ...deps, service: fakeService as never });
+    const tool = tools.find((t) => t.name === "complete_chore")!;
+
+    const result = await tool.handler({ chore_id: 7 });
+    expect(result.isError).toBeUndefined();
+    const parsed = jsonOf(result) as { completed: boolean; pending_approval: boolean; message: string };
+    expect(parsed.completed).toBe(false);
+    expect(parsed.pending_approval).toBe(true);
+    expect(parsed.message).toMatch(/approval/i);
+  });
+});
+
+describe("set_subtask_completed registration", () => {
+  test("passes completed: false through to the module", async () => {
+    const { service: fakeService } = fakeWriteService({
+      chores: [{ ...actionChoreRow, subTasks: [{ id: 101, choreId: 7, name: "wipe counters", completedAt: "2026-06-01T00:00:00Z", orderId: 0 }] }],
+      put: (_path, body) => body,
+    });
+    const tools = buildToolDefinitions({ ...deps, service: fakeService as never });
+    const tool = tools.find((t) => t.name === "set_subtask_completed")!;
+
+    const result = await tool.handler({ chore_id: 7, subtask: "wipe counters", completed: false });
+    expect(result.isError).toBeUndefined();
+    const parsed = jsonOf(result) as { completed: boolean };
+    expect(parsed.completed).toBe(false);
+  });
+
+  test("passes completed: true through to the module", async () => {
+    const { service: fakeService } = fakeWriteService({
+      chores: [actionChoreRow],
+      put: (_path, body) => body,
+    });
+    const tools = buildToolDefinitions({ ...deps, service: fakeService as never });
+    const tool = tools.find((t) => t.name === "set_subtask_completed")!;
+
+    const result = await tool.handler({ chore_id: 7, subtask: "wipe counters", completed: true });
+    expect(result.isError).toBeUndefined();
+    const parsed = jsonOf(result) as { completed: boolean };
+    expect(parsed.completed).toBe(true);
   });
 });
 
