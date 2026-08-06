@@ -1,4 +1,6 @@
-export const CHORES_BASE = "/api/v1/chores";
+const CHORES_BASE = "/api/v1/chores";
+
+const DELETE_CHORE_PATH = new RegExp(`^${CHORES_BASE}/\\d+$`);
 
 export const endpoints = {
   listChores: () => `${CHORES_BASE}/?includeSubtasks=true`,
@@ -46,6 +48,7 @@ export const ID_SCOPED_WRITE_PATHS = [
 ] as const;
 
 export function isIdScopedWrite(path: string, method: string): boolean {
-  if (method === "DELETE" && /^\/api\/v1\/chores\/\d+$/.test(path)) return true;
+  if (method === "GET") return false;
+  if (method === "DELETE") return DELETE_CHORE_PATH.test(path);
   return ID_SCOPED_WRITE_PATHS.some((suffix) => path.endsWith(suffix));
 }
