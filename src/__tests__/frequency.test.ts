@@ -139,11 +139,10 @@ describe("interval count validation", () => {
 describe("occurrences", () => {
   test("accepts a sentinel value for the last occurrence in the pattern", () => {
     // Donetick's web UI offers 1st through 4th and "Last" for day_of_the_month with
-    // weekPattern "week_of_month". The numeric encoding "Last" round-trips to was not
-    // observed on a live instance, so this module does not validate the occurrences
-    // range and passes values through as-is. -1 is assumed here as the sentinel for
-    // "last", following the common convention of -1 meaning "last index"; this choice
-    // is unverified against a live Donetick instance.
+    // -1 is "Last occurrence", matching DAY_OCCURRENCE_OPTIONS in the official
+    // frontend and confirmed to round-trip intact on a live instance alongside 1
+    // through 4. Occurrences are passed through without a range check because the
+    // set is the backend's to define, not this module's.
     const out = buildFrequency(
       {
         type: "day_of_the_month",
