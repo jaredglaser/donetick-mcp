@@ -22,11 +22,13 @@ export class DonetickService {
 
   constructor(
     readonly client: DonetickClient,
-    options: { cacheTtlMs: number },
+    options: { cacheTtlMs: number; now?: () => number },
   ) {
+    const now = options.now;
     this.choreCache = new TtlCache(
       async () => (await this.client.get(endpoints.listChores())) as RawChore[],
       options.cacheTtlMs,
+      now,
     );
     this.memberCache = new TtlCache(async () => {
       const raw = (await this.client.get(endpoints.circleMembers())) as RawMember[];
@@ -43,10 +45,11 @@ export class DonetickService {
         });
       }
       return [...seen.values()];
-    }, MEMBER_TTL_MS);
+    }, MEMBER_TTL_MS, now);
     this.projectCache = new TtlCache(
       async () => ((await this.client.get(endpoints.projects())) ?? []) as Project[],
       MEMBER_TTL_MS,
+      now,
     );
   }
 

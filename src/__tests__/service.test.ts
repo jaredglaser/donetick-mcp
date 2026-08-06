@@ -167,14 +167,25 @@ describe("DonetickService", () => {
   });
 
   test("member and project caches outlive the chore cache ttl", async () => {
+    // The clock is injected rather than slept on: a real timer would make this
+    // test depend on wall-clock scheduling instead of on the TTL being honored.
     const fake = fakeClient(routes);
-    const service = new DonetickService(fake.client as never, { cacheTtlMs: 1 });
+    const clock = { value: 1_000 };
+    const service = new DonetickService(fake.client as never, {
+      cacheTtlMs: 10_000,
+      now: () => clock.value,
+    });
 
     await service.members();
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await service.chores();
+
+    clock.value = 20_000;
+
     await service.members();
+    await service.chores();
 
     expect(fake.calls.filter((c) => c.includes("circles/members")).length).toBe(1);
+    expect(fake.calls.filter((c) => c.includes("includeSubtasks=true")).length).toBe(2);
   });
 
   test("write() invalidates the chore cache but not the member or project caches", async () => {
