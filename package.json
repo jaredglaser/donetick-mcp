@@ -16,6 +16,7 @@
     "verify:live": "bun scripts/verify-live.ts"
   },
   "dependencies": {
+    "@js-temporal/polyfill": "0.5.1",
     "@modelcontextprotocol/server": "2.0.0",
     "zod": "4.4.3"
   },
