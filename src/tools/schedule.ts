@@ -1,9 +1,10 @@
 import { mergeEditRequest, type BuildContext } from "@/chore-request";
 import { parseDueDate } from "@/dates";
 import { endpoints } from "@/endpoints";
-import { normalizeName } from "@/resolve";
+import { loadArchivedChoreById, loadChoreById } from "@/tools/chore-lookup";
+import { resolveMember } from "@/resolve";
 import type { WriteContext } from "@/tools/write";
-import type { Member, RawChore } from "@/types";
+import type { RawChore } from "@/types";
 
 export interface RescheduleInput {
   chore_id?: number;
@@ -49,24 +50,8 @@ export interface ArchiveOutcome {
   name: string;
 }
 
-async function loadChoreFrom(
-  chore_id: number | undefined,
-  fetchAll: () => Promise<RawChore[]>,
-  whichList: string,
-): Promise<RawChore> {
-  if (typeof chore_id !== "number") {
-    throw new Error("chore_id is required.");
-  }
-  const all = await fetchAll();
-  const found = all.find((chore) => chore.id === chore_id);
-  if (!found) {
-    throw new Error(`No chore with id ${chore_id} is in ${whichList}.`);
-  }
-  return found;
-}
-
 function loadActiveChore(chore_id: number | undefined, ctx: WriteContext): Promise<RawChore> {
-  return loadChoreFrom(chore_id, () => ctx.service.chores(), "the active chore list");
+  return loadChoreById(chore_id, ctx);
 }
 
 /**
@@ -75,7 +60,7 @@ function loadActiveChore(chore_id: number | undefined, ctx: WriteContext): Promi
  * unarchiveChore call fail with "not found" on exactly the chore it is meant to act on.
  */
 function loadArchivedChore(chore_id: number | undefined, ctx: WriteContext): Promise<RawChore> {
-  return loadChoreFrom(chore_id, () => ctx.service.archivedChores(), "the archived chore list");
+  return loadArchivedChoreById(chore_id, ctx);
 }
 
 export async function rescheduleChore(input: RescheduleInput, ctx: WriteContext): Promise<RescheduleOutcome> {
@@ -97,19 +82,6 @@ export async function rescheduleChore(input: RescheduleInput, ctx: WriteContext)
   return { kind: "rescheduled", chore_id: existing.id, due_date: dueDate };
 }
 
-function resolveAssignee(name: string, members: Member[]): Member {
-  const wanted = normalizeName(name);
-  const found = members.find(
-    (m) => normalizeName(m.displayName) === wanted || normalizeName(m.username) === wanted,
-  );
-  if (!found) {
-    throw new Error(
-      `"${name}" is not a member of this circle. Known members: ${members.map((m) => m.displayName).join(", ") || "none"}.`,
-    );
-  }
-  return found;
-}
-
 function currentAssigneeIds(existing: RawChore): number[] {
   if (existing.assignees !== undefined) return existing.assignees.map((a) => a.userId);
   if (existing.assignedTo !== null && existing.assignedTo !== undefined) return [existing.assignedTo];
@@ -119,7 +91,7 @@ function currentAssigneeIds(existing: RawChore): number[] {
 export async function reassignChore(input: ReassignInput, ctx: WriteContext): Promise<ReassignOutcome> {
   const existing = await loadActiveChore(input.chore_id, ctx);
   const members = await ctx.service.members();
-  const target = resolveAssignee(input.assignee, members);
+  const target = resolveMember(input.assignee, members);
 
   if (currentAssigneeIds(existing).includes(target.userId)) {
     const updatedAt = ctx.now().toISOString();

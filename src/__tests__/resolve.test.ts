@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { AmbiguousMatchError, NoMatchError, normalizeName, resolveOne } from "@/resolve";
+import { AmbiguousMatchError, NoMatchError, normalizeName, resolveOne, resolveMember } from "@/resolve";
 
 interface Item {
   id: number;
@@ -200,3 +200,33 @@ describe("resolveOne edge cases", () => {
     }
   });
 });
+
+describe("resolveMember", () => {
+  const members = [
+    { userId: 1, username: "jared", displayName: "Jared Glaser" },
+    { userId: 2, username: "sam", displayName: "Sam" },
+  ];
+
+  test("matches a display name case-insensitively", () => {
+    expect(resolveMember("jared glaser", members).userId).toBe(1);
+  });
+
+  test("matches a username case-insensitively", () => {
+    // "sam" failing here while working in reassign_chore was the inconsistency
+    // this shared helper exists to remove.
+    expect(resolveMember("SAM", members).userId).toBe(2);
+  });
+
+  test("tolerates surrounding whitespace", () => {
+    expect(resolveMember("  Sam  ", members).userId).toBe(2);
+  });
+
+  test("an unknown name lists the known members", () => {
+    expect(() => resolveMember("Nobody", members)).toThrow(/Jared Glaser, Sam/);
+  });
+
+  test("an empty circle says so rather than listing nothing", () => {
+    expect(() => resolveMember("Anyone", [])).toThrow(/none/);
+  });
+});
+

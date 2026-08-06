@@ -101,3 +101,28 @@ export function resolveOne<T>(
 
   throw new NoMatchError(query, suggestions);
 }
+
+/**
+ * Member lookup is case and whitespace insensitive, matching either the display
+ * name or the username. Shared so every tool that takes a person's name agrees on
+ * what counts as a match; an exact-equality copy in one tool made "sam" work in
+ * reassign_chore and fail in complete_chore.
+ */
+export function resolveMember<T extends { displayName: string; username: string }>(
+  name: string,
+  members: T[],
+): T {
+  const wanted = normalizeName(name);
+  const found = members.find(
+    (m) => normalizeName(m.displayName) === wanted || normalizeName(m.username) === wanted,
+  );
+  if (!found) {
+    throw new Error(
+      `"${name}" is not a member of this circle. Known members: ${
+        members.map((m) => m.displayName).join(", ") || "none"
+      }.`,
+    );
+  }
+  return found;
+}
+

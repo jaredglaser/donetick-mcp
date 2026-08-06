@@ -6,6 +6,19 @@ import { resolveOne } from "@/resolve";
 import { humanizeDueIn } from "@/time";
 import type { DonetickService } from "@/service";
 import {
+  approveChore,
+  completeChore,
+  nudgeChore,
+  rejectChore,
+  skipChore,
+  undoChore,
+  type ApprovalInput,
+  type CompleteInput,
+  type NudgeInput,
+  type SkipInput,
+  type UndoInput,
+} from "@/tools/actions";
+import {
   archiveChore,
   reassignChore,
   rescheduleChore,
@@ -16,6 +29,7 @@ import {
   type RescheduleInput,
   type SetPriorityInput,
 } from "@/tools/schedule";
+import { setSubtaskCompleted, type SetSubtaskInput } from "@/tools/subtasks";
 import { createChore, deleteChore, editChore, type WriteContext } from "@/tools/write";
 import type { Member, RawChore } from "@/types";
 import { getChore, listChores, type ListArgs } from "@/tools/read";
@@ -489,6 +503,93 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
         chore_id: z.number().int(),
       },
       handler: guard(async (args) => ok(await unarchiveChore(args as unknown as ArchiveInput, writeCtx))),
+    },
+    {
+      name: "complete_chore",
+      description:
+        "Mark a chore complete. Pass completed_at (e.g. \"yesterday\") to backdate a completion for " +
+        "something already done; a time in the future is rejected. If the chore's require_approval is " +
+        "set, Donetick records this as a request awaiting sign-off rather than a completion, and the " +
+        "result reports pending_approval rather than claiming success. Returns the chore's id so " +
+        "undo_chore can reverse it. Backdating a rolling chore (one that reschedules from its completion " +
+        "date rather than its due date) also moves its next occurrence earlier.",
+      inputSchema: {
+        chore_id: z.number().int(),
+        completed_at: z
+          .string()
+          .optional()
+          .describe('When it was actually done, e.g. "yesterday" or an RFC3339 timestamp. Defaults to now.'),
+        note: z.string().optional(),
+        completed_by: z.string().optional().describe("A member name, if completing on someone else's behalf."),
+      },
+      handler: guard(async (args) => ok(await completeChore(args as unknown as CompleteInput, writeCtx))),
+    },
+    {
+      name: "skip_chore",
+      description:
+        "Skip a recurring chore's current occurrence, advancing it to its next due date without " +
+        "recording it as completed.",
+      inputSchema: {
+        chore_id: z.number().int(),
+      },
+      handler: guard(async (args) => ok(await skipChore(args as unknown as SkipInput, writeCtx))),
+    },
+    {
+      name: "undo_chore",
+      description:
+        "Undo the most recent completion of a chore, but only your own, and only within five minutes of " +
+        "completing it. Takes chore_id only, never a name: a just-completed one-off chore drops out of " +
+        "the active list this server searches by name. Use the id complete_chore returned.",
+      inputSchema: {
+        chore_id: z.number().int(),
+      },
+      handler: guard(async (args) => ok(await undoChore(args as unknown as UndoInput, writeCtx))),
+    },
+    {
+      name: "approve_chore",
+      description:
+        "Approve a chore completion that is waiting on sign-off, for a chore whose require_approval is " +
+        "set (status pending_approval). Requires an admin or manager role in the circle.",
+      inputSchema: {
+        chore_id: z.number().int(),
+      },
+      handler: guard(async (args) => ok(await approveChore(args as unknown as ApprovalInput, writeCtx))),
+    },
+    {
+      name: "reject_chore",
+      description:
+        "Reject a chore completion that is waiting on sign-off, for a chore whose require_approval is " +
+        "set (status pending_approval). Requires an admin or manager role in the circle.",
+      inputSchema: {
+        chore_id: z.number().int(),
+      },
+      handler: guard(async (args) => ok(await rejectChore(args as unknown as ApprovalInput, writeCtx))),
+    },
+    {
+      name: "nudge_chore",
+      description:
+        "Send a reminder nudge for a chore to its assignee. Needs another member in the circle: Donetick " +
+        "refuses to let you nudge yourself. The nudge reaches registered mobile devices only, not " +
+        "Telegram or Pushover, so it can silently fail to deliver even when this call succeeds.",
+      inputSchema: {
+        chore_id: z.number().int(),
+        message: z.string().optional(),
+        all_assignees: z.boolean().optional().describe("Nudge every assignee rather than just one."),
+      },
+      handler: guard(async (args) => ok(await nudgeChore(args as unknown as NudgeInput, writeCtx))),
+    },
+    {
+      name: "set_subtask_completed",
+      description:
+        "Check or uncheck one item on a chore's checklist, matched by name. Use get_chore first to see " +
+        "the current subtask names and their state. Subtask completion resets at the start of each cycle " +
+        "on a recurring chore.",
+      inputSchema: {
+        chore_id: z.number().int(),
+        subtask: z.string().describe("The checklist item's name, or a distinguishing substring of it."),
+        completed: z.boolean().describe("true to check the item, false to uncheck it."),
+      },
+      handler: guard(async (args) => ok(await setSubtaskCompleted(args as unknown as SetSubtaskInput, writeCtx))),
     },
   ];
 }
