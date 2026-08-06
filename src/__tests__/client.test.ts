@@ -98,3 +98,57 @@ describe("DonetickClient", () => {
     await expect(client.get("/api/v1/chores/")).rejects.toThrow(/not JSON/i);
   });
 });
+
+describe("failures that never leave the process", () => {
+  test("a thrown non-Error does not render as the literal word undefined", async () => {
+    const fn = (async () => {
+      throw "socket exploded";
+    }) as unknown as typeof fetch;
+    const client = new DonetickClient({ ...base, fetchFn: fn });
+
+    await expect(client.get("/api/v1/chores/")).rejects.toThrow(/socket exploded/);
+    await expect(client.get("/api/v1/chores/")).rejects.not.toThrow(/undefined/);
+  });
+
+  test("a header the runtime refuses to build points at the token, not the network", async () => {
+    const fn = (async () => {
+      throw new TypeError("Header 'secretkey' has invalid value");
+    }) as unknown as typeof fetch;
+    const client = new DonetickClient({ ...base, fetchFn: fn });
+
+    await expect(client.get("/api/v1/chores/")).rejects.toThrow(/DONETICK_TOKEN/);
+    await expect(client.get("/api/v1/chores/")).rejects.not.toThrow(/Could not reach/);
+  });
+
+  test("an ordinary network failure still reports the base url", async () => {
+    const fn = (async () => {
+      throw new TypeError("fetch failed");
+    }) as unknown as typeof fetch;
+    const client = new DonetickClient({ ...base, fetchFn: fn });
+
+    await expect(client.get("/api/v1/chores/")).rejects.toThrow(/Could not reach/);
+  });
+});
+
+describe("falsy payloads survive unwrapping", () => {
+  for (const [label, payload, expected] of [
+    ["a numeric res, as create returns", { res: 0 }, 0],
+    ["a false res", { res: false }, false],
+    ["an empty-string res", { res: "" }, ""],
+    ["a null res", { res: null }, null],
+    ["a bare number", 7, 7],
+  ] as Array<[string, unknown, unknown]>) {
+    test(label, async () => {
+      const stub = stubFetch(() => new Response(JSON.stringify(payload), { status: 200 }));
+      const client = new DonetickClient({ ...base, fetchFn: stub.fn });
+      expect(await client.get("/api/v1/chores/")).toBe(expected as never);
+    });
+  }
+
+  test("an empty body is undefined, distinct from a null res", async () => {
+    const stub = stubFetch(() => new Response("", { status: 200 }));
+    const client = new DonetickClient({ ...base, fetchFn: stub.fn });
+    expect(await client.get("/api/v1/chores/")).toBeUndefined();
+  });
+});
+

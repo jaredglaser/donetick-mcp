@@ -71,8 +71,20 @@ export class DonetickClient {
           { status: 0 },
         );
       }
+      const detail = error instanceof Error ? error.message : String(error);
+
+      // A header the runtime refuses to build never leaves the process, so reporting
+      // it as unreachable would send someone debugging the network instead of the
+      // token. config.ts rejects control characters first; this is the backstop.
+      if (error instanceof TypeError && /header/i.test(detail)) {
+        throw new DonetickError(
+          `The request could not be built, which usually means DONETICK_TOKEN contains an invalid character. ${detail}`,
+          { status: 0 },
+        );
+      }
+
       throw new DonetickError(
-        `Could not reach the Donetick instance at ${this.baseUrl}. ${(error as Error).message}`,
+        `Could not reach the Donetick instance at ${this.baseUrl}. ${detail}`,
         { status: 0 },
       );
     }

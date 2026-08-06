@@ -107,3 +107,24 @@ describe("parseConfig", () => {
     ).toThrow(/DONETICK_URL[\s\S]*DONETICK_TOKEN[\s\S]*DONETICK_TIMEOUT_MS/);
   });
 });
+
+describe("token hygiene", () => {
+  const ok = { DONETICK_URL: "https://dt.example.com", DONETICK_TOKEN: "a1b2c3" };
+
+  test("rejects a token with a trailing newline, the usual copy-paste artifact", () => {
+    expect(() => parseConfig({ ...ok, DONETICK_TOKEN: "a1b2c3\n" })).toThrow(/DONETICK_TOKEN/);
+  });
+
+  test("rejects a token containing a tab", () => {
+    expect(() => parseConfig({ ...ok, DONETICK_TOKEN: "a1b2\tc3" })).toThrow(/DONETICK_TOKEN/);
+  });
+
+  test("the rejection explains it is probably a paste artifact", () => {
+    expect(() => parseConfig({ ...ok, DONETICK_TOKEN: "a1b2c3\r" })).toThrow(/copy-paste/i);
+  });
+
+  test("accepts a non-ascii token, since only control characters break headers", () => {
+    expect(parseConfig({ ...ok, DONETICK_TOKEN: "t\u00f6k\u00e9n" }).token).toBe("t\u00f6k\u00e9n");
+  });
+});
+

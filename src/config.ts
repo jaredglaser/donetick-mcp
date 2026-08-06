@@ -63,6 +63,8 @@ function optionalDurationMs(name: string, allowZero: boolean, example: number) {
     });
 }
 
+const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
+
 const schema = z.object({
   DONETICK_URL: z
     .string()
@@ -71,7 +73,13 @@ const schema = z.object({
       isValidDonetickUrl,
       "DONETICK_URL must be an http or https origin with no path, query string, fragment, or credentials, for example https://donetick.example.com",
     ),
-  DONETICK_TOKEN: z.string().min(1, "DONETICK_TOKEN is required"),
+  DONETICK_TOKEN: z
+    .string()
+    .min(1, "DONETICK_TOKEN is required")
+    .refine(
+      (token) => !CONTROL_CHARS.test(token),
+      "DONETICK_TOKEN contains a newline or control character. It is usually a copy-paste artifact; re-copy the token from Donetick under Settings, Access Token.",
+    ),
   DONETICK_TZ: z
     .string()
     .optional()
