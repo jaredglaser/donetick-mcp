@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { z } from "zod";
-import { McpServer } from "@modelcontextprotocol/server";
+import { acceptedContent, inputRequired, McpServer, type ServerContext } from "@modelcontextprotocol/server";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { DonetickClient } from "@/client";
 import { parseConfig } from "@/config";
@@ -48,7 +48,7 @@ async function main(): Promise<void> {
       server.registerTool(
         tool.name,
         { description: tool.description, inputSchema: z.object(tool.inputSchema) },
-        async (args: Record<string, unknown>) => {
+        async (args: Record<string, unknown>, ctx: ServerContext) => {
           if (probeFailure !== undefined) {
             return {
               content: [
@@ -57,7 +57,23 @@ async function main(): Promise<void> {
               isError: true,
             };
           }
-          const result = await tool.handler(args ?? {});
+          const confirmation = acceptedContent<{ confirm: boolean }>(ctx.mcpReq.inputResponses, "confirm");
+          const result = await tool.handler(args ?? {}, { confirmation });
+          if (result.confirmRequired !== undefined) {
+            const { key, message } = result.confirmRequired;
+            return inputRequired({
+              inputRequests: {
+                [key]: inputRequired.elicit({
+                  message,
+                  requestedSchema: {
+                    type: "object",
+                    properties: { confirm: { type: "boolean" } },
+                    required: ["confirm"],
+                  },
+                }),
+              },
+            });
+          }
           return { content: result.content, isError: result.isError };
         },
       );
