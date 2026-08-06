@@ -26,14 +26,17 @@ export const endpoints = {
 } as const;
 
 /**
- * Write paths scoped to a single chore id. Donetick's handlers for these fetch the
- * chore first and map any lookup failure to 500, so a 500 here means the chore is
- * gone rather than that the instance is broken. errors.ts depends on this set.
+ * Write paths scoped to a single chore id whose handlers answer a missing chore with
+ * 500 rather than 404, so a 500 on one of these means the chore is gone rather than
+ * that the instance is broken. errors.ts depends on this set. Nudge is deliberately
+ * absent: it is the one id-scoped write that does return 404.
  */
 export const ID_SCOPED_WRITE_PATHS = [
   "/do",
   "/skip",
   "/undo",
+  "/approve",
+  "/reject",
   "/dueDate",
   "/assignee",
   "/priority",
