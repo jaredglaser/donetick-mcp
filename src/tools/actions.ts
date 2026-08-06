@@ -1,5 +1,6 @@
 import { parseDueDate } from "@/dates";
 import { endpoints } from "@/endpoints";
+import { resolveMember } from "@/resolve";
 import type { WriteContext } from "@/tools/write";
 import type { RawChore } from "@/types";
 
@@ -91,16 +92,7 @@ export async function completeChore(input: CompleteInput, ctx: WriteContext): Pr
 
   if (input.completed_by !== undefined) {
     const members = await ctx.service.members();
-    const member = members.find(
-      (m) => m.displayName === input.completed_by || m.username === input.completed_by,
-    );
-    if (!member) {
-      throw new Error(
-        `"${input.completed_by}" is not a member of this circle. Known members: ${
-          members.map((m) => m.displayName).join(", ") || "none"
-        }.`,
-      );
-    }
+    const member = resolveMember(input.completed_by, members);
     body.completedBy = member.userId;
   }
 

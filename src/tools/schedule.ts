@@ -1,9 +1,9 @@
 import { mergeEditRequest, type BuildContext } from "@/chore-request";
 import { parseDueDate } from "@/dates";
 import { endpoints } from "@/endpoints";
-import { normalizeName } from "@/resolve";
+import { resolveMember } from "@/resolve";
 import type { WriteContext } from "@/tools/write";
-import type { Member, RawChore } from "@/types";
+import type { RawChore } from "@/types";
 
 export interface RescheduleInput {
   chore_id?: number;
@@ -97,19 +97,6 @@ export async function rescheduleChore(input: RescheduleInput, ctx: WriteContext)
   return { kind: "rescheduled", chore_id: existing.id, due_date: dueDate };
 }
 
-function resolveAssignee(name: string, members: Member[]): Member {
-  const wanted = normalizeName(name);
-  const found = members.find(
-    (m) => normalizeName(m.displayName) === wanted || normalizeName(m.username) === wanted,
-  );
-  if (!found) {
-    throw new Error(
-      `"${name}" is not a member of this circle. Known members: ${members.map((m) => m.displayName).join(", ") || "none"}.`,
-    );
-  }
-  return found;
-}
-
 function currentAssigneeIds(existing: RawChore): number[] {
   if (existing.assignees !== undefined) return existing.assignees.map((a) => a.userId);
   if (existing.assignedTo !== null && existing.assignedTo !== undefined) return [existing.assignedTo];
@@ -119,7 +106,7 @@ function currentAssigneeIds(existing: RawChore): number[] {
 export async function reassignChore(input: ReassignInput, ctx: WriteContext): Promise<ReassignOutcome> {
   const existing = await loadActiveChore(input.chore_id, ctx);
   const members = await ctx.service.members();
-  const target = resolveAssignee(input.assignee, members);
+  const target = resolveMember(input.assignee, members);
 
   if (currentAssigneeIds(existing).includes(target.userId)) {
     const updatedAt = ctx.now().toISOString();
