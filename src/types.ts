@@ -44,6 +44,7 @@ export interface RawChore {
   isPrivate?: boolean;
   requireApproval?: boolean;
   notification?: boolean;
+  notificationMetadata?: Record<string, unknown> | null;
   completionWindow?: number | null;
   points?: number | null;
   projectId?: number | null;
