@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { AssignStrategy, CreateInput, EditInput } from "@/chore-request";
+import { CONFIRM_KEY } from "@/confirm";
 import { endpoints } from "@/endpoints";
 import { type FrequencyType, WEEK_PATTERNS } from "@/frequency";
 import { resolveOne } from "@/resolve";
@@ -440,7 +441,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
         if (outcome.kind === "confirm_required") {
           return {
             content: [{ type: "text", text: outcome.message }],
-            confirmRequired: { key: "confirm", message: outcome.message },
+            confirmRequired: { key: CONFIRM_KEY, message: outcome.message },
           };
         }
         return ok(outcome);

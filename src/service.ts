@@ -57,8 +57,15 @@ export class DonetickService {
     return this.choreCache.get();
   }
 
-  archivedChores(): Promise<RawChore[]> {
-    return this.client.get(endpoints.listChoresWithArchived()) as Promise<RawChore[]>;
+  /**
+   * includeArchived=true returns active and archived chores together, not the
+   * archived ones alone, so the filter here is what makes this the archived list.
+   * The test is isActive === false rather than !isActive: the field is optional,
+   * and a row that omits it must not be reported as archived.
+   */
+  async archivedChores(): Promise<RawChore[]> {
+    const rows = (await this.client.get(endpoints.listChoresWithArchived())) as RawChore[];
+    return rows.filter((chore) => chore.isActive === false);
   }
 
   members(): Promise<Member[]> {

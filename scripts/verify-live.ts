@@ -21,6 +21,7 @@ import { DonetickClient } from "@/client";
 import { parseConfig } from "@/config";
 import { endpoints } from "@/endpoints";
 import { DonetickError } from "@/errors";
+import type { RawChore } from "@/types";
 
 type Status = "pass" | "warn" | "fail";
 
@@ -376,11 +377,54 @@ async function createScratchChore(body: ChoreCreateBody): Promise<number> {
       throw new Error("undo after a skip succeeded; only completions should be undoable");
     });
 
-    await check("PUT /:id/archive and PUT /:id/unarchive both succeed", async () => {
+    await check("PUT /:id/archive flips isActive to false and back, and moves the chore between the two lists", async () => {
+      // Asserting the effect, not just a 200: an earlier version of this check
+      // only proved neither call errored, which is how includeArchived being a
+      // union of active and archived rather than the archived ones alone went
+      // unnoticed until a smoke test showed active chores listed as archived.
       const id = await createScratchChore(baseChoreBody(scoped("archive"), { frequencyType: "daily" }));
+      const rowById = async (path: string) =>
+        ((await client.get(path)) as RawChore[]).find((row) => row.id === id);
+
       await client.put(endpoints.archiveChore(id), {});
+      const archivedInPlain = await rowById(endpoints.listChores());
+      const archivedInUnion = await rowById(endpoints.listChoresWithArchived());
+      if (archivedInPlain !== undefined) {
+        throw new Error(`chore ${id} still appears in the plain list after archiving`);
+      }
+      if (archivedInUnion?.isActive !== false) {
+        throw new Error(
+          `archived chore ${id} should read isActive false in the includeArchived list, got ${JSON.stringify(archivedInUnion?.isActive)}`,
+        );
+      }
+
       await client.put(endpoints.unarchiveChore(id), {});
-      return { detail: `chore ${id} archived and unarchived without error` };
+      const restored = await rowById(endpoints.listChores());
+      if (restored?.isActive !== true) {
+        throw new Error(
+          `chore ${id} should be back in the plain list with isActive true after unarchiving, got ${JSON.stringify(restored?.isActive)}`,
+        );
+      }
+      return { detail: `chore ${id} left the plain list on archive and returned on unarchive` };
+    });
+
+    await check("includeArchived=true is a union of active and archived, so the archived list must be filtered", async () => {
+      // service.archivedChores() filters on isActive === false because of this. If
+      // Donetick ever narrows the parameter to archived-only, this check fails and
+      // the filter can be revisited; until then, dropping it reports every active
+      // chore as archived.
+      const id = await createScratchChore(baseChoreBody(scoped("union"), { frequencyType: "daily" }));
+      await client.put(endpoints.archiveChore(id), {});
+      const union = (await client.get(endpoints.listChoresWithArchived())) as RawChore[];
+      const active = union.filter((row) => row.isActive !== false);
+      if (active.length === 0) {
+        throw new Error(
+          "includeArchived=true returned no active chores, so it may no longer be a union; revisit the filter in service.archivedChores()",
+        );
+      }
+      return {
+        detail: `${union.length} row(s) returned, ${active.length} of them active`,
+      };
     });
 
     // Run after the writes above (do, skip, complete) so there is fresh history to inspect.
