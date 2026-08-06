@@ -122,7 +122,7 @@ async function main(): Promise<void> {
   }
 
   try {
-    // --- Reads ---
+    // Reads.
 
     await check("GET /chores/?includeSubtasks=true returns an array", async () => {
       const rows = await client.get(endpoints.listChores());
@@ -140,7 +140,7 @@ async function main(): Promise<void> {
       if (typeof row.userId !== "number") {
         throw new Error(`member row's "userId" is not a number: ${JSON.stringify(row)}`);
       }
-      return { detail: `first row has id=${JSON.stringify(row.id)}, userId=${row.userId} (the two differ; this server addresses userId)` };
+      return { detail: `first row has id=${JSON.stringify(row.id)}, userId=${row.userId}` };
     });
 
     await check("GET /projects returns an array or an empty body", async () => {
@@ -151,7 +151,7 @@ async function main(): Promise<void> {
       return { detail: response === undefined ? "empty body" : `${response.length} project(s)` };
     });
 
-    // --- Create and shape ---
+    // Create and shape.
 
     await check("POST /chores/ returns a bare positive number, not an object", async () => {
       const id = await createScratchChore(baseChoreBody(scoped("bare-id"), { frequencyType: "daily" }));
@@ -255,7 +255,7 @@ async function main(): Promise<void> {
       },
     );
 
-    // --- Writes ---
+    // Writes.
 
     await check("PUT /:id/dueDate rejects a body that omits updatedAt", async () => {
       const id = await createScratchChore(baseChoreBody(scoped("duedate-missing"), { frequencyType: "daily" }));
