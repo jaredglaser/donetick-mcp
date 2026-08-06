@@ -21,6 +21,10 @@ export type CreateOutcome =
   | { kind: "created"; chore: ProjectedChore; warnings?: unknown }
   | { kind: "created_detail_unavailable"; id: number; message: string };
 
+export type EditOutcome =
+  | { kind: "edited"; chore: ProjectedChore }
+  | { kind: "edited_detail_unavailable"; id: number; message: string };
+
 export type DeleteOutcome =
   | { kind: "confirm_required"; message: string; chore: string }
   | { kind: "declined"; chore: string }
@@ -136,14 +140,28 @@ export async function createChore(input: CreateInput, ctx: WriteContext): Promis
 export async function editChore(
   input: EditInput & { chore_id?: number },
   ctx: WriteContext,
-): Promise<ProjectedChore> {
+): Promise<EditOutcome> {
   const existing = await loadChoreById(input.chore_id, ctx.service);
   const buildCtx = await loadBuildContext(ctx);
   const body = mergeEditRequest(existing, input, buildCtx);
 
   await ctx.service.write(() => ctx.service.client.put(endpoints.editChore(), body));
 
-  const detail = await ctx.service.choreDetails(existing.id);
+  // The edit has already landed. A failure past this point is a reporting failure,
+  // not a write failure, and saying otherwise would invite the caller to retry a
+  // change that already succeeded.
+  let detail: unknown;
+  try {
+    detail = await ctx.service.choreDetails(existing.id);
+  } catch (error) {
+    return {
+      kind: "edited_detail_unavailable",
+      id: existing.id,
+      message: `"${existing.name}" was updated, but reading it back failed: ${
+        error instanceof Error ? error.message : String(error)
+      }. The edit itself succeeded; call get_chore to see the current state.`,
+    };
+  }
   // labelsV2 is forced back to the pre-edit row rather than taken from body or
   // detail: body's labelsV2 is the write shape ({labelId}, no name) and edit input
   // has no way to change labels, while detail omits labelsV2 entirely. existing is
@@ -154,7 +172,7 @@ export async function editChore(
     ...(detail as Partial<RawChore>),
     labelsV2: existing.labelsV2 ?? null,
   } as RawChore;
-  return projectChore(merged, buildCtx.members, buildCtx.projects, buildCtx.now);
+  return { kind: "edited", chore: projectChore(merged, buildCtx.members, buildCtx.projects, buildCtx.now) };
 }
 
 export async function deleteChore(

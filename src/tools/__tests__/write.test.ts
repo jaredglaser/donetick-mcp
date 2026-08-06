@@ -265,8 +265,10 @@ describe("editChore", () => {
 
     const result = await editChore({ chore_id: 5, description: "updated" }, ctxFor(fake.service));
 
-    expect(result.requires_approval).toBe(true);
-    expect(result.labels).toEqual(["Kitchen"]);
+    if (result.kind !== "edited") throw new Error("expected an edited outcome");
+
+    expect(result.chore.requires_approval).toBe(true);
+    expect(result.chore.labels).toEqual(["Kitchen"]);
   });
 
   test("errors clearly when chore_id is absent", async () => {
@@ -332,5 +334,35 @@ describe("deleteChore", () => {
       /999/,
     );
     expect(fake.calls.some((c) => c.startsWith("DELETE"))).toBe(false);
+  });
+});
+
+describe("editChore when the read-back fails", () => {
+  test("reports the edit as landed rather than as a failure", async () => {
+    const fake = fakeService({ chores: [listRow] });
+    fake.service.choreDetails = async () => {
+      throw new Error("instance went away");
+    };
+
+    const result = await editChore({ chore_id: 5, description: "updated" }, ctxFor(fake.service));
+
+    // The PUT already succeeded. Rejecting here would tell the caller to retry a
+    // change that has in fact been applied.
+    expect(result.kind).toBe("edited_detail_unavailable");
+    if (result.kind !== "edited_detail_unavailable") throw new Error("unreachable");
+    expect(result.id).toBe(5);
+    expect(result.message).toMatch(/succeeded/i);
+    expect(result.message).toMatch(/instance went away/);
+  });
+
+  test("still issued the PUT before failing to read back", async () => {
+    const fake = fakeService({ chores: [listRow] });
+    fake.service.choreDetails = async () => {
+      throw new Error("nope");
+    };
+
+    await editChore({ chore_id: 5, description: "updated" }, ctxFor(fake.service));
+
+    expect(fake.calls).toContain("PUT /api/v1/chores/");
   });
 });
