@@ -22,8 +22,14 @@ export function startOfDay(instant: Date, tz: string): Date {
   return new Date(zoned(instant, tz).startOfDay().epochMilliseconds);
 }
 
+/**
+ * Start of the day n calendar days away. The trailing startOfDay is load-bearing:
+ * Temporal's add preserves wall-clock time, so adding a day to a date whose own
+ * midnight was skipped by a DST start carries that 01:00 forward onto a day that
+ * does have a midnight. Callers use this as an exclusive day boundary.
+ */
 export function addDays(instant: Date, n: number, tz: string): Date {
-  return new Date(zoned(instant, tz).startOfDay().add({ days: n }).epochMilliseconds);
+  return new Date(zoned(instant, tz).startOfDay().add({ days: n }).startOfDay().epochMilliseconds);
 }
 
 export function bucket(

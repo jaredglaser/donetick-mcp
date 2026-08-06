@@ -151,3 +151,39 @@ describe("humanizeDueIn", () => {
     expect(humanizeDueIn(null, now)).toBe("no due date");
   });
 });
+
+describe("days whose own midnight does not exist", () => {
+  const SCL = "America/Santiago";
+  const localOf = (d: Date, tz: string) =>
+    new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz, hour12: false,
+      year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
+    }).format(d);
+
+  test("addDays lands on the true start of the target day, not the carried wall clock", () => {
+    // 2026-09-06 starts DST in Santiago, so local 00:00 does not exist and the day
+    // begins at 01:00. Temporal's add preserves wall-clock time, so adding a day
+    // without re-normalizing would yield 01:00 on the 7th, which does have a midnight.
+    const next = addDays(new Date("2026-09-06T14:00:00Z"), 1, SCL);
+    expect(localOf(next, SCL)).toBe("2026-09-07, 00:00");
+  });
+
+  test("a chore just after midnight on the following day is not due today", () => {
+    const now = new Date("2026-09-06T14:00:00Z");
+    const justAfterMidnight = new Date("2026-09-07T03:30:00Z");
+    expect(bucket(justAfterMidnight, "due_today", now, SCL)).toBe(false);
+  });
+
+  test("a chore late on the skip day itself is due today", () => {
+    const now = new Date("2026-09-06T14:00:00Z");
+    const lateSameDay = new Date("2026-09-07T02:30:00Z");
+    expect(bucket(lateSameDay, "due_today", now, SCL)).toBe(true);
+  });
+
+  test("the skip day is 23 hours long, measured start to start", () => {
+    const start = startOfDay(new Date("2026-09-06T14:00:00Z"), SCL);
+    const next = addDays(new Date("2026-09-06T14:00:00Z"), 1, SCL);
+    expect((next.getTime() - start.getTime()) / 3_600_000).toBe(23);
+  });
+});
+
