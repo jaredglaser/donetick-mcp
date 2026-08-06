@@ -1,5 +1,11 @@
 import { isIdScopedWrite } from "@/endpoints";
 
+const MAX_DETAIL_LENGTH = 200;
+
+function truncate(text: string, limit: number): string {
+  return text.length > limit ? `${text.slice(0, limit)}...` : text;
+}
+
 export class DonetickError extends Error {
   readonly status: number;
   readonly retryable: boolean;
@@ -22,7 +28,7 @@ function bodyError(body: string): string | undefined {
     const parsed: unknown = JSON.parse(body);
     if (parsed && typeof parsed === "object" && "error" in parsed) {
       const value = (parsed as { error: unknown }).error;
-      if (typeof value === "string" && value.trim().length > 0) return value;
+      if (typeof value === "string" && value.trim().length > 0) return truncate(value, MAX_DETAIL_LENGTH);
     }
   } catch {
     // Donetick returns HTML for some proxy failures. Fall through.
@@ -57,11 +63,15 @@ export function mapHttpError(input: {
 
   if (status === 403) {
     if (reason) {
-      return new DonetickError(`Donetick refused: ${reason}`, { status, retryable: true });
+      return new DonetickError(`Donetick refused: ${reason}`, {
+        status,
+        retryable: true,
+        invalidatesCache: true,
+      });
     }
     return new DonetickError(
-      "Donetick refused the write and gave no reason. Either the account lacks permission for this chore, or the chore changed since it was read. Retrying once with a fresh read.",
-      { status, retryable: true },
+      "Donetick refused the write and gave no reason. Either the account lacks permission for this chore, or the chore changed since it was read.",
+      { status, retryable: true, invalidatesCache: true },
     );
   }
 
@@ -75,11 +85,11 @@ export function mapHttpError(input: {
   if (status >= 500) {
     if (isIdScopedWrite(path, method)) {
       return new DonetickError(
-        "That chore no longer exists, or is no longer visible to this account. Refreshing and retrying once.",
+        "That chore no longer exists, or is no longer visible to this account.",
         { status, retryable: true, invalidatesCache: true },
       );
     }
-    const detail = body.length > 0 && body.length <= 200 ? ` ${body}` : "";
+    const detail = body.length > 0 ? ` ${truncate(body, MAX_DETAIL_LENGTH)}` : "";
     return new DonetickError(`The Donetick instance returned an error.${detail}`, { status });
   }
 

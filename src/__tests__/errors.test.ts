@@ -84,4 +84,125 @@ describe("mapHttpError", () => {
       DonetickError,
     );
   });
+
+  test("403 with an empty body does not promise a retry", () => {
+    const err = mapHttpError({
+      status: 403,
+      body: "{}",
+      path: "/api/v1/chores/7/dueDate",
+      method: "PUT",
+    });
+    expect(err.message.toLowerCase()).not.toMatch(/retrying/);
+  });
+
+  test("500 on an id-scoped write does not promise a retry", () => {
+    const err = mapHttpError({
+      status: 500,
+      body: JSON.stringify({ error: "Failed to retrieve chore" }),
+      path: "/api/v1/chores/7/do",
+      method: "POST",
+    });
+    expect(err.message.toLowerCase()).not.toMatch(/retrying/);
+  });
+
+  test("403 with a reason invalidates the cache", () => {
+    const err = mapHttpError({
+      status: 403,
+      body: JSON.stringify({ error: "chore has been modified by another user" }),
+      path: "/api/v1/chores/7/dueDate",
+      method: "PUT",
+    });
+    expect(err.invalidatesCache).toBe(true);
+  });
+
+  test("403 with an empty body invalidates the cache", () => {
+    const err = mapHttpError({
+      status: 403,
+      body: "{}",
+      path: "/api/v1/chores/7/dueDate",
+      method: "PUT",
+    });
+    expect(err.invalidatesCache).toBe(true);
+  });
+
+  test("404 invalidates the cache", () => {
+    const err = mapHttpError({ status: 404, body: "", path: "/api/v1/chores/7/nudge", method: "POST" });
+    expect(err.invalidatesCache).toBe(true);
+  });
+
+  test("500 on an id-scoped write invalidates the cache", () => {
+    const err = mapHttpError({
+      status: 500,
+      body: JSON.stringify({ error: "Failed to retrieve chore" }),
+      path: "/api/v1/chores/7/do",
+      method: "POST",
+    });
+    expect(err.invalidatesCache).toBe(true);
+  });
+
+  test("500 on a read does not invalidate the cache", () => {
+    const err = mapHttpError({
+      status: 500,
+      body: "boom",
+      path: "/api/v1/chores/",
+      method: "GET",
+    });
+    expect(err.invalidatesCache).toBe(false);
+  });
+
+  test("a 5xx read body longer than the cap is truncated with an ellipsis", () => {
+    const longBody = "x".repeat(250);
+    const err = mapHttpError({
+      status: 500,
+      body: longBody,
+      path: "/api/v1/chores/",
+      method: "GET",
+    });
+    expect(err.message.endsWith("...")).toBe(true);
+    expect(err.message).toContain("x".repeat(50));
+    expect(err.message.length).toBeLessThan(longBody.length);
+  });
+
+  test("a 5xx read body at exactly the cap is included in full with no ellipsis", () => {
+    const exactBody = "y".repeat(200);
+    const err = mapHttpError({
+      status: 500,
+      body: exactBody,
+      path: "/api/v1/chores/",
+      method: "GET",
+    });
+    expect(err.message).toContain(exactBody);
+    expect(err.message.endsWith("...")).toBe(false);
+  });
+
+  test("a 400 with an error field longer than the cap produces a bounded message", () => {
+    const longReason = "z".repeat(500);
+    const err = mapHttpError({
+      status: 400,
+      body: JSON.stringify({ error: longReason }),
+      path: "/api/v1/chores/",
+      method: "POST",
+    });
+    expect(err.message.length).toBeLessThan(longReason.length);
+    expect(err.message.endsWith("...")).toBe(true);
+  });
+
+  describe("bodyError robustness", () => {
+    const cases: Array<[string, string]> = [
+      ["a nested object error field", JSON.stringify({ error: { nested: "x" } })],
+      ["a numeric error field", JSON.stringify({ error: 42 })],
+      ["an empty string error field", JSON.stringify({ error: "" })],
+      ["a whitespace-only error field", JSON.stringify({ error: "   " })],
+      ["a null body", "null"],
+      ["an array body", "[]"],
+      ["an empty body", ""],
+    ];
+
+    for (const [label, body] of cases) {
+      test(`${label} falls back to the generic message without throwing`, () => {
+        const err = mapHttpError({ status: 400, body, path: "/api/v1/chores/", method: "POST" });
+        expect(err.message).toMatch(/rejected the request/i);
+      });
+    }
+  });
 });
