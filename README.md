@@ -99,6 +99,13 @@ rather than an error. The startup probe checks the response shape for this reaso
 
 ## Known limitations
 
+**`delete_chore` needs a client that supports elicitation.** It asks the user to
+confirm through the protocol's multi-round-trip flow rather than trusting an input
+flag, which means the client must declare `elicitation: {form: {}}` in its
+capabilities. A client that does not gets `-32021 MissingRequiredClientCapability`
+instead of a prompt, and cannot delete. Every other tool works regardless. Archiving
+is the alternative and keeps the chore's history.
+
 These were verified against a live Donetick instance, not assumed from its source.
 
 - **Labels are read-only.** `/api/v1/labels` requires JWT session auth, which an API token cannot provide, so this server cannot list all labels that exist in the circle. Labels already attached to a chore are readable and filterable through `list_chores` and `get_chore`. A label attached to nothing is invisible to this server.

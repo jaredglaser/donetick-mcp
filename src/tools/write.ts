@@ -1,0 +1,202 @@
+import {
+  buildCreateRequest,
+  mergeEditRequest,
+  type BuildContext,
+  type ChoreRequestBody,
+  type CreateInput,
+  type EditInput,
+} from "@/chore-request";
+import { endpoints } from "@/endpoints";
+import { projectChore } from "@/projection";
+import type { DonetickService } from "@/service";
+import type { Member, Project, ProjectedChore, RawChore } from "@/types";
+
+export interface WriteContext {
+  service: DonetickService;
+  now: () => Date;
+  timezone: string;
+}
+
+export type CreateOutcome =
+  | { kind: "created"; chore: ProjectedChore; warnings?: unknown }
+  | { kind: "created_detail_unavailable"; id: number; message: string };
+
+export type EditOutcome =
+  | { kind: "edited"; chore: ProjectedChore }
+  | { kind: "edited_detail_unavailable"; id: number; message: string };
+
+export type DeleteOutcome =
+  | { kind: "confirm_required"; message: string; chore: string }
+  | { kind: "declined"; chore: string }
+  | { kind: "deleted"; deleted: number; name: string };
+
+async function loadBuildContext(ctx: WriteContext): Promise<BuildContext> {
+  const [members, projects]: [Member[], Project[]] = await Promise.all([
+    ctx.service.members(),
+    ctx.service.projects(),
+  ]);
+  return { members, projects, now: ctx.now(), timezone: ctx.timezone };
+}
+
+/**
+ * Shared by editChore and deleteChore. The merge base for a write must be the
+ * chores list row, never GET /details, which omits assignStrategy, assignees,
+ * frequency, frequencyMetadata, isRolling, isPrivate, labelsV2, notification,
+ * notificationMetadata, points, and requireApproval. mergeEditRequest refuses a
+ * details-shaped object, but resolving from the list here means the wrong shape
+ * never reaches it. Name-based lookup is Task 6's resolver; this only accepts an id.
+ */
+async function loadChoreById(chore_id: number | undefined, service: DonetickService): Promise<RawChore> {
+  if (typeof chore_id !== "number") {
+    throw new Error(
+      "chore_id is required. Name-based lookup is not available on this tool yet; use list_chores or get_chore to find the id.",
+    );
+  }
+  const all = await service.chores();
+  const found = all.find((chore) => chore.id === chore_id);
+  if (!found) {
+    throw new Error(
+      `No chore with id ${chore_id} is visible on this account. It may have been deleted or archived since the chore list was last read.`,
+    );
+  }
+  return found;
+}
+
+function isValidCreatedId(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
+/**
+ * POST /api/v1/chores/ returns a bare number on success. 0 is falsy but is not a
+ * valid Donetick id (ids are positive auto-increment), so a naive `if (!response)`
+ * check would misreport 0 as "no id returned" instead of the more precise "not a
+ * valid id", and would treat a genuine but unlikely id-less success shape the same
+ * as a real failure. Both are rejected explicitly here instead.
+ */
+function extractCreatedId(response: unknown): { id: number; warnings?: unknown } {
+  if (isValidCreatedId(response)) return { id: response };
+  if (response !== null && typeof response === "object" && "res" in response) {
+    const envelope = response as { res: unknown; warnings?: unknown };
+    if (isValidCreatedId(envelope.res)) return { id: envelope.res, warnings: envelope.warnings };
+  }
+  throw new Error(
+    `create_chore expected POST ${endpoints.createChore()} to return the new chore's numeric id, got ${JSON.stringify(response)}.`,
+  );
+}
+
+/**
+ * The write body already carries every field this module computed for the write
+ * (frequency, labels-for-write, assign strategy, and so on), so it is a better
+ * source for the just-written state than a fresh GET, which is missing exactly
+ * the fields a write requires (see loadChoreById). The cast goes through unknown
+ * because ChoreRequestBody's write-shaped fields (labelsV2 as {labelId}, for
+ * example) are not structurally RawChore's read-shaped fields; callers layer a
+ * read-shaped source over this to correct the fields that differ.
+ */
+function bodyAsRawFields(body: ChoreRequestBody): Partial<RawChore> {
+  return body as unknown as Partial<RawChore>;
+}
+
+/**
+ * Donetick's create inserts the row before several later steps that can fail, so a
+ * failed create can still have produced a chore. The POST itself is the only part
+ * wrapped here to trigger service.write's cache invalidation; the invalidation
+ * must happen even if extractCreatedId rejects the response, since a chore may
+ * still exist despite an unreportable id.
+ */
+export async function createChore(input: CreateInput, ctx: WriteContext): Promise<CreateOutcome> {
+  if (typeof input.name !== "string" || input.name.trim().length === 0) {
+    throw new Error("create_chore requires a name.");
+  }
+
+  const buildCtx = await loadBuildContext(ctx);
+  const body = buildCreateRequest(input, buildCtx);
+
+  const { id, warnings } = await ctx.service.write(async () => {
+    const response = await ctx.service.client.post(endpoints.createChore(), body);
+    return extractCreatedId(response);
+  });
+
+  let detail: RawChore;
+  try {
+    detail = await ctx.service.choreDetails(id);
+  } catch (error) {
+    // The chore was created (we have its id); only the confirmation fetch failed.
+    // Reporting a bare failure here would be wrong, since it would tell the caller
+    // the create did not happen when it did.
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      kind: "created_detail_unavailable",
+      id,
+      message: `Chore ${id} was created, but its details could not be fetched to confirm it: ${message} Use get_chore with chore_id ${id} to check on it.`,
+    };
+  }
+
+  const merged = { ...bodyAsRawFields(body), ...(detail as Partial<RawChore>) } as RawChore;
+  const chore = projectChore(merged, buildCtx.members, buildCtx.projects, buildCtx.now);
+  return warnings !== undefined ? { kind: "created", chore, warnings } : { kind: "created", chore };
+}
+
+export async function editChore(
+  input: EditInput & { chore_id?: number },
+  ctx: WriteContext,
+): Promise<EditOutcome> {
+  const existing = await loadChoreById(input.chore_id, ctx.service);
+  const buildCtx = await loadBuildContext(ctx);
+  const body = mergeEditRequest(existing, input, buildCtx);
+
+  await ctx.service.write(() => ctx.service.client.put(endpoints.editChore(), body));
+
+  // The edit has already landed. A failure past this point is a reporting failure,
+  // not a write failure, and saying otherwise would invite the caller to retry a
+  // change that already succeeded.
+  let detail: unknown;
+  try {
+    detail = await ctx.service.choreDetails(existing.id);
+  } catch (error) {
+    return {
+      kind: "edited_detail_unavailable",
+      id: existing.id,
+      message: `"${existing.name}" was updated, but reading it back failed: ${
+        error instanceof Error ? error.message : String(error)
+      }. The edit itself succeeded; call get_chore to see the current state.`,
+    };
+  }
+  // labelsV2 is forced back to the pre-edit row rather than taken from body or
+  // detail: body's labelsV2 is the write shape ({labelId}, no name) and edit input
+  // has no way to change labels, while detail omits labelsV2 entirely. existing is
+  // the only source with the read-shaped labels this edit actually left in place.
+  const merged = {
+    ...existing,
+    ...bodyAsRawFields(body),
+    ...(detail as Partial<RawChore>),
+    labelsV2: existing.labelsV2 ?? null,
+  } as RawChore;
+  return { kind: "edited", chore: projectChore(merged, buildCtx.members, buildCtx.projects, buildCtx.now) };
+}
+
+export async function deleteChore(
+  input: { chore_id?: number; name?: string },
+  ctx: WriteContext,
+  answer: { confirm: boolean } | undefined,
+): Promise<DeleteOutcome> {
+  // Resolved before any confirmation is offered, so a nonexistent id fails outright
+  // instead of asking the user to confirm deleting a chore that is not there.
+  const existing = await loadChoreById(input.chore_id, ctx.service);
+
+  if (answer === undefined) {
+    return {
+      kind: "confirm_required",
+      chore: existing.name,
+      message: `Delete "${existing.name}"? This permanently removes the chore and its completion history. If you want to keep the history, archive it instead.`,
+    };
+  }
+
+  if (!answer.confirm) {
+    return { kind: "declined", chore: existing.name };
+  }
+
+  await ctx.service.write(() => ctx.service.client.delete(endpoints.deleteChore(existing.id)));
+
+  return { kind: "deleted", deleted: existing.id, name: existing.name };
+}

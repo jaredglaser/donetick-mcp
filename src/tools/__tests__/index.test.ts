@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { buildToolDefinitions } from "../index";
+import { ASSIGN_STRATEGIES } from "@/chore-request";
+import { FREQUENCY_TYPES } from "@/frequency";
+import {
+  ASSIGN_STRATEGY_VALUES,
+  buildToolDefinitions,
+  FREQUENCY_TYPE_VALUES,
+  type McpExtras,
+  type ToolResult,
+} from "../index";
 
 const service = {
   chores: async () => [],
@@ -318,6 +326,57 @@ describe("list_members and list_projects", () => {
   });
 });
 
+describe("list_chores archived scope", () => {
+  const archivedRow = {
+    id: 9,
+    name: "Deep clean fridge",
+    nextDueDate: null,
+    assignedTo: null,
+    priority: 0,
+    status: 0,
+    frequencyType: "once",
+    createdBy: 1,
+  };
+
+  test("scope=archived returns archived chores and does not consult the cached active list", async () => {
+    let choresCalled = false;
+    const fakeService = {
+      ...service,
+      chores: async () => {
+        choresCalled = true;
+        return [];
+      },
+      archivedChores: async () => [archivedRow],
+    };
+    const tools = buildToolDefinitions({ ...deps, service: fakeService as never });
+    const tool = tools.find((t) => t.name === "list_chores")!;
+
+    const result = await tool.handler({ scope: "archived" });
+    const parsed = jsonOf(result) as { chores: Array<{ id: number; name: string }> };
+
+    expect(parsed.chores.map((c) => c.id)).toEqual([9]);
+    expect(choresCalled).toBe(false);
+  });
+
+  test("scope other than archived still uses the cached active list", async () => {
+    let archivedCalled = false;
+    const fakeService = {
+      ...service,
+      chores: async () => [archivedRow],
+      archivedChores: async () => {
+        archivedCalled = true;
+        return [];
+      },
+    };
+    const tools = buildToolDefinitions({ ...deps, service: fakeService as never });
+    const tool = tools.find((t) => t.name === "list_chores")!;
+
+    await tool.handler({ scope: "all" });
+
+    expect(archivedCalled).toBe(false);
+  });
+});
+
 describe("failure isolation", () => {
   test("every tool's handler survives the service throwing, not just list_chores", async () => {
     const failing = {
@@ -349,18 +408,218 @@ describe("failure isolation", () => {
       list_activity: {},
       list_members: {},
       list_projects: {},
+      create_chore: { name: "Test chore" },
+      edit_chore: { chore_id: 1 },
+      delete_chore: { chore_id: 1 },
+      reschedule_chore: { chore_id: 1, due_date: null },
+      reassign_chore: { chore_id: 1, assignee: "Jared" },
+      set_priority: { chore_id: 1, priority: "P1" },
+      archive_chore: { chore_id: 1 },
+      unarchive_chore: { chore_id: 1 },
     };
 
-    expect(tools).toHaveLength(5);
+    // Plan 2 Task 6 registers the eight write tools alongside the five read tools
+    // from Plan 1, so this count and the one below grow from 5 to 13 with it.
+    expect(tools).toHaveLength(13);
     for (const tool of tools) {
       const result = await tool.handler(argsByName[tool.name] ?? {});
       expect(result.isError).toBe(true);
     }
   });
 
-  test("tool names are unique and there are exactly 5", () => {
+  test("tool names are unique and there are exactly 13", () => {
     const names = buildToolDefinitions(deps).map((tool) => tool.name);
-    expect(names).toHaveLength(5);
-    expect(new Set(names).size).toBe(5);
+    expect(names).toHaveLength(13);
+    expect(new Set(names).size).toBe(13);
   });
 });
+
+// Plan 2 Task 6 coverage below: the eight write tools, delete_chore's multi-round-trip
+// confirmation, and the two drift guards tying the local zod option lists back to their
+// domain source of truth.
+
+const writeMember1 = {
+  userId: 1,
+  username: "jared",
+  displayName: "Jared",
+  role: "admin",
+  points: 0,
+  pointsRedeemed: 0,
+};
+
+interface FakeWriteOptions {
+  chores?: Array<Record<string, unknown>>;
+  members?: Array<Record<string, unknown>>;
+  projects?: Array<Record<string, unknown>>;
+  choreDetails?: (id: number) => unknown;
+  post?: (path: string, body?: unknown) => unknown;
+  put?: (path: string, body?: unknown) => unknown;
+  del?: (path: string) => unknown;
+}
+
+/** Same shape as the read-only `service` mock above, plus the `.client` write.ts and schedule.ts reach into. */
+function fakeWriteService(opts: FakeWriteOptions = {}) {
+  let deleteCalls = 0;
+  const writeService = {
+    chores: async () => opts.chores ?? [],
+    archivedChores: async () => [],
+    members: async () => opts.members ?? [writeMember1],
+    projects: async () => opts.projects ?? [],
+    choreDetails: async (id: number) => {
+      if (!opts.choreDetails) throw new Error("no choreDetails handler configured for this test");
+      return opts.choreDetails(id);
+    },
+    rawGet: async () => [],
+    write: async <T>(op: () => Promise<T>): Promise<T> => op(),
+    invalidateChores: () => {},
+    client: {
+      post: async (path: string, body?: unknown) => (opts.post ? opts.post(path, body) : undefined),
+      put: async (path: string, body?: unknown) => (opts.put ? opts.put(path, body) : undefined),
+      delete: async (path: string) => {
+        deleteCalls += 1;
+        return opts.del ? opts.del(path) : undefined;
+      },
+    },
+  };
+  return { service: writeService, deleteCalls: () => deleteCalls };
+}
+
+describe("write tool registration", () => {
+  test("registers all eight write tools alongside the five read tools, totaling 13", () => {
+    const names = buildToolDefinitions(deps).map((tool) => tool.name);
+    for (const name of [
+      "create_chore",
+      "edit_chore",
+      "delete_chore",
+      "reschedule_chore",
+      "reassign_chore",
+      "set_priority",
+      "archive_chore",
+      "unarchive_chore",
+    ]) {
+      expect(names).toContain(name);
+    }
+    expect(names).toHaveLength(13);
+    expect(new Set(names).size).toBe(13);
+  });
+
+  test("create_chore's description documents the interval frequency type", () => {
+    const tool = buildToolDefinitions(deps).find((t) => t.name === "create_chore")!;
+    expect(tool.description).toMatch(/interval/);
+  });
+
+  test("delete_chore's description points to archive_chore as the non-destructive alternative", () => {
+    const tool = buildToolDefinitions(deps).find((t) => t.name === "delete_chore")!;
+    expect(tool.description).toMatch(/archive_chore/);
+  });
+
+  test("set_priority's description states the inverted scale", () => {
+    const tool = buildToolDefinitions(deps).find((t) => t.name === "set_priority")!;
+    expect(tool.description).toMatch(/P1/);
+  });
+});
+
+describe("delete_chore multi-round-trip confirmation", () => {
+  const choreRow = {
+    id: 3,
+    name: "Take out trash",
+    nextDueDate: null,
+    assignedTo: null,
+    priority: 0,
+    status: 0,
+    frequencyType: "once",
+    createdBy: 1,
+  };
+
+  test("with no confirmation returns a confirmRequired sentinel and performs no delete", async () => {
+    const { service: fakeService, deleteCalls } = fakeWriteService({ chores: [choreRow] });
+    const tools = buildToolDefinitions({ ...deps, service: fakeService as never });
+    const tool = tools.find((t) => t.name === "delete_chore")!;
+
+    const result: ToolResult = await tool.handler({ chore_id: 3 });
+    expect(result.confirmRequired).toBeDefined();
+    expect(result.confirmRequired?.key).toBe("confirm");
+    expect(result.isError).toBeUndefined();
+    expect(deleteCalls()).toBe(0);
+  });
+
+  test("with {confirm: true} in McpExtras performs the delete", async () => {
+    const { service: fakeService, deleteCalls } = fakeWriteService({ chores: [choreRow] });
+    const tools = buildToolDefinitions({ ...deps, service: fakeService as never });
+    const tool = tools.find((t) => t.name === "delete_chore")!;
+
+    const mcp: McpExtras = { confirmation: { confirm: true } };
+    const result: ToolResult = await tool.handler({ chore_id: 3 }, mcp);
+    expect(result.confirmRequired).toBeUndefined();
+    expect(result.isError).toBeUndefined();
+    expect(deleteCalls()).toBe(1);
+  });
+
+  test("with {confirm: false} in McpExtras does not delete", async () => {
+    const { service: fakeService, deleteCalls } = fakeWriteService({ chores: [choreRow] });
+    const tools = buildToolDefinitions({ ...deps, service: fakeService as never });
+    const tool = tools.find((t) => t.name === "delete_chore")!;
+
+    const mcp: McpExtras = { confirmation: { confirm: false } };
+    const result: ToolResult = await tool.handler({ chore_id: 3 }, mcp);
+    expect(result.confirmRequired).toBeUndefined();
+    expect(result.isError).toBeUndefined();
+    expect(deleteCalls()).toBe(0);
+  });
+});
+
+describe("zod option lists agree with their domain source of truth", () => {
+  test("the local frequency-type list equals FREQUENCY_TYPES", () => {
+    expect(FREQUENCY_TYPES).toEqual(FREQUENCY_TYPE_VALUES);
+  });
+
+  test("the local assign-strategy list equals ASSIGN_STRATEGIES", () => {
+    expect(ASSIGN_STRATEGIES).toEqual(ASSIGN_STRATEGY_VALUES);
+  });
+});
+
+describe("create_chore detail-unavailable reporting", () => {
+  test("a created_detail_unavailable outcome is a success carrying the message, not isError", async () => {
+    const { service: fakeService } = fakeWriteService({
+      members: [writeMember1],
+      projects: [],
+      post: () => 42,
+      choreDetails: () => {
+        throw new Error("details endpoint down");
+      },
+    });
+    const tools = buildToolDefinitions({ ...deps, service: fakeService as never });
+    const tool = tools.find((t) => t.name === "create_chore")!;
+
+    const result = await tool.handler({ name: "New chore" });
+    expect(result.isError).toBeUndefined();
+    const parsed = JSON.parse(result.content[0]!.text) as { kind: string; message: string };
+    expect(parsed.kind).toBe("created_detail_unavailable");
+    expect(parsed.message).toMatch(/details endpoint down/);
+  });
+});
+
+describe("a chore id that does not exist", () => {
+  test("reads as not found, not as an instance fault", async () => {
+    // The details endpoint answers a missing id with a 500, which errors.ts maps to
+    // a generic instance error. Reporting that verbatim sends the user looking for
+    // an outage instead of a typo.
+    const failing = {
+      ...service,
+      chores: async () => [],
+      choreDetails: async () => {
+        throw new Error("The Donetick instance returned an error.");
+      },
+    };
+    const tools = buildToolDefinitions({ ...deps, service: failing as never });
+
+    for (const name of ["get_chore", "delete_chore"]) {
+      const tool = tools.find((t) => t.name === name)!;
+      const result = await tool.handler({ chore_id: 999999 });
+      expect(result.isError).toBe(true);
+      expect(result.content[0]?.text).toMatch(/No chore with id 999999/);
+      expect(result.content[0]?.text).not.toMatch(/instance returned an error/);
+    }
+  });
+});
+
