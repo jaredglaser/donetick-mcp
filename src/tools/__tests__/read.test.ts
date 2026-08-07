@@ -12,7 +12,7 @@ const members: Member[] = [
 const projects: Project[] = [{ id: 4, name: "Garden" }];
 
 const chores: RawChore[] = [
-  { id: 1, name: "Overdue thing", nextDueDate: "2026-06-10T12:00:00Z", assignedTo: 1, priority: 1, status: 0, frequencyType: "once", createdBy: 1, projectId: 4 },
+  { id: 1, name: "Overdue thing", nextDueDate: "2026-06-10T12:00:00Z", assignedTo: 1, priority: 1, status: 0, frequencyType: "once", createdBy: 1, projectId: 4, labelsV2: [{ id: 10, name: "Kitchen" }] },
   { id: 2, name: "Later thing", nextDueDate: "2026-07-01T12:00:00Z", assignedTo: 2, priority: 3, status: 0, frequencyType: "once", createdBy: 1 },
   { id: 3, name: "No date thing", nextDueDate: null, assignedTo: null, priority: 0, status: 0, frequencyType: "no_repeat", createdBy: 1 },
 ];
@@ -227,5 +227,43 @@ describe("listChores additional coverage", () => {
     expect(out.chores).toEqual([]);
     expect(out.total).toBe(3);
     expect(out.truncated).toBe(true);
+  });
+});
+
+describe("the label filter", () => {
+  test("selects only chores carrying that label", () => {
+    expect(listChores({ scope: "all", label: "Kitchen" }, ctx).chores.map((c) => c.id)).toEqual([1]);
+  });
+
+  test("matches case-insensitively, like the other name filters", () => {
+    expect(listChores({ scope: "all", label: "kitchen" }, ctx).chores.map((c) => c.id)).toEqual([1]);
+  });
+
+  test("an unknown label says so instead of returning an empty list", () => {
+    // It matters more here than for project or assignee: the label API needs session
+    // auth, so a caller has no other way to learn which labels exist and would read
+    // an empty list as "nothing is tagged that".
+    expect(() => listChores({ scope: "all", label: "Garage" }, ctx)).toThrow(/not on any chore/);
+  });
+
+  test("the error lists the labels that are in use", () => {
+    expect(() => listChores({ scope: "all", label: "Garage" }, ctx)).toThrow(/Kitchen/);
+  });
+});
+
+describe("a chore carrying an unusable timezone", () => {
+  test("falls back rather than failing the whole listing", () => {
+    // frequencyMetadata.timezone is client-set, so any circle member can put a bad
+    // value there, and Temporal throws on an unrecognized zone. One bad row would
+    // otherwise fail every scope-filtered listing.
+    const poisoned = {
+      chores: [{ ...chores[0]!, frequencyMetadata: { timezone: "Mars/Olympus" } }],
+      members,
+      projects,
+      now,
+      timezone: tz,
+    };
+    expect(() => listChores({ scope: "overdue" }, poisoned)).not.toThrow();
+    expect(listChores({ scope: "overdue" }, poisoned).chores.map((c) => c.id)).toEqual([1]);
   });
 });

@@ -130,7 +130,7 @@ Donetick upgrade, run:
 bun run verify:live
 ```
 
-It exercises 24 contract facts against a real instance, creates scratch chores with a
+It exercises 25 contract facts against a real instance, creates scratch chores with a
 run-scoped name prefix, and deletes them in a `finally` so a mid-run failure leaves
 nothing behind. It exits non-zero if any check fails, and distinguishes a warning
 (something changed but nothing is broken) from a failure.

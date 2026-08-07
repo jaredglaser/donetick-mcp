@@ -164,6 +164,9 @@ describe("createChore", () => {
 
     expect(sentBody?.frequencyType).toBe("once");
     expect(sentBody?.assignStrategy).toBe("no_assignee");
+    // Sent so Donetick stops warning about it on every create, which is what makes
+    // the warnings channel a signal rather than noise.
+    expect(sentBody?.isActive).toBe(true);
   });
 
   test("invalidates the cache even when the post fails", async () => {
@@ -596,5 +599,30 @@ describe("editChore clearing the due date", () => {
     await editChore({ chore_id: 5, name: "Renamed" }, ctxFor(fake.service));
 
     expect(fake.calls.some((c) => c.includes("/dueDate"))).toBe(false);
+  });
+});
+
+describe("clearing a due date that the chore cannot survive without", () => {
+  test("is refused before anything is written", async () => {
+    // The clear happens on a separate endpoint after the main write, so the merged
+    // body still carries the old date and the guard inside mergeEditRequest sees a
+    // valid state. Checking the end state here is what stops edit_chore from
+    // manufacturing exactly the chore that guard exists to prevent.
+    const windowed = { ...listRow, completionWindow: 4 };
+    const fake = fakeService({ chores: [windowed], put: () => undefined, choreDetails: () => detailsShapedRow });
+
+    await expect(
+      editChore({ chore_id: 5, due_date: null }, ctxFor(fake.service)),
+    ).rejects.toThrow(/completion window/i);
+
+    expect(fake.calls.some((c) => c.startsWith("PUT"))).toBe(false);
+  });
+
+  test("an ordinary chore still clears", async () => {
+    const fake = fakeService({ chores: [listRow], put: () => undefined, choreDetails: () => detailsShapedRow });
+
+    await editChore({ chore_id: 5, due_date: null }, ctxFor(fake.service));
+
+    expect(fake.calls).toContain("PUT /api/v1/chores/5/dueDate");
   });
 });

@@ -474,3 +474,28 @@ describe("nudgeChore", () => {
     expect(failing.invalidations()).toBe(0);
   });
 });
+
+describe("gaps the second review round named", () => {
+  test("an empty note is dropped rather than sent into a min=1 binding", () => {
+    // Donetick binds notes as omitempty,min=1, so "" is a 400 for a value that means
+    // the same as passing nothing.
+    const fake = fakeService({ chores: [listRow] });
+    return completeChore({ chore_id: 7, note: "" }, ctxFor(fake.service)).then(() => {
+      const body = fake.calls.find((c) => c.method === "POST")!.body as Record<string, unknown>;
+      expect(body).not.toHaveProperty("notes");
+    });
+  });
+
+  test("a response with no status falls back to the chore's approval flag", async () => {
+    // The primary signal is the response's status. This is the branch that runs when
+    // it carries none, and it had no case with requireApproval set.
+    const fake = fakeService({
+      chores: [{ ...listRow, requireApproval: true }],
+      post: () => ({}),
+    });
+
+    const result = await completeChore({ chore_id: 7 }, ctxFor(fake.service));
+
+    expect(result.pending_approval).toBe(true);
+  });
+});

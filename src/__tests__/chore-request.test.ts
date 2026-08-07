@@ -573,3 +573,40 @@ describe("a chore driven by a Donetick Thing", () => {
     expect(() => mergeEditRequest(nulled, { name: "Renamed" }, ctx())).not.toThrow();
   });
 });
+
+describe("combinations Donetick cannot complete", () => {
+  // Donetick dereferences NextDueDate without a nil check when a chore has a
+  // completion window, and its adaptive scheduler does the same. Either with no due
+  // date creates a chore that answers 502 on every completion, permanently.
+
+  test("a completion window with no due date is refused on create", () => {
+    expect(() => buildCreateRequest({ name: "x", completion_window: 4 }, ctx())).toThrow(
+      /completion window/i,
+    );
+  });
+
+  test("an adaptive frequency with no due date is refused on create", () => {
+    expect(() =>
+      buildCreateRequest({ name: "x", frequency: { type: "adaptive" } }, ctx()),
+    ).toThrow(/adaptive/i);
+  });
+
+  test("both are fine once a due date is given", () => {
+    expect(() =>
+      buildCreateRequest({ name: "x", completion_window: 4, due_date: "2026-07-01" }, ctx()),
+    ).not.toThrow();
+    expect(() =>
+      buildCreateRequest(
+        { name: "x", frequency: { type: "adaptive" }, due_date: "2026-07-01" },
+        ctx(),
+      ),
+    ).not.toThrow();
+  });
+
+  test("a completion window of zero is not a completion window", () => {
+    // 0 passed a null/undefined check and refused a chore that is under no window at
+    // all. It matters more than it looks: if Donetick ever reports an unset window as
+    // 0 rather than null, that check would refuse every edit of every dateless chore.
+    expect(() => buildCreateRequest({ name: "x", completion_window: 0 }, ctx())).not.toThrow();
+  });
+});

@@ -43,6 +43,12 @@ describe("projectChore", () => {
     expect(projectChore(chore({ assignedTo: null }), members, projects, now).assigned_to).toBeNull();
   });
 
+  test("names an unnameable last-completer as unknown, matching assigned_to", () => {
+    expect(
+      projectChore(chore({ lastCompletedBy: 99 }), members, projects, now).last_completed_by,
+    ).toBe("member #99 (unknown)");
+  });
+
   test("carries description, points and is_rolling, which write tools accept but nothing could read back", () => {
     const projected = projectChore(
       chore({ description: "curb by 7am", points: 5, isRolling: true }),
