@@ -365,3 +365,43 @@ describe("unarchiveChore", () => {
     await expect(unarchiveChore({ chore_id: 999 }, ctxFor(fake.service))).rejects.toThrow(/999/);
   });
 });
+
+describe("rescheduleChore's own due-date guard", () => {
+  test("refuses to clear a date the chore cannot do without, and writes nothing", async () => {
+    // This endpoint writes the date directly and never passes through the builders,
+    // so it carries its own copy of the guard. editChore's equivalent is covered;
+    // this one was not, and it is the tool most likely to be called to clear a date.
+    const fake = fakeService({ chores: [{ ...listRow, completionWindow: 4 }] });
+
+    await expect(
+      rescheduleChore({ chore_id: 5, due_date: null }, ctxFor(fake.service)),
+    ).rejects.toThrow(/completion window/i);
+
+    expect(fake.calls.some((c) => c.startsWith("PUT"))).toBe(false);
+  });
+
+  test("an ordinary chore still clears", async () => {
+    const fake = fakeService({ chores: [listRow] });
+
+    await rescheduleChore({ chore_id: 5, due_date: null }, ctxFor(fake.service));
+
+    expect(fake.calls).toContain("PUT /api/v1/chores/5/dueDate");
+  });
+});
+
+describe("reassignChore's path choice", () => {
+  test("a chore carrying no_assignee takes the full edit even when the target is already on it", async () => {
+    // Only the merge promotes the strategy, and a no_assignee chore with assignees is
+    // exactly the state that reverts on the next completion. Taking the fast path
+    // there would land, report success, and be undone.
+    const fake = fakeService({
+      chores: [{ ...listRow, assignStrategy: "no_assignee", assignees: [{ userId: 1 }] }],
+    });
+
+    const outcome = await reassignChore({ chore_id: 5, assignee: "Jared Glaser" }, ctxFor(fake.service));
+
+    expect(outcome.method).toBe("full_edit");
+    const sent = fake.bodies.find((b) => b.path === "/api/v1/chores/")!.body as Record<string, unknown>;
+    expect(sent.assignStrategy).not.toBe("no_assignee");
+  });
+});

@@ -500,3 +500,22 @@ describe("gaps the second review round named", () => {
     expect(result.pending_approval).toBe(true);
   });
 });
+
+describe("an approval-enabled chore whose completion actually landed", () => {
+  test("is reported completed, not pending", async () => {
+    // The distinguishing case: requireApproval true AND a response saying the
+    // completion went through. Both existing tests have requireApproval true with a
+    // response that is pending or silent, so `status === 3 || chore.requireApproval`
+    // and the ternary produce identical output and the fix is fully reversible.
+    const fake = fakeService({
+      chores: [{ ...listRow, requireApproval: true }],
+      post: () => ({ ...listRow, requireApproval: true, status: 0, nextDueDate: "2026-08-13T13:00:00Z" }),
+    });
+
+    const result = await completeChore({ chore_id: 7 }, ctxFor(fake.service));
+
+    expect(result.completed).toBe(true);
+    expect(result.pending_approval).toBe(false);
+    expect(result.next_due_date).toBe("2026-08-13T13:00:00Z");
+  });
+});

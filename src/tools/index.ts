@@ -174,7 +174,11 @@ const frequencySchema = z.object({
     .max(31)
     .optional()
     .describe("The calendar day for day_of_the_month, 1 to 31."),
-  time: z.string().optional().describe("Time of day in HH:MM 24-hour format."),
+  time: z.string().optional().describe(
+      "Time of day in HH:MM 24-hour format. Donetick reads it only for interval, " +
+        "days_of_the_week and day_of_the_month, and not for an hourly interval, where it freezes " +
+        "the chore. For every other type set the hour through due_date.",
+    ),
 });
 
 const notifySchema = z.object({

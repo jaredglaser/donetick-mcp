@@ -51,6 +51,13 @@ const MONTHS = [
   "december",
 ] as const;
 
+/**
+ * The types whose scheduler reads frequencyMetadata.time. Every other type stores it
+ * and keeps whatever clock time the due date already had, so accepting one there
+ * reports a success for a schedule Donetick will not run.
+ */
+const TIME_AWARE_TYPES: readonly FrequencyType[] = ["interval", "days_of_the_week", "day_of_the_month"];
+
 const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
 export interface FrequencyInput {
@@ -85,6 +92,26 @@ export interface FrequencyOutput {
 export function buildFrequency(input: FrequencyInput, timezone: string, now: Date): FrequencyOutput {
   const metadata: FrequencyMetadata = { timezone };
   if (input.time !== undefined) {
+    // Donetick's scheduler reads the stored time for three types only, and for an
+    // hourly interval reading it is worse than ignoring it. Measured on v0.1.76: a
+    // 4-hourly chore with a time advanced once and then rescheduled to the instant it
+    // was already at, on every completion after, permanently overdue and answering
+    // 200 each time. The normalisation rewrites the base date's clock back to the
+    // stored time before adding the hours, so the result stops depending on where
+    // the chore actually was.
+    if (input.type === "interval" && (input.unit ?? "days") === "hours") {
+      throw new Error(
+        'An hourly interval cannot carry a time of day: Donetick resets the clock to that time ' +
+          "before adding the hours, so the chore freezes on its second completion and stays " +
+          "overdue. Drop time, or use a daily or longer unit.",
+      );
+    }
+    if (!TIME_AWARE_TYPES.includes(input.type)) {
+      throw new Error(
+        `Frequency type "${input.type}" ignores a time of day: Donetick reads it only for ` +
+          `${TIME_AWARE_TYPES.join(", ")}. Set the hour through due_date instead, which every type honors.`,
+      );
+    }
     metadata.time = normalizeTime(input.time, timezone, now);
   }
 
@@ -153,7 +180,7 @@ export function buildFrequency(input: FrequencyInput, timezone: string, now: Dat
               "first of each period, or [-1] for the last.",
           );
         }
-        const OCCURRENCE_LIMIT = input.week_pattern === "week_of_quarter" ? 13 : 5;
+        const OCCURRENCE_LIMIT = input.week_pattern === "week_of_quarter" ? 14 : 5;
         const bad = input.occurrences.filter(
           (n) => !Number.isInteger(n) || (n !== -1 && (n < 1 || n > OCCURRENCE_LIMIT)),
         );

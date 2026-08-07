@@ -28,6 +28,7 @@ interface FakeOptions {
 
 function fakeService(opts: FakeOptions = {}) {
   const calls: string[] = [];
+  const bodies: Array<{ path: string; body?: unknown }> = [];
   let invalidations = 0;
 
   const service = {
@@ -73,6 +74,7 @@ function fakeService(opts: FakeOptions = {}) {
       },
       put: async (path: string, body?: unknown) => {
         calls.push(`PUT ${path}`);
+        bodies.push({ path, body });
         if (!opts.put) return undefined;
         return opts.put(path, body);
       },
@@ -84,16 +86,21 @@ function fakeService(opts: FakeOptions = {}) {
     },
   };
 
-  return { service, calls, invalidations: () => invalidations };
+  return { service, calls, bodies, invalidations: () => invalidations };
 }
 
 function ctxFor(service: ReturnType<typeof fakeService>["service"]): WriteContext {
   return { service: service as never, now: () => now, timezone: tz };
 }
 
+// updatedAt at the precision Donetick actually sends. Without it every token
+// expression collapses to the clock and the /dueDate clear's re-read is invisible.
+const STORED_STAMP = "2026-08-06T10:00:00.111111111Z";
+
 const listRow: RawChore = {
   id: 5,
   name: "Take out trash",
+  updatedAt: STORED_STAMP,
   description: null,
   nextDueDate: "2026-08-10T12:00:00Z",
   assignedTo: 1,
@@ -378,8 +385,9 @@ describe("editChore", () => {
 
     test("omits updatedAt when the row carries none, rather than inventing one", async () => {
       let sent: Record<string, unknown> | undefined;
+      const { updatedAt: _stamp, ...stampless } = listRow;
       const fake = fakeService({
-        chores: [listRow],
+        chores: [stampless as RawChore],
         put: (_path, body) => {
           sent = body as Record<string, unknown>;
           return undefined;
@@ -625,5 +633,28 @@ describe("clearing a due date that the chore cannot survive without", () => {
     await editChore({ chore_id: 5, due_date: null }, ctxFor(fake.service));
 
     expect(fake.calls).toContain("PUT /api/v1/chores/5/dueDate");
+  });
+});
+
+describe("the due-date clear's concurrency token", () => {
+  test("comes from a row re-read after the main write, not from the pre-write row", async () => {
+    // existing predates the PUT just issued, so its stamp is already behind the row
+    // and this endpoint refuses anything older. With a fixture carrying no stamp,
+    // every candidate expression collapsed to the clock and three mutations of this
+    // block survived, including restoring the bare clock reading.
+    const AFTER_WRITE = "2026-08-06T10:00:05.222222222Z";
+    let read = 0;
+    const fake = fakeService({
+      chores: () => [read++ === 0 ? listRow : { ...listRow, updatedAt: AFTER_WRITE }],
+      put: () => undefined,
+      choreDetails: () => detailsShapedRow,
+    });
+
+    await editChore({ chore_id: 5, due_date: null }, ctxFor(fake.service));
+
+    const clear = fake.bodies.find((b) => b.path.endsWith("/dueDate"));
+    expect(clear).toBeDefined();
+    expect((clear!.body as Record<string, unknown>).updatedAt).toBe(AFTER_WRITE);
+    expect((clear!.body as Record<string, unknown>).dueDate).toBeNull();
   });
 });

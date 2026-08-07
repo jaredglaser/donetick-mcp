@@ -846,3 +846,33 @@ describe("a stored recurrence Donetick cannot schedule", () => {
     expect(() => mergeEditRequest(fine, { name: "Renamed" }, ctx())).not.toThrow();
   });
 });
+
+describe("settings an unrelated edit must not change", () => {
+  test("notifications stay off on a chore whose metadata row outlived them", () => {
+    // Donetick keeps the metadata when notifications are switched off, so
+    // notification false with non-null metadata is a real stored shape. Reading only
+    // the metadata would turn every unrelated edit into a re-enable.
+    const off = { ...existing, notification: false } as unknown as RawChore;
+
+    expect(mergeEditRequest(off, { name: "Renamed" }, ctx()).notification).toBe(false);
+  });
+
+  test("an explicit assign_strategy is honored over the promotion", () => {
+    // The promotion exists for a chore that would revert on the next completion, but
+    // a caller naming a strategy has said what they want.
+    const unassigned = {
+      ...existing,
+      assignStrategy: "no_assignee",
+      assignees: [],
+      assignedTo: null,
+    } as unknown as RawChore;
+
+    expect(
+      mergeEditRequest(
+        unassigned,
+        { assign_strategy: "no_assignee", add_assignees: ["Sam"] },
+        ctx(),
+      ).assignStrategy,
+    ).toBe("no_assignee");
+  });
+});

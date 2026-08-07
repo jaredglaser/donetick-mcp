@@ -130,7 +130,7 @@ Donetick upgrade, run:
 bun run verify:live
 ```
 
-It exercises 28 contract facts against a real instance, creates scratch chores with a
+It exercises 29 contract facts against a real instance, creates scratch chores with a
 run-scoped name prefix, and deletes them in a `finally` so a mid-run failure leaves
 nothing behind. It exits non-zero if any check fails, and distinguishes a warning
 (something changed but nothing is broken) from a failure.
@@ -149,6 +149,8 @@ These were verified against a live Donetick instance, not assumed from its sourc
 
 - **A chore driven by a Donetick Thing cannot be edited here.** Donetick drops the Thing association on every edit and restores it only for a request naming the Thing, which this server cannot build, so `edit_chore` refuses rather than severing the link silently.
 - **A completion window requires a due date**, and so does an adaptive chore. Donetick reads the due date without checking whether it is there, so a chore with a completion window can never be completed and an adaptive one can never be skipped.
+- **`undo_chore` does not work on this instance.** Donetick answers "no recent action found" immediately after both a completion and a skip, well inside its own five-minute window. Its handler accepts either action, so the refusal is not skip-specific. `verify:live` records the behavior rather than asserting a contract, and warns while it stays this way.
+- **A time of day applies to three recurrence types only.** Donetick's scheduler reads `frequency.time` for `interval`, `days_of_the_week` and `day_of_the_month`, and for an hourly interval reading it freezes the chore: the clock is reset to that time before the hours are added, so from the second completion it reschedules to where it already is. Both cases are refused at build time; set the hour through `due_date` instead, which every type honors.
 - **Labels are read-only.** `/api/v1/labels` requires JWT session auth, which an API token cannot provide, so this server cannot list all labels that exist in the circle. Labels already attached to a chore are readable and filterable through `list_chores` and `get_chore`. A label attached to nothing is invisible to this server.
 - **Deleting a chore is creator-only.** Donetick's delete handler compares the chore's `CreatedBy` field directly and never checks edit permission, so a circle admin cannot delete a chore they did not create, even though they can edit one.
 - **The chore list and chore detail views are not supersets of each other.** `GET /chores/` returns rows that alone carry `assignStrategy`, `assignees`, `frequency`, `frequencyMetadata`, `isRolling`, `isPrivate`, `labelsV2`, `notification`, `notificationMetadata`, `points`, and `requireApproval`. `GET /chores/:id/details` alone carries `lastCompletedDate`, `lastCompletedBy`, `totalCompletedCount`, `notes`, `duration`, `startTime`, and `timerUpdatedAt`. `get_chore` merges both views so neither set of fields is lost.

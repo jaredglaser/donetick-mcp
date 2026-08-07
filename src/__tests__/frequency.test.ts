@@ -140,7 +140,7 @@ describe("buildFrequency", () => {
   test("a time of day is sent as RFC3339, which is what Donetick binds", () => {
     // Verified live on v0.1.76: the binding is datetime=2006-01-02T15:04:05Z07:00
     // and the scheduler parses time.RFC3339, so "07:30" is a 400.
-    expect(buildFrequency({ type: "daily", time: "07:30" }, tz, now).frequencyMetadata.time).toBe(
+    expect(buildFrequency({ type: "days_of_the_week", days: ["monday"], time: "07:30" }, tz, now).frequencyMetadata.time).toBe(
       "1970-01-01T07:30:00-04:00",
     );
   });
@@ -151,18 +151,18 @@ describe("buildFrequency", () => {
     // epoch put Asia/Singapore permanently 30 minutes out, since it was +07:30 in
     // 1970 and is +08:00 today.
     expect(
-      buildFrequency({ type: "daily", time: "07:30" }, "Asia/Singapore", now).frequencyMetadata.time,
+      buildFrequency({ type: "days_of_the_week", days: ["monday"], time: "07:30" }, "Asia/Singapore", now).frequencyMetadata.time,
     ).toBe("1970-01-01T07:30:00+08:00");
   });
 
   test("a zone with no DST is unaffected either way", () => {
     expect(
-      buildFrequency({ type: "daily", time: "07:30" }, "Asia/Kolkata", now).frequencyMetadata.time,
+      buildFrequency({ type: "days_of_the_week", days: ["monday"], time: "07:30" }, "Asia/Kolkata", now).frequencyMetadata.time,
     ).toBe("1970-01-01T07:30:00+05:30");
   });
 
   test("a caller still writes HH:MM, and a malformed one is still refused", () => {
-    expect(() => buildFrequency({ type: "daily", time: "7:30 am" }, tz, now)).toThrow(/time/);
+    expect(() => buildFrequency({ type: "days_of_the_week", days: ["monday"], time: "7:30 am" }, tz, now)).toThrow(/time/);
   });
 
   test("trigger is accepted but flagged as unsupported here", () => {
@@ -245,11 +245,11 @@ describe("time validation", () => {
     // A time is passed straight through to Donetick's scheduler; validating it here,
     // at chore-creation time, surfaces a bad value immediately instead of letting it
     // fail silently later at schedule time.
-    expect(() => buildFrequency({ type: "daily", time: "7:30 am" }, tz, now)).toThrow(/time/);
+    expect(() => buildFrequency({ type: "days_of_the_week", days: ["monday"], time: "7:30 am" }, tz, now)).toThrow(/time/);
   });
 
   test("rejects an out-of-range time", () => {
-    expect(() => buildFrequency({ type: "daily", time: "25:00" }, tz, now)).toThrow(/time/);
+    expect(() => buildFrequency({ type: "days_of_the_week", days: ["monday"], time: "25:00" }, tz, now)).toThrow(/time/);
   });
 });
 
@@ -411,6 +411,78 @@ describe("every_week takes no occurrences", () => {
     expect(() =>
       buildFrequency(
         { type: "days_of_the_week", days: ["saturday"], week_pattern: "every_week" },
+        tz,
+        now,
+      ),
+    ).not.toThrow();
+  });
+});
+
+describe("occurrence bounds, at their edges", () => {
+  const dow = (occurrences: number[], pattern: "week_of_month" | "week_of_quarter") =>
+    buildFrequency(
+      { type: "days_of_the_week", days: ["saturday"], week_pattern: pattern, occurrences },
+      tz,
+      now,
+    );
+
+  test("an empty list is refused, like an omitted one", () => {
+    // A JSON caller produces [] routinely, and it reaches the same 500-on-every-
+    // completion shape as omitting the field.
+    expect(() => dow([], "week_of_month")).toThrow(/occurrences/);
+  });
+
+  test("zero is refused, since no period has a zeroth occurrence", () => {
+    expect(() => dow([0], "week_of_month")).toThrow(/1 through 5/);
+  });
+
+  test("a fraction is refused", () => {
+    expect(() => dow([1.5], "week_of_month")).toThrow(/1 through 5/);
+  });
+
+  test("a quarter's ceiling is higher than a month's, and still bounded", () => {
+    expect(() => dow([13], "week_of_quarter")).not.toThrow();
+    expect(() => dow([14], "week_of_quarter")).not.toThrow();
+    expect(() => dow([15], "week_of_quarter")).toThrow(/1 through 14/);
+    expect(() => dow([6], "week_of_month")).toThrow(/1 through 5/);
+  });
+});
+
+describe("a time of day only where Donetick reads one", () => {
+  test("an hourly interval refuses it, because carrying one freezes the chore", () => {
+    // Measured on v0.1.76: a 4-hourly chore with a time advanced once and then
+    // rescheduled to the instant it was already at, on every completion after,
+    // permanently overdue and answering 200 each time. The scheduler resets the base
+    // date's clock to the stored time before adding the hours, so the result stops
+    // depending on where the chore actually was.
+    expect(() =>
+      buildFrequency({ type: "interval", every: 4, unit: "hours", time: "09:00" }, tz, now),
+    ).toThrow(/freezes/);
+  });
+
+  test("an hourly interval with no time is fine", () => {
+    expect(() => buildFrequency({ type: "interval", every: 4, unit: "hours" }, tz, now)).not.toThrow();
+  });
+
+  test("a daily interval still takes one", () => {
+    expect(() =>
+      buildFrequency({ type: "interval", every: 3, unit: "days", time: "09:00" }, tz, now),
+    ).not.toThrow();
+  });
+
+  test("the types whose scheduler never reads it refuse it and name due_date instead", () => {
+    for (const type of ["daily", "weekly", "monthly", "yearly", "adaptive"] as const) {
+      expect(() => buildFrequency({ type, time: "09:00" }, tz, now)).toThrow(/due_date/);
+    }
+  });
+
+  test("the three that do read it accept it", () => {
+    expect(() =>
+      buildFrequency({ type: "days_of_the_week", days: ["monday"], time: "09:00" }, tz, now),
+    ).not.toThrow();
+    expect(() =>
+      buildFrequency(
+        { type: "day_of_the_month", day_of_month: 15, months: ["october"], time: "09:00" },
         tz,
         now,
       ),

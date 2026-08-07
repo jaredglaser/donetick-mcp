@@ -286,6 +286,17 @@ async function main(): Promise<void> {
           );
         }
 
+        const intervalNext = await scheduleAfterCompleting("interval-behaviour", {
+          frequencyType: "interval",
+          frequency: 3,
+          frequencyMetadata: { unit: "days", timezone: config.timezone },
+        });
+        if (intervalNext !== "2026-09-13") {
+          throw new Error(
+            `interval 3 days scheduled ${intervalNext}, not 2026-09-13. The round-trip check beside this one reads the stored fields back, which proves storage and not that the scheduler steps three days.`,
+          );
+        }
+
         const fifteenth = await scheduleAfterCompleting("dom-daynumber", {
           frequencyType: "day_of_the_month",
           frequency: 15,
@@ -327,8 +338,37 @@ async function main(): Promise<void> {
           };
         }
 
+        // week_of_quarter and multi-occurrence were measured when the mapping was
+        // corrected but only ever asserted through storage, which is the evidence
+        // grade that let the original bug survive.
+        const quarterly = await scheduleAfterCompleting("dow-quarter", {
+          frequencyType: "days_of_the_week",
+          frequency: 1,
+          frequencyMetadata: {
+            days: ["saturday"],
+            weekPattern: "week_of_quarter",
+            occurrences: [1],
+            timezone: config.timezone,
+          },
+        });
+        const multiple = await scheduleAfterCompleting("dow-multi", {
+          frequencyType: "days_of_the_week",
+          frequency: 1,
+          frequencyMetadata: {
+            days: ["saturday"],
+            weekPattern: "week_of_month",
+            occurrences: [1, 3],
+            timezone: config.timezone,
+          },
+        });
+        if (quarterly !== "2026-10-03" || multiple !== "2026-09-19") {
+          throw new Error(
+            `week_of_quarter [1] gave ${quarterly} (expected 2026-10-03) and week_of_month [1,3] gave ${multiple} (expected 2026-09-19)`,
+          );
+        }
+
         return {
-          detail: "occurrences [1] gave 2026-10-03, day 15 gave 2026-10-15, weekday-shaped day_of_the_month still refuses to complete",
+          detail: `interval gave ${intervalNext}, occurrences [1] gave 2026-10-03, quarter gave ${quarterly}, [1,3] gave ${multiple}, day 15 gave 2026-10-15`,
         };
       },
     );
@@ -625,18 +665,29 @@ async function main(): Promise<void> {
       // window is set, so the chore can be created and then never completed. Verified
       // live: every /do answers 502. requireDueDateFor in chore-request.ts refuses the
       // combination rather than letting a caller make an uncompletable chore.
-      const id = await createScratchChore(
-        baseChoreBody(scoped("window"), { frequencyType: "daily", completionWindow: 4, nextDueDate: null }),
-      );
-      try {
-        await client.post(endpoints.completeChore(id), {});
-      } catch {
-        return { detail: "completion refused as expected, which is why the client blocks the combination" };
+      // Both values, because 0 is the one the guard originally missed: Donetick gates
+      // the deref on the pointer being non-nil, not on the value.
+      const stillBroken: number[] = [];
+      for (const window of [0, 4]) {
+        const id = await createScratchChore(
+          baseChoreBody(scoped(`window-${window}`), {
+            frequencyType: "daily",
+            completionWindow: window,
+            nextDueDate: null,
+          }),
+        );
+        try {
+          await client.post(endpoints.completeChore(id), {});
+        } catch {
+          stillBroken.push(window);
+        }
+      }
+      if (stillBroken.length === 2) {
+        return { detail: "completion refused for windows 0 and 4, which is why the client blocks both" };
       }
       return {
         status: "warn",
-        detail:
-          "a chore with a completion window and no due date now completes cleanly, so requireDueDateFor could allow the combination again",
+        detail: `a completion window of ${[0, 4].filter((w) => !stillBroken.includes(w)).join(" and ")} now completes with no due date, so requireDueDateFor could narrow again`,
       };
     });
 
@@ -727,6 +778,40 @@ async function main(): Promise<void> {
         };
       }
       return { detail: "the stamp is unchanged, so the stored token was written back as a no-op" };
+    });
+
+    await check("an hourly interval with a time of day freezes, which is why the client refuses it", async () => {
+      // Measured: the scheduler resets the base date's clock to the stored time
+      // before adding the hours, so from the second completion the chore reschedules
+      // to the instant it is already at. buildFrequency refuses the combination
+      // because of this; the check confirms the refusal is still warranted.
+      const anchor = "2026-09-10T13:00:00Z";
+      const id = await createScratchChore(
+        baseChoreBody(scoped("hourly-time"), {
+          nextDueDate: anchor,
+          frequencyType: "interval",
+          frequency: 4,
+          frequencyMetadata: {
+            unit: "hours",
+            time: "1970-01-01T09:00:00-04:00",
+            timezone: config.timezone,
+          },
+        }),
+      );
+
+      const dates: string[] = [];
+      for (let i = 0; i < 3; i += 1) {
+        const response = (await client.post(endpoints.completeChore(id), {})) as Record<string, unknown>;
+        dates.push(String(response.nextDueDate));
+      }
+
+      if (dates[1] !== dates[2]) {
+        return {
+          status: "warn",
+          detail: `an hourly interval with a time now advances every completion (${dates.join(" -> ")}), so buildFrequency could allow the combination again`,
+        };
+      }
+      return { detail: `froze at ${dates[1]} from the second completion, as expected` };
     });
 
     await check("PUT /:id/dueDate rejects a body that omits updatedAt", async () => {
@@ -838,10 +923,33 @@ async function main(): Promise<void> {
       return { detail: "0 through 4 all round-tripped" };
     });
 
-    await check("POST /:id/do accepts a body of {}", async () => {
-      const id = await createScratchChore(baseChoreBody(scoped("do-body"), { frequencyType: "daily" }));
-      const response = await client.post(endpoints.completeChore(id), {});
-      return { detail: `completed with an empty body; response status field: ${JSON.stringify((response as Record<string, unknown> | undefined)?.status)}` };
+    await check("POST /:id/do accepts a body of {} and actually advances the chore", async () => {
+      // Asserting the effect, not the absence of a throw. This check reported the
+      // response's status into its detail string and compared nothing, so a /do that
+      // accepted the body and did nothing would have passed.
+      const anchor = "2026-09-10T13:00:00Z";
+      const id = await createScratchChore(
+        baseChoreBody(scoped("do-body"), { frequencyType: "daily", nextDueDate: anchor }),
+      );
+      const response = (await client.post(endpoints.completeChore(id), {})) as Record<string, unknown>;
+
+      if (response.status === 3) {
+        throw new Error("a chore with no approval requirement came back pending approval");
+      }
+      const next = typeof response.nextDueDate === "string" ? response.nextDueDate : undefined;
+      if (next === undefined || next.slice(0, 10) !== "2026-09-11") {
+        throw new Error(
+          `completing a daily chore due ${anchor.slice(0, 10)} scheduled ${JSON.stringify(next)}, not 2026-09-11`,
+        );
+      }
+      const history = (await client.get(endpoints.choreHistory(7, true))) as Array<{
+        choreId: number;
+        status: number;
+      }>;
+      if (!history.some((row) => row.choreId === id && row.status === 1)) {
+        throw new Error("the completion left no history row at status 1");
+      }
+      return { detail: "empty body accepted, due date advanced one day, history row written" };
     });
 
     await check(
@@ -868,24 +976,38 @@ async function main(): Promise<void> {
       },
     );
 
-    await check('POST /:id/undo after a skip fails with a "no recent action" message', async () => {
-      const id = await createScratchChore(baseChoreBody(scoped("skip"), { frequencyType: "daily" }));
-      await client.post(endpoints.skipChore(id), {});
-      try {
-        await client.post(endpoints.undoChore(id), {});
-      } catch (error) {
-        if (error instanceof DonetickError) {
-          if (!/no recent action/i.test(error.message)) {
-            return {
-              status: "warn",
-              detail: `undo after a skip was rejected as expected, but the message no longer mentions "no recent action": ${error.message}`,
-            };
-          }
-          return { detail: `rejected: ${error.message}` };
+    await check("undo, recorded as it behaves rather than as the tool describes it", async () => {
+      // This check used to assert that undo fails after a skip, implying it succeeds
+      // after a completion. Measured 2026-08-06: it fails after both, on this
+      // instance, immediately, well inside the five-minute window. Donetick's own
+      // handler accepts a skip, so the refusal is not skip-specific and undo_chore's
+      // promise is unreliable here. Recorded as data so a future change is visible
+      // rather than asserted as a contract this server does not control.
+      const outcomes: string[] = [];
+      for (const [label, act] of [
+        ["skip", (id: number) => client.post(endpoints.skipChore(id), {})],
+        ["complete", (id: number) => client.post(endpoints.completeChore(id), {})],
+      ] as const) {
+        const id = await createScratchChore(
+          baseChoreBody(scoped(`undo-${label}`), { frequencyType: "daily" }),
+        );
+        await act(id);
+        try {
+          await client.post(endpoints.undoChore(id), {});
+          outcomes.push(`${label}: undone`);
+        } catch (error) {
+          outcomes.push(`${label}: refused${error instanceof DonetickError ? ` (${error.status})` : ""}`);
         }
-        throw error;
       }
-      throw new Error("undo after a skip succeeded; only completions should be undoable");
+
+      const undoable = outcomes.filter((o) => o.endsWith("undone"));
+      if (undoable.length === 0) {
+        return {
+          status: "warn",
+          detail: `undo refused for both actions (${outcomes.join(", ")}), so undo_chore cannot do what it advertises on this instance`,
+        };
+      }
+      return { detail: outcomes.join(", ") };
     });
 
     await check("PUT /:id/archive flips isActive to false and back, and moves the chore between the two lists", async () => {

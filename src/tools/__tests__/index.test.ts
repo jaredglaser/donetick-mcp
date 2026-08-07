@@ -101,6 +101,13 @@ describe("get_chore merging", () => {
       ...service,
       chores: async () => [listRow],
       choreDetails: async () => ({
+        // Overlapping keys on purpose. /details shares id, name and nextDueDate with
+        // the list row, and it is the fresh read while the row is cached, so which
+        // side wins is the point of the spread order. A stub sharing no keys made
+        // both orderings produce the same object and the ordering unpinnable.
+        id: 5,
+        name: "Take out trash",
+        nextDueDate: "2026-06-25T00:00:00Z",
         lastCompletedDate: "2026-06-10T00:00:00Z",
         lastCompletedBy: 1,
       }),
@@ -120,6 +127,8 @@ describe("get_chore merging", () => {
     expect(parsed.frequency).toBe("every 3 days");
     expect(parsed.requires_approval).toBe(true);
     expect(parsed.labels).toEqual(["kitchen"]);
+    // On a shared key, the fresh /details read wins over the cached row.
+    expect(parsed.due_date).toBe("2026-06-25T00:00:00Z");
   });
 
   test("accepts a name and resolves it", async () => {
@@ -1074,5 +1083,39 @@ describe("list_activity does not report edits as completions", () => {
     ) as Array<{ action: string }>;
 
     expect(parsed[0]!.action).toBe("status 99");
+  });
+});
+
+describe("history rows that carry no completer", () => {
+  test("report nobody rather than a member named null", async () => {
+    // Skip, reschedule and timer-start rows genuinely carry completedBy null, and
+    // every fixture used a real id, so the null branch was free to delete.
+    const tools = buildToolDefinitions({
+      ...deps,
+      service: {
+        ...service,
+        chores: async () => [{ id: 9, name: "Water plants", isActive: true }],
+        rawGet: async () => [
+          {
+            id: 1,
+            choreId: 9,
+            assignedTo: null,
+            completedBy: null,
+            dueDate: null,
+            performedAt: "2026-06-14T09:00:00Z",
+            notes: null,
+            status: 1,
+            createdAt: "2026-06-14T09:00:00Z",
+            updatedAt: "2026-06-14T09:00:00Z",
+          },
+        ],
+      } as never,
+    });
+
+    const parsed = jsonOf(await tools.find((t) => t.name === "list_activity")!.handler({})) as Array<{
+      completed_by: string | null;
+    }>;
+
+    expect(parsed[0]!.completed_by).toBeNull();
   });
 });
