@@ -27,6 +27,7 @@ interface FakeOptions {
 function fakeService(opts: FakeOptions = {}) {
   const calls: Array<{ method: string; path: string; body?: unknown }> = [];
   let invalidations = 0;
+  let memberInvalidations = 0;
 
   const service = {
     chores: async () => {
@@ -42,6 +43,9 @@ function fakeService(opts: FakeOptions = {}) {
         invalidations += 1;
       }
     },
+    invalidateMembers: () => {
+      memberInvalidations += 1;
+    },
     client: {
       post: async (path: string, body?: unknown) => {
         calls.push({ method: "POST", path, body });
@@ -51,7 +55,7 @@ function fakeService(opts: FakeOptions = {}) {
     },
   };
 
-  return { service, calls, invalidations: () => invalidations };
+  return { service, calls, invalidations: () => invalidations, memberInvalidations: () => memberInvalidations };
 }
 
 function ctxFor(service: ReturnType<typeof fakeService>["service"]): ToolContext {
@@ -324,6 +328,71 @@ describe("skipChore", () => {
     });
     await expect(skipChore({ chore_id: 7 }, ctxFor(failing.service))).rejects.toThrow("nope");
     expect(failing.invalidations()).toBe(1);
+  });
+});
+
+describe("point totals after a write that moves them", () => {
+  // list_members reads a cache with a five minute TTL and advertises point standings.
+  // write() invalidates the chore cache only, deliberately, so the three tools that
+  // move points have to say so themselves.
+  test("complete invalidates the member cache", async () => {
+    const fake = fakeService({ chores: [listRow] });
+    await completeChore({ chore_id: 7 }, ctxFor(fake.service));
+    expect(fake.memberInvalidations()).toBe(1);
+  });
+
+  test("approve invalidates the member cache", async () => {
+    const fake = fakeService({ chores: [listRow] });
+    await approveChore({ chore_id: 7 }, ctxFor(fake.service));
+    expect(fake.memberInvalidations()).toBe(1);
+  });
+
+  test("undo invalidates the member cache", async () => {
+    const fake = fakeService({ chores: [listRow] });
+    await undoChore({ chore_id: 7 }, ctxFor(fake.service));
+    expect(fake.memberInvalidations()).toBe(1);
+  });
+
+  test("skip does not, since skipping awards nothing", async () => {
+    const fake = fakeService({ chores: [listRow] });
+    await skipChore({ chore_id: 7 }, ctxFor(fake.service));
+    expect(fake.memberInvalidations()).toBe(0);
+  });
+});
+
+describe("skipChore against a timer", () => {
+  // Confirmed against a live v0.1.76 instance: with a timer running, skip returned
+  // 200, the due date did not move, the chore stayed at status 1, and the only
+  // history row was the Started one. Donetick's SkipChore switch matches neither
+  // case when the Started row has a null performedAt, and its default returns a nil
+  // error, which commits a transaction that wrote nothing.
+  for (const [status, label] of [
+    [1, "running"],
+    [2, "paused"],
+  ] as const) {
+    test(`refuses a chore with a ${label} timer instead of reporting a skip that did not happen`, async () => {
+      const fake = fakeService({ chores: [{ ...listRow, status }] });
+
+      await expect(skipChore({ chore_id: 7 }, ctxFor(fake.service))).rejects.toThrow(
+        new RegExp(`${label} timer`),
+      );
+      expect(fake.calls.some((c) => c.method === "POST")).toBe(false);
+    });
+  }
+
+  test("points at complete_chore, which works from either timer state", async () => {
+    const fake = fakeService({ chores: [{ ...listRow, status: 1 }] });
+    await expect(skipChore({ chore_id: 7 }, ctxFor(fake.service))).rejects.toThrow(/Complete it/);
+  });
+
+  test("a chore with no timer skips normally", async () => {
+    const fake = fakeService({ chores: [{ ...listRow, status: 0 }] });
+    await expect(skipChore({ chore_id: 7 }, ctxFor(fake.service))).resolves.toBeDefined();
+  });
+
+  test("a pending-approval chore is not mistaken for a timer, since 3 is not 1 or 2", async () => {
+    const fake = fakeService({ chores: [{ ...listRow, status: 3 }] });
+    await expect(skipChore({ chore_id: 7 }, ctxFor(fake.service))).resolves.toBeDefined();
   });
 });
 

@@ -503,11 +503,15 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
         is_private: z.boolean().optional(),
         completion_window: z
           .number()
+          .int()
+          .positive()
           .optional()
           .describe(
             "Hours before the due date within which the chore can be completed. Donetick's own " +
               "model comment says seconds; its handler multiplies by hours, and the handler is " +
-              "what runs. A chore with a completion window also needs a due date.",
+              "what runs. A chore with a completion window also needs a due date. There is no " +
+              "way to express 'no window' with a number: 0 sets a real window of zero hours, " +
+              "which makes the chore uncompletable. Omit the field instead.",
           ),
         notify: notifySchema.optional(),
       },
@@ -579,11 +583,16 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
         is_private: z.boolean().optional(),
         completion_window: z
           .number()
+          .int()
+          .positive()
+          .nullable()
           .optional()
           .describe(
             "Hours before the due date within which the chore can be completed. Donetick's own " +
               "model comment says seconds; its handler multiplies by hours, and the handler is " +
-              "what runs. A chore with a completion window also needs a due date.",
+              "what runs. A chore with a completion window also needs a due date. Pass null to " +
+              "remove the window; 0 is not 'off' and sets a real window of zero hours, which " +
+              "makes the chore uncompletable.",
           ),
         notify: notifySchema
           .optional()

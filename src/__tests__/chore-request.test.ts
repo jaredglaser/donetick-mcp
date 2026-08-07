@@ -801,6 +801,25 @@ describe("combinations that would crash or silently revert on Donetick's side", 
   });
 });
 
+describe("clearing a completion window", () => {
+  const windowed = { ...existing, completionWindow: 4, nextDueDate: "2026-08-10T13:00:00.000Z" } as unknown as RawChore;
+
+  test("null removes it, where ?? used to fall through to the stored value", () => {
+    // Under ?? an explicit null is nullish, so the window could be set and never
+    // removed, and a window that cannot be removed permanently blocks clearing the
+    // due date. points is checked against undefined for the same reason.
+    expect(mergeEditRequest(windowed, { completion_window: null }, ctx()).completionWindow).toBeNull();
+  });
+
+  test("an omitted window still carries the stored one forward", () => {
+    expect(mergeEditRequest(windowed, { name: "Renamed" }, ctx()).completionWindow).toBe(4);
+  });
+
+  test("a new value replaces it", () => {
+    expect(mergeEditRequest(windowed, { completion_window: 9 }, ctx()).completionWindow).toBe(9);
+  });
+});
+
 describe("a blank name", () => {
   // create_chore guarded this in the tool, so the merge had no guard at all and
   // reassign_chore, which routes through the same merge, never named one either.

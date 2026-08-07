@@ -43,12 +43,13 @@ export interface CreateInput {
   notify?: NotifyInput;
 }
 
-export interface EditInput extends Partial<Omit<CreateInput, "name" | "points">> {
+export interface EditInput extends Partial<Omit<CreateInput, "name" | "points" | "completion_window">> {
   name?: string;
   // Null clears the value, which is why the merge checks this against undefined
   // rather than folding it into a ?? chain: under ?? an explicit null is nullish
   // and would fall through to the existing value exactly like an omitted field.
   points?: number | null;
+  completion_window?: number | null;
   add_assignees?: string[];
   add_subtasks?: string[];
 }
@@ -591,7 +592,15 @@ export function mergeEditRequest(existing: RawChore, input: EditInput, ctx: Buil
         ? null
         : new Date(existing.nextDueDate);
   const dueDate = ensureDueDateForRolling(parsedDueDate, isRolling, ctx);
-  const completionWindowValue = input.completion_window ?? existing.completionWindow ?? null;
+  // Against undefined, not folded into a ?? chain, for the reason points is: under
+  // ?? an explicit null is nullish and falls through to the stored value, so the
+  // window could be set but never removed. That matters more here than elsewhere,
+  // since a window the caller cannot clear then permanently blocks clearing the due
+  // date, and nothing tells them the combination is unreachable.
+  const completionWindowValue =
+    input.completion_window !== undefined
+      ? input.completion_window
+      : (existing.completionWindow ?? null);
   requireDueDateFor(dueDate, frequency.frequencyType, completionWindowValue);
 
   // subtasks replaces; add_subtasks appends. Without the second, the only way to add

@@ -13,6 +13,7 @@ const service = {
   rawGet: async () => [],
   write: async (op: () => Promise<unknown>) => op(),
   invalidateChores: () => {},
+  invalidateMembers: () => {},
 };
 
 const deps = {
@@ -408,6 +409,7 @@ describe("failure isolation", () => {
       },
       write: async (op: () => Promise<unknown>) => op(),
       invalidateChores: () => {},
+      invalidateMembers: () => {},
     };
     const tools = buildToolDefinitions({ ...deps, service: failing as never });
     const argsByName: Record<string, Record<string, unknown>> = {
@@ -482,6 +484,7 @@ function fakeWriteService(opts: FakeWriteOptions = {}) {
     rawGet: async () => [],
     write: async <T>(op: () => Promise<T>): Promise<T> => op(),
     invalidateChores: () => {},
+    invalidateMembers: () => {},
     client: {
       post: async (path: string, body?: unknown) => (opts.post ? opts.post(path, body) : undefined),
       postEnvelope: async (path: string, body?: unknown) =>

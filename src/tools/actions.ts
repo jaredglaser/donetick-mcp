@@ -110,6 +110,9 @@ export async function completeChore(input: CompleteInput, ctx: ToolContext): Pro
   const response = await ctx.service.write(() =>
     ctx.service.client.post(endpoints.completeChore(chore.id), body),
   );
+  // Points move on completion, and list_members answers point-standing questions
+  // off a cache with a five minute TTL.
+  ctx.service.invalidateMembers();
 
   // A chore awaiting sign-off comes back 200 with the full chore object at status 3
   // and no message field at all, and its due date is unchanged.
@@ -166,6 +169,21 @@ export interface SkipOutcome {
 export async function skipChore(input: SkipInput, ctx: ToolContext): Promise<SkipOutcome> {
   const chore = await loadChoreById(input.chore_id, ctx);
 
+  // A running or paused timer makes the skip a no-op that still answers 200.
+  // Donetick's SkipChore looks for the chore's Started history row and switches on
+  // `err == nil && PerformedAt != nil`; a timer row has a null PerformedAt, so
+  // neither case matches and the default returns a nil error, which commits the
+  // transaction. Every write in that function is below the switch, so the due date
+  // does not move, no history row is written, and the session is not closed.
+  // Measured against v0.1.76: due date unchanged, status still 1, history [Started].
+  // Complete has no such condition on its own switch and works from either state.
+  if (chore.status === 1 || chore.status === 2) {
+    const state = chore.status === 1 ? "running" : "paused";
+    throw new Error(
+      `"${chore.name}" has a ${state} timer, and Donetick cannot skip a chore in that state: it answers 200 and does nothing, leaving the due date where it is. Complete it instead, which works from either timer state, or stop the timer in Donetick and skip it then.`,
+    );
+  }
+
   const response = await ctx.service.write(() =>
     ctx.service.client.post(endpoints.skipChore(chore.id), {}),
   );
@@ -219,6 +237,7 @@ export async function undoChore(input: UndoInput, ctx: ToolContext): Promise<Und
   } catch (error) {
     throw new Error(explainUndoFailure(error));
   }
+  ctx.service.invalidateMembers();
   return { id: input.chore_id, message: "The most recent completion was undone." };
 }
 
@@ -254,6 +273,7 @@ export interface ApprovalOutcome {
 export async function approveChore(input: ApprovalInput, ctx: ToolContext): Promise<ApprovalOutcome> {
   const chore = await loadChoreById(input.chore_id, ctx);
   await ctx.service.write(() => ctx.service.client.post(endpoints.approveChore(chore.id), {}));
+  ctx.service.invalidateMembers();
   return {
     id: chore.id,
     name: chore.name,

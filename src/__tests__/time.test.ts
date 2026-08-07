@@ -99,6 +99,57 @@ describe("bucket", () => {
     expect(bucket(new Date("2026-10-30T12:00:00Z"), "overdue", now, NY)).toBe(true);
   });
 
+  // Every comparison below survived mutation: each edge could be flipped between
+  // strict and inclusive, and the 7 in `withinDays = 7` could be changed to 8,
+  // without failing anything. The DST cases above pinned the hard part and left the
+  // ordinary boundaries open.
+  describe("boundaries", () => {
+    const at = (iso: string) => new Date(iso);
+    const todayStart = at("2026-11-01T04:00:00Z"); // 00:00 local on the 25-hour day
+    const tomorrowStart = at("2026-11-02T05:00:00Z"); // 00:00 local on Nov 2, after the fall back
+
+    test("a chore due at this instant is not yet overdue", () => {
+      expect(bucket(now, "overdue", now, NY)).toBe(false);
+    });
+
+    test("a chore due one millisecond ago is overdue", () => {
+      expect(bucket(at("2026-11-01T15:59:59.999Z"), "overdue", now, NY)).toBe(true);
+    });
+
+    test("due_today includes local midnight exactly and excludes the next one", () => {
+      expect(bucket(todayStart, "due_today", now, NY)).toBe(true);
+      expect(bucket(new Date(todayStart.getTime() - 1), "due_today", now, NY)).toBe(false);
+      expect(bucket(tomorrowStart, "due_today", now, NY)).toBe(false);
+      expect(bucket(new Date(tomorrowStart.getTime() - 1), "due_today", now, NY)).toBe(true);
+    });
+
+    test("due_this_week spans exactly seven local days from today's start", () => {
+      const weekEnd = at("2026-11-08T05:00:00Z"); // 00:00 local, seven days on
+      expect(bucket(todayStart, "due_this_week", now, NY)).toBe(true);
+      expect(bucket(new Date(todayStart.getTime() - 1), "due_this_week", now, NY)).toBe(false);
+      expect(bucket(new Date(weekEnd.getTime() - 1), "due_this_week", now, NY)).toBe(true);
+      expect(bucket(weekEnd, "due_this_week", now, NY)).toBe(false);
+    });
+
+    test("due_within_days defaults to the same seven days due_this_week uses", () => {
+      // Defaulted independently here and at the list_chores call site, so the two
+      // can drift apart with nothing failing.
+      const weekEnd = at("2026-11-08T05:00:00Z");
+      expect(bucket(new Date(weekEnd.getTime() - 1), "due_within_days", now, NY)).toBe(true);
+      expect(bucket(weekEnd, "due_within_days", now, NY)).toBe(false);
+    });
+
+    test("an explicit withinDays overrides the default at both edges", () => {
+      const oneDayOn = at("2026-11-02T05:00:00Z");
+      expect(bucket(new Date(oneDayOn.getTime() - 1), "due_within_days", now, NY, 1)).toBe(true);
+      expect(bucket(oneDayOn, "due_within_days", now, NY, 1)).toBe(false);
+    });
+
+    test("due_within_days excludes the past, so it is not a synonym for overdue", () => {
+      expect(bucket(new Date(todayStart.getTime() - 1), "due_within_days", now, NY, 30)).toBe(false);
+    });
+  });
+
   test("a future due date is not overdue", () => {
     expect(bucket(new Date("2026-11-05T12:00:00Z"), "overdue", now, NY)).toBe(false);
   });

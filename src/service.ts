@@ -109,4 +109,16 @@ export class DonetickService {
   invalidateChores(): void {
     this.choreCache.invalidate();
   }
+
+  /**
+   * For the writes that move points between members: completing, approving, and
+   * undoing. Separate from write() because the member cache has a five minute TTL
+   * and most writes cannot touch it, so invalidating it on every write would throw
+   * away a cache that is right almost all of the time. list_members answers
+   * point-standing questions off that cache, and read the pre-completion standing
+   * for up to five minutes after a chore worth points was completed.
+   */
+  invalidateMembers(): void {
+    this.memberCache.invalidate();
+  }
 }
