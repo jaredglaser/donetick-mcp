@@ -146,10 +146,14 @@ describe("buildCreateRequest", () => {
       expect(buildCreateRequest({ name: "Trash" }, ctx()).isRolling).toBe(false);
     });
 
-    test("rolling with no due date defaults the due date instead of sending an invalid body", () => {
+    test("rolling with no due date sends no due date, rather than inventing today", () => {
+      // This used to substitute today 09:00, on the belief that Donetick binds
+      // isRolling to a due date. Measured against a live container: it does not, and
+      // a rolling chore with no due date completes and reschedules fine. Inventing
+      // one wrote a date the caller had deliberately not asked for.
       const body = buildCreateRequest({ name: "Trash", reschedule_from: "completion_date" }, ctx());
       expect(body.isRolling).toBe(true);
-      expect(body.nextDueDate).not.toBeNull();
+      expect(body.nextDueDate).toBeNull();
     });
   });
 
@@ -1079,20 +1083,24 @@ describe("an hourly chore already carrying a time", () => {
   });
 });
 
-describe("a rolling chore cannot be left without a due date", () => {
-  // ensureDueDateForRolling exists because Donetick binds the two together, but both
-  // clear paths write the date on a separate endpoint after the merge, so neither
-  // passed through it. The chore ended in exactly the state that helper prevents.
-  test("clearing is refused", () => {
-    expect(() => requireDueDateFor(null, "interval", null, true)).toThrow(/rolling/i);
+describe("a rolling chore may be left without a due date", () => {
+  // This block used to assert the opposite, on the belief that Donetick binds the
+  // two together. It does not. scheduler.go reads IsRolling twice, once with no
+  // deref and once explicitly nil-guarded, and PUT /:id/dueDate binds dueDate with
+  // no tag at all. Measured against a live v0.1.76 container: the clear is accepted,
+  // and the chore still completes and reschedules afterward. The guard was refusing
+  // an operation that works, and it ran first, so a rolling adaptive chore got the
+  // rolling message instead of the adaptive one, which is the real constraint.
+  test("clearing is allowed on a rolling chore", () => {
+    expect(() => requireDueDateFor(null, "interval", null)).not.toThrow();
   });
 
-  test("the message names the way out", () => {
-    expect(() => requireDueDateFor(null, "interval", null, true)).toThrow(/reschedule_from/);
+  test("a rolling adaptive chore is still refused, and for the adaptive reason", () => {
+    expect(() => requireDueDateFor(null, "adaptive", null)).toThrow(/adaptive/i);
   });
 
-  test("a chore that does not roll is unaffected", () => {
-    expect(() => requireDueDateFor(null, "interval", null, false)).not.toThrow();
+  test("a rolling chore with a completion window is still refused", () => {
+    expect(() => requireDueDateFor(null, "interval", 4)).toThrow(/completion window/i);
   });
 });
 

@@ -71,12 +71,7 @@ export async function rescheduleChore(input: RescheduleInput, ctx: ToolContext):
   // This endpoint writes the due date directly, so it never passes through the
   // builders where the guard normally runs. Clearing the date on a chore with a
   // completion window leaves it uncompletable, and an adaptive frequency unskippable.
-  requireDueDateFor(
-    parsed,
-    existing.frequencyType,
-    existing.completionWindow ?? null,
-    existing.isRolling === true,
-  );
+  requireDueDateFor(parsed, existing.frequencyType, existing.completionWindow ?? null);
   const updatedAt = concurrencyToken(existing, ctx.now());
 
   await ctx.service.write(() =>

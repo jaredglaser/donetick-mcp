@@ -129,7 +129,7 @@ export async function editChore(
     // retry re-reads and re-merges, and the row it re-reads can have acquired a
     // completion window or an adaptive frequency in the meantime.
     if (input.due_date === null) {
-      requireDueDateFor(null, body.frequencyType, body.completionWindow, body.isRolling);
+      requireDueDateFor(null, body.frequencyType, body.completionWindow);
     }
     await ctx.service.write(() => ctx.service.client.put(endpoints.editChore(), body));
   };

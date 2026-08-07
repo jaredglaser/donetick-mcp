@@ -280,16 +280,8 @@ export function requireDueDateFor(
   dueDate: Date | null,
   frequencyType: string,
   completionWindow: number | null,
-  isRolling = false,
 ): void {
   if (dueDate !== null) return;
-  if (isRolling) {
-    throw new Error(
-      "A rolling chore needs a due date: it reschedules from its completion date, and Donetick binds " +
-        'the two together. Turn rolling off first with reschedule_from: "due_date", or set a date ' +
-        "rather than clearing it.",
-    );
-  }
   // Any window at all, including 0. Donetick gates the due-date deref on the pointer
   // being non-nil rather than on the value, and 0 is not nullish, so it survives the
   // ?? chain and reaches the wire as a real window. Measured: a chore with
@@ -306,25 +298,12 @@ export function requireDueDateFor(
   }
 }
 
-/**
- * A due date is required whenever isRolling is set; Donetick binds them together.
- * Applied on both create and merge, so no path can produce isRolling with a null
- * nextDueDate.
- */
-function ensureDueDateForRolling(dueDate: Date | null, isRolling: boolean, ctx: BuildContext): Date | null {
-  if (isRolling && dueDate === null) {
-    return parseDueDate("today", ctx.now, ctx.timezone);
-  }
-  return dueDate;
-}
-
 export function buildCreateRequest(input: CreateInput, ctx: BuildContext): ChoreRequestBody {
   const frequency = buildFrequency(input.frequency ?? { type: "once" }, ctx.timezone, ctx.now);
   const assigneeIds = resolveMemberIds(input.assignees, ctx.members);
   const isRolling = input.reschedule_from === "completion_date";
 
-  const parsedDueDate = parseDueDate(input.due_date ?? null, ctx.now, ctx.timezone);
-  const dueDate = ensureDueDateForRolling(parsedDueDate, isRolling, ctx);
+  const dueDate = parseDueDate(input.due_date ?? null, ctx.now, ctx.timezone);
   const completionWindowValue = input.completion_window ?? null;
   requireDueDateFor(dueDate, frequency.frequencyType, completionWindowValue);
 
@@ -591,7 +570,7 @@ export function mergeEditRequest(existing: RawChore, input: EditInput, ctx: Buil
       : existing.nextDueDate === null
         ? null
         : new Date(existing.nextDueDate);
-  const dueDate = ensureDueDateForRolling(parsedDueDate, isRolling, ctx);
+  const dueDate = parsedDueDate;
   // Against undefined, not folded into a ?? chain, for the reason points is: under
   // ?? an explicit null is nullish and falls through to the stored value, so the
   // window could be set but never removed. That matters more here than elsewhere,
