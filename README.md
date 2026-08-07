@@ -190,7 +190,7 @@ These were verified against a live Donetick instance, not assumed from its sourc
 
 ## Development
 
-See `CLAUDE.md` for the operating rules this codebase follows, the full command list, and a pointer to the design spec. `docs/architecture.html` walks the same ground in diagrams; its Mermaid blocks need a renderer, so GitHub's source view is not the way to read it.
+See `CLAUDE.md` for the operating rules this codebase follows and the full command list.
 
 ```bash
 bun run typecheck    # tsc --noEmit

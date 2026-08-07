@@ -12,3 +12,8 @@ dist/
 # and a `git add -A` would otherwise publish them.
 /probe*.ts
 /verify-*.ts
+
+# Design plans, specs and the architecture walkthrough. Working notes rather than
+# anything a reader of this repo needs, and they date fast: they describe the design
+# as it was planned rather than as it shipped.
+docs/
