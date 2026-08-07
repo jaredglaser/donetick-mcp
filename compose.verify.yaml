@@ -33,8 +33,12 @@ services:
     # No volume anywhere: the sqlite file lives in the container's writable layer
     # so `docker compose down` destroys the data, and nothing lands in the repo.
     healthcheck:
-      # The image's own HEALTHCHECK probes /health, which v0.1.76 does not route.
-      # The real endpoint is /api/v1/health.
+      # Overridden for its timings, not its path: the image's own HEALTHCHECK waits
+      # 15s before the first probe and retries every 30s, so a run would idle for
+      # most of a minute before a container that was ready in seconds is called
+      # healthy. Both /health and /api/v1/health answer 200 on v0.1.76; /health also
+      # returns the version and commit, which is what the README tells a reader to
+      # curl.
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:2021/api/v1/health"]
       interval: 2s
       timeout: 3s

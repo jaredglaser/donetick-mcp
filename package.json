@@ -4,9 +4,6 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "bin": {
-    "donetick-mcp": "./src/index.ts"
-  },
   "scripts": {
     "start": "bun src/index.ts",
     "dev": "bun --watch src/index.ts",

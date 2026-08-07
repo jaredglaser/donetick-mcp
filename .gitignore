@@ -6,3 +6,9 @@ dist/
 # Credentials minted for the disposable Donetick container. Throwaway, but a
 # token all the same, and the directory is recreated by `bun run verify:up`.
 .donetick-local/
+
+# Scratch probes against the local container. Anchored to the root so src/probe.ts,
+# which is a real module, is unaffected. These accumulate during wire-contract work
+# and a `git add -A` would otherwise publish them.
+/probe*.ts
+/verify-*.ts

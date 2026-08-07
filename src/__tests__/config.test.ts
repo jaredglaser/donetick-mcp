@@ -22,8 +22,8 @@ describe("parseConfig", () => {
   });
 
   test("allows http for lan addresses", () => {
-    expect(parseConfig({ ...valid, DONETICK_URL: "http://192.168.1.9:2021" }).baseUrl).toBe(
-      "http://192.168.1.9:2021",
+    expect(parseConfig({ ...valid, DONETICK_URL: "http://192.168.0.2:2021" }).baseUrl).toBe(
+      "http://192.168.0.2:2021",
     );
   });
 

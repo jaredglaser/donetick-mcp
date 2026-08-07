@@ -184,6 +184,43 @@ describe("live-observed edge cases", () => {
     ).toBe("broken: days_of_the_week with no days");
   });
 
+  test("a week pattern with no occurrences reads as broken, matching what the write side refuses", () => {
+    // The write side started refusing this shape and the read side did not learn it,
+    // which is the exact split this pairing exists to prevent: measured live, such a
+    // chore fails every completion while the projection called it "every saturday".
+    expect(
+      summarizeFrequency(
+        chore({
+          frequencyType: "days_of_the_week",
+          frequencyMetadata: { days: ["saturday"], weekPattern: "week_of_month" },
+        }),
+      ),
+    ).toBe("broken: a week_of_month pattern with no occurrences");
+  });
+
+  test("the deprecated weekNumbers satisfies the occurrence read, as Donetick's getOccurrences does", () => {
+    // Reading only `occurrences` described a monthly chore as weekly.
+    expect(
+      summarizeFrequency(
+        chore({
+          frequencyType: "days_of_the_week",
+          frequencyMetadata: { days: ["saturday"], weekPattern: "week_of_month", weekNumbers: [1] },
+        }),
+      ),
+    ).toBe("the 1st saturday of every month");
+  });
+
+  test("every_week needs no occurrences and is still plainly weekly", () => {
+    expect(
+      summarizeFrequency(
+        chore({
+          frequencyType: "days_of_the_week",
+          frequencyMetadata: { days: ["saturday"], weekPattern: "every_week" },
+        }),
+      ),
+    ).toBe("every saturday");
+  });
+
   test("a well-formed interval is still described plainly", () => {
     expect(
       summarizeFrequency(

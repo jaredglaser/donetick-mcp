@@ -6,13 +6,14 @@ A stdio MCP server that lets an AI assistant read and manage a self-hosted [Done
 
 `donetick-mcp` runs as a local process, speaks the Model Context Protocol over stdio, and calls your Donetick instance's HTTP API on your behalf. It targets MCP protocol revision `2026-07-28` using the v2 `@modelcontextprotocol/server` package, and its `serveStdio` transport defaults to `legacy: 'serve'`, so a client still speaking the older 2025-era `initialize` handshake works without any extra configuration.
 
-The server exposes twenty tools: five that read, eight that write, and seven that act on a chore's lifecycle. Deleting is the only one that asks the user to confirm before it proceeds.
+The server exposes twenty tools: five that read, eight that write, and seven that act on a chore's lifecycle. Deleting is the only one that asks the user to confirm before it proceeds. Every tool carries MCP annotations, so a client can tell `list_chores` from `delete_chore` before calling either: the five readers are `readOnlyHint`, `edit_chore`, `delete_chore`, `complete_chore` and `skip_chore` are `destructiveHint`, and `openWorldHint` is false throughout since every tool talks to one known instance.
 
 ## Requirements
 
 - [Bun](https://bun.sh) (version pinned in `.bun-version`)
 - A running Donetick instance you can reach over HTTP or HTTPS
 - A Donetick API token
+- Docker, for `bun run verify:live` only. The server itself does not need it.
 
 ## Setup
 
@@ -28,7 +29,7 @@ The server exposes twenty tools: five that read, eight that write, and seven tha
    cp .env.example .env
    ```
 
-3. Get an API token from Donetick: open the Donetick web UI, go to Settings, then Access Token, then Generate new token. Paste it into `DONETICK_TOKEN`. This token is not your password; you can revoke it from the same screen.
+3. Get an API token from Donetick: open the Donetick web UI, go to Settings, then Access Token, then Generate New Token. Paste it into `DONETICK_TOKEN`. This token is not your password; you can revoke it from the same screen.
 
 4. Set `DONETICK_URL` to your instance's origin, with no trailing path, for example `https://donetick.example.com`. Plain `http` is allowed for LAN addresses.
 
@@ -39,6 +40,8 @@ The server exposes twenty tools: five that read, eight that write, and seven tha
    ```
 
    A successful connection is logged to stderr as `donetick-mcp connected to <url>, N chores visible`. All diagnostic output goes to stderr; stdout is reserved for the JSON-RPC transport.
+
+   Bun reads `.env` from the working directory, not from the script's directory, so this works from the repo root and not from elsewhere. An MCP client launches the process with its own working directory, which is why the configuration below passes the variables inline instead.
 
 ## Configuration
 
@@ -101,8 +104,8 @@ Add an entry to your MCP configuration, using an absolute path to `src/index.ts`
 | Tool | What it does |
 | --- | --- |
 | `complete_chore` | Mark a chore done, optionally backdated or on someone else's behalf. Reports a chore that needs approval as pending rather than done. |
-| `skip_chore` | Skip this occurrence and move to the next. |
-| `undo_chore` | Reverse your own completion. Expect it to fail: see Known limitations. |
+| `skip_chore` | Skip this occurrence and move to the next. Refuses a chore with a running or paused timer, which Donetick answers 200 to and then does nothing about. |
+| `undo_chore` | Reverse your own completion. Fails on any instance whose clock is behind UTC: see Known limitations. |
 | `approve_chore` | Approve a completion that is waiting on sign-off. |
 | `reject_chore` | Reject one. |
 | `nudge_chore` | Remind whoever the chore is assigned to. |
@@ -132,7 +135,8 @@ bun run verify:live
 
 It needs Docker and nothing else. It starts a Donetick container pinned to the tag
 in `compose.verify.yaml`, signs a throwaway user up over plain HTTP, mints that
-user's API token, and exercises 29 contract facts against it. Scratch chores carry
+user's API token, and exercises 29 contract facts against it. A clean run reports
+30 passed: the thirtieth is a cleanup assertion, not a contract fact. Scratch chores carry
 a run-scoped name prefix and are deleted in a `finally`, so a mid-run failure
 leaves nothing behind. It exits non-zero if any check fails, and distinguishes a warning
 (something changed but nothing is broken) from a failure.
@@ -148,8 +152,10 @@ DONETICK_IMAGE_TAG=v0.1.77 bun run verify:live
 The container holds its database in its own writable layer, so nothing persists
 and nothing is written into the working tree. `bun run verify:up` brings it up and
 bootstraps it without running any check, which is worth doing once if several runs
-follow; `bun run verify:down` destroys it. The same three commands run in CI on
-every push and pull request, along with the type check and the unit suite.
+follow; `bun run verify:down` destroys it. `verify:live` reuses a container that is
+already up rather than replacing it, and does not tear one down when it finishes, so
+run `verify:down` when you are done with it. CI runs the type check, the unit suite,
+and `verify:live` on every push and pull request.
 
 The container's timezone is `America/New_York` rather than UTC on purpose. One
 check asserts that `undo_chore` fails if and only if the server stores timestamps
@@ -169,8 +175,9 @@ regardless. Archiving is the alternative and keeps the chore's history.
 These were verified against a live Donetick instance, not assumed from its source.
 
 - **A chore driven by a Donetick Thing cannot be edited here.** Donetick drops the Thing association on every edit and restores it only for a request naming the Thing, which this server cannot build, so `edit_chore` refuses rather than severing the link silently.
-- **A completion window requires a due date**, and so does an adaptive chore. Donetick reads the due date without checking whether it is there, so a chore with a completion window can never be completed and an adaptive one can never be skipped.
-- **`undo_chore` does not work on this instance.** Donetick answers "no recent action found" immediately after both a completion and a skip, well inside its own five-minute window. Its handler accepts either action, so the refusal is not skip-specific. The cause is a string comparison: `created_at` is written in the server's own UTC offset while the cutoff is built in UTC, so on a server behind UTC nothing is ever recent enough. `verify:live` asserts exactly that, failing if undo starts working without the offset changing, or stops working when it has not.
+- **A completion window requires a due date**, and so does an adaptive chore. Donetick reads the due date without checking whether it is there, so a chore with a completion window can never be completed and an adaptive one can never be skipped. A window of `0` is not "off": it is a real window of zero hours that makes the chore uncompletable, so both `create_chore` and `edit_chore` reject it. `edit_chore` takes `completion_window: null` to remove an existing window. A rolling chore needs no due date; Donetick schedules the first occurrence from the first completion.
+- **Only reminder offsets produce a notification.** `notify`'s `due_date`, `completion`, `predue` and `nagging` flags are stored and never read, so `notify` without `reminders` sends nothing. Offsets are written to the wire negated, because Donetick adds the value to the due date rather than subtracting it; a positive one would schedule an overdue nag instead of a reminder. At most five per chore.
+- **`undo_chore` fails on any instance whose timezone is behind UTC.** Donetick answers "no recent action found" immediately after both a completion and a skip, well inside its own five-minute window. Its handler accepts either action, so the refusal is not skip-specific. The cause is a string comparison: `created_at` is written in the server's own UTC offset while the cutoff is built in UTC, and SQLite compares the two as text, so on a server behind UTC the stored value always sorts earlier and nothing is ever recent enough. An instance running at UTC or ahead of it is unaffected. `verify:live` asserts the conditional directly, failing if undo starts working without the offset changing, or stops working when it has not; its container runs at `America/New_York` so that the check is exercised in the failing direction.
 - **A time of day applies to three recurrence types only.** Donetick's scheduler reads `frequency.time` for `interval`, `days_of_the_week` and `day_of_the_month`, and for an hourly interval reading it freezes the chore: the clock is reset to that time before the hours are added, so from the second completion it reschedules to where it already is. Both cases are refused at build time; set the hour through `due_date` instead, which every type honors.
 - **Labels are read-only.** `/api/v1/labels` requires JWT session auth, which an API token cannot provide, so this server cannot list all labels that exist in the circle. Labels already attached to a chore are readable and filterable through `list_chores` and `get_chore`. A label attached to nothing is invisible to this server.
 - **Deleting a chore is creator-only.** Donetick's delete handler compares the chore's `CreatedBy` field directly and never checks edit permission, so a circle admin cannot delete a chore they did not create, even though they can edit one.
@@ -183,4 +190,16 @@ These were verified against a live Donetick instance, not assumed from its sourc
 
 ## Development
 
-See `CLAUDE.md` for the operating rules this codebase follows, the full command list, and a pointer to the design spec.
+See `CLAUDE.md` for the operating rules this codebase follows, the full command list, and a pointer to the design spec. `docs/architecture.html` walks the same ground in diagrams; its Mermaid blocks need a renderer, so GitHub's source view is not the way to read it.
+
+```bash
+bun run typecheck    # tsc --noEmit
+bun test --isolate   # the unit suite: no network, no wall clock, no sleeps
+bun run verify:live  # the wire contract, against a disposable container
+```
+
+## License
+
+Apache-2.0. See `LICENSE`.
+
+This project is not affiliated with or endorsed by Donetick.

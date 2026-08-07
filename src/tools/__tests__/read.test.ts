@@ -49,6 +49,17 @@ describe("listChores", () => {
     expect(all.find((c) => c.id === 4)?.due_in).toBe("no due date");
   });
 
+  test("a blank search is refused rather than matching every chore", () => {
+    // "x".includes("") is true, so a blank search read as an unfiltered list rather
+    // than the no-op it is. resolveOne rejects a blank query for the same reason.
+    expect(() => listChores({ scope: "all", search: "" }, ctx)).toThrow(/blank/);
+    expect(() => listChores({ scope: "all", search: "   " }, ctx)).toThrow(/blank/);
+  });
+
+  test("an omitted search still lists everything", () => {
+    expect(listChores({ scope: "all" }, ctx).chores.length).toBe(3);
+  });
+
   test("all scope returns everything", () => {
     expect(listChores({ scope: "all" }, ctx).chores.length).toBe(3);
   });

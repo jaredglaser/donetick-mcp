@@ -60,6 +60,45 @@ describe("tool annotations", () => {
     expect(tools.find((t) => t.name === "edit_chore")!.annotations.destructiveHint).toBe(true);
   });
 
+  test("every write states destructiveHint rather than omitting it", () => {
+    // The spec defaults destructiveHint to true for anything not read-only, so an
+    // omitted hint is not "unknown", it is "destructive". Leaving it off made every
+    // write here reach a client indistinguishable from delete_chore, which is the
+    // distinction these annotations exist to draw. The earlier version of this block
+    // asserted true on three tools and undefined on the reads, and never that a
+    // non-destructive write declares false, so it passed either way.
+    const writes = tools.filter((t) => t.annotations.readOnlyHint !== true);
+    const unstated = writes.filter((t) => typeof t.annotations.destructiveHint !== "boolean");
+    expect(unstated.map((t) => t.name)).toEqual([]);
+  });
+
+  test("the non-destructive writes are the ones that only add or set", () => {
+    const safe = tools
+      .filter((t) => t.annotations.readOnlyHint !== true && t.annotations.destructiveHint === false)
+      .map((t) => t.name)
+      .sort();
+    expect(safe).toEqual(
+      [
+        "approve_chore",
+        "archive_chore",
+        "create_chore",
+        "nudge_chore",
+        "reassign_chore",
+        "reject_chore",
+        "reschedule_chore",
+        "set_priority",
+        "set_subtask_completed",
+        "unarchive_chore",
+      ].sort(),
+    );
+  });
+
+  test("undo_chore is destructive, since it removes the completion history row", () => {
+    // The case this repo makes for archive_chore over delete_chore is that history is
+    // what is at stake, and undo is the other tool that removes some.
+    expect(tools.find((t) => t.name === "undo_chore")!.annotations.destructiveHint).toBe(true);
+  });
+
   test("every tool is closed-world, since they all talk to one known instance", () => {
     expect(tools.every((t) => t.annotations.openWorldHint === false)).toBe(true);
   });
@@ -362,6 +401,28 @@ describe("list_activity", () => {
     const result = await tool.handler({ days: 500 });
     expect(result.isError).toBeUndefined();
     expect(requestedPath).toMatch(/limit=90/);
+  });
+
+  test("a fractional day count never floors to a limit of zero", async () => {
+    // The lower-bound check ran before the floor, so anything in (0, 1) passed the
+    // `<= 0` guard and then floored to 0, asking Donetick for limit=0. The zod cap
+    // is the MCP transport rather than this function's only caller, which is why the
+    // clamp is asserted here rather than left to the schema.
+    let requestedPath = "";
+    const fakeService = {
+      ...service,
+      rawGet: async (path: string) => {
+        requestedPath = path;
+        return [];
+      },
+    };
+    const tools = buildToolDefinitions({ ...deps, service: fakeService as never });
+    const tool = tools.find((t) => t.name === "list_activity")!;
+
+    for (const days of [0.5, 0.001, 1.9]) {
+      await tool.handler({ days });
+      expect(requestedPath).toMatch(/limit=1(&|$)/);
+    }
   });
 });
 

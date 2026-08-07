@@ -62,7 +62,12 @@ export async function completeChore(input: CompleteInput, ctx: ToolContext): Pro
   const body: Record<string, unknown> = {};
   let isPastCompletion = false;
 
-  if (typeof input.completed_at === "string") {
+  // Trimmed-empty is dropped rather than parsed, the way note is below. Making an
+  // empty due_date a parse error was right for the tools that write a due date, and
+  // it reached here too: completed_at is an optional string, so "" passed schema
+  // validation and then failed the whole completion with due-date format help that
+  // does not mention completions at all. Absent means "use Donetick's own clock".
+  if (typeof input.completed_at === "string" && input.completed_at.trim() !== "") {
     const parsed = parseDueDate(input.completed_at, ctx.now(), ctx.timezone);
     if (parsed !== null) {
       const nowMs = ctx.now().getTime();

@@ -102,6 +102,29 @@ describe("completeChore", () => {
     expect(body).not.toHaveProperty("completedDate");
   });
 
+  test("an empty completed_at means now, not a due-date parse error", async () => {
+    // completed_at is an optional string, so "" passes schema validation. Making an
+    // empty due date a parse error was right for the tools that write one, and it
+    // reached here too: the whole completion failed with format help that does not
+    // mention completions. Absent means Donetick uses its own clock.
+    const fake = fakeService({ chores: [listRow] });
+
+    const result = await completeChore({ chore_id: 7, completed_at: "" }, ctxFor(fake.service));
+
+    expect(result.completed).toBe(true);
+    const body = fake.calls.find((c) => c.method === "POST")!.body as Record<string, unknown>;
+    expect(body).not.toHaveProperty("completedTime");
+  });
+
+  test("a whitespace-only completed_at is treated the same way", async () => {
+    const fake = fakeService({ chores: [listRow] });
+
+    await completeChore({ chore_id: 7, completed_at: "   " }, ctxFor(fake.service));
+
+    const body = fake.calls.find((c) => c.method === "POST")!.body as Record<string, unknown>;
+    expect(body).not.toHaveProperty("completedTime");
+  });
+
   test("rejects a future completed_at before making any request", async () => {
     const fake = fakeService({ chores: [listRow] });
 

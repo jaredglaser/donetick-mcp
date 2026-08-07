@@ -408,6 +408,18 @@ function assertSchedulableFrequency(existing: RawChore): void {
   // Donetick's own validateFrequencyLogic is the authoritative list of these, and it
   // is dead code: its registration is commented out, so the binding accepts every
   // shape below and the failure surfaces later, from the scheduler, on completion.
+  if (existing.frequencyType === "interval" && typeof existing.frequency === "number" && existing.frequency <= 0) {
+    // Accepted by Donetick and not schedulable in any useful sense: measured live, a
+    // count of 0 completes without moving the due date, so the chore is frozen, and a
+    // negative count moves it backwards. summarizeFrequency calls both broken, so
+    // refusing the carry-forward is what makes the two sides agree.
+    blocked(
+      `it is an interval of ${existing.frequency} ${String(meta.unit ?? "days")}`,
+      'Pass frequency: {type: "interval", every: N, unit: "days"} with a positive count through ' +
+        "edit_chore to repair it.",
+    );
+  }
+
   if (existing.frequencyType === "interval" && typeof meta.unit !== "string") {
     // Not a 500 like the others. scheduleNextDueDate dereferences Unit without a nil
     // check, and the router is built with gin.New() and no Recovery, so the panic
@@ -439,13 +451,19 @@ function assertSchedulableFrequency(existing: RawChore): void {
 
   if (existing.frequencyType !== "day_of_the_month") return;
 
-  const hasWeekdays = nonEmptyArray(meta.days);
-  if (hasWeekdays || !nonEmptyArray(meta.months)) {
+  // Months only. This used to refuse a stored `days` as well, on the belief that a
+  // day_of_the_month row carrying weekday names is the never-completable shape this
+  // server built before 7d0940a. Measured against a live v0.1.76 container: the
+  // scheduler ignores `days` for this type entirely, and such a chore completes and
+  // reschedules correctly as long as months is present. The refusal blocked every
+  // edit and reassign on a working chore, while summarizeFrequency on the same row
+  // described it as fine. The read side was the one that was right.
+  if (!nonEmptyArray(meta.months)) {
     blocked(
-      `it is day_of_the_month ${hasWeekdays ? "carrying weekday names" : "with no months"}`,
-      'This server used to build "the first saturday of every month" that way. Pass frequency: ' +
-        '{type: "days_of_the_week", days: ["saturday"], week_pattern: "week_of_month", occurrences: [1]} ' +
-        "to repair it through edit_chore, or day_of_the_month with day_of_month and months.",
+      "it is day_of_the_month with no months",
+      'Pass frequency: {type: "day_of_the_month", day_of_month: N, months: [...]} through edit_chore ' +
+        'to repair it, or {type: "days_of_the_week", days: ["saturday"], week_pattern: "week_of_month", ' +
+        "occurrences: [1]} if what you meant was the first saturday of every month.",
     );
   }
 

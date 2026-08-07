@@ -40,14 +40,26 @@ export function summarizeFrequency(chore: RawChore): string {
       // the first of the quarter. Rendering only week_of_month described those as
       // "every saturday"; rendering every_week too describes a weekly chore as
       // monthly, which is the same error inverted.
-      if (
-        meta.occurrences &&
-        meta.occurrences.length > 0 &&
-        meta.weekPattern &&
-        meta.weekPattern !== "every_week"
-      ) {
+      const picksAnOccurrence =
+        meta.weekPattern === "week_of_month" || meta.weekPattern === "week_of_quarter";
+      // Either field satisfies it, matching both Donetick's getOccurrences and
+      // assertSchedulableFrequency. Reading only `occurrences` described a chore
+      // stored with the deprecated `weekNumbers` as weekly when it is monthly, and
+      // said nothing at all about the shape that carries neither, which the write
+      // side refuses and the scheduler genuinely cannot advance.
+      const occurrences =
+        meta.occurrences && meta.occurrences.length > 0
+          ? meta.occurrences
+          : meta.weekNumbers && meta.weekNumbers.length > 0
+            ? meta.weekNumbers
+            : undefined;
+
+      if (picksAnOccurrence && occurrences === undefined) {
+        return `broken: a ${meta.weekPattern} pattern with no occurrences`;
+      }
+      if (picksAnOccurrence && occurrences !== undefined) {
         const period = meta.weekPattern === "week_of_quarter" ? "quarter" : "month";
-        return `the ${meta.occurrences.map(ordinal).join(", ")} ${days.join("/")} of every ${period}`;
+        return `the ${occurrences.map(ordinal).join(", ")} ${days.join("/")} of every ${period}`;
       }
       return `every ${days.join(", ")}`;
     }

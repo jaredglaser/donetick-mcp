@@ -909,6 +909,46 @@ describe("a stored recurrence Donetick cannot schedule", () => {
   // shaped this way in the web UI reaches the carry-forward branch through any
   // unrelated edit.
 
+  test("day_of_the_month carrying weekday names still edits, since Donetick ignores them", () => {
+    // Measured against a live v0.1.76 container: the scheduler ignores `days` for
+    // this type, and the chore completes and reschedules on the 15th regardless.
+    // This used to be refused, which blocked every edit and reassign on a working
+    // chore while summarizeFrequency described the same row as fine.
+    const weekdayNames = {
+      ...existing,
+      frequencyType: "day_of_the_month",
+      frequency: 15,
+      frequencyMetadata: { days: ["saturday"], months: ["october"], timezone: tz },
+    } as unknown as RawChore;
+    expect(() => mergeEditRequest(weekdayNames, { name: "Renamed" }, ctx())).not.toThrow();
+  });
+
+  test("an interval with a count of 0 is refused, since it completes without advancing", () => {
+    // Accepted by Donetick and frozen: measured live, completing it leaves the due
+    // date where it is. A negative count moves the due date backwards. The read side
+    // calls both broken, so the write side has to agree or nothing prompts a repair.
+    const frozen = {
+      ...existing,
+      frequencyType: "interval",
+      frequency: 0,
+      frequencyMetadata: { unit: "days", timezone: tz },
+    } as unknown as RawChore;
+    expect(() => mergeEditRequest(frozen, { name: "Renamed" }, ctx())).toThrow(/cannot schedule/);
+    expect(() =>
+      mergeEditRequest(frozen, { frequency: { type: "interval", every: 3, unit: "days" } }, ctx()),
+    ).not.toThrow();
+  });
+
+  test("an interval with a negative count is refused at the other side of the bound", () => {
+    const backwards = {
+      ...existing,
+      frequencyType: "interval",
+      frequency: -3,
+      frequencyMetadata: { unit: "days", timezone: tz },
+    } as unknown as RawChore;
+    expect(() => mergeEditRequest(backwards, { name: "Renamed" }, ctx())).toThrow(/cannot schedule/);
+  });
+
   test("an interval with no unit is refused, since it crashes rather than fails", () => {
     const noUnit = {
       ...existing,

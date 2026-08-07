@@ -82,14 +82,24 @@ export interface ToolAnnotations {
 
 const READ_ONLY: ToolAnnotations = { readOnlyHint: true, openWorldHint: false };
 
-/** Same call, same end state, so a client may retry one that timed out. */
-const IDEMPOTENT: ToolAnnotations = { idempotentHint: true, openWorldHint: false };
+/**
+ * Same call, same end state, so a client may retry one that timed out.
+ *
+ * destructiveHint is stated rather than omitted: the spec defaults it to true for
+ * anything not read-only, so leaving it out made every write here reach a client as
+ * indistinguishable from delete_chore, which is the distinction these exist to draw.
+ */
+const IDEMPOTENT: ToolAnnotations = {
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+};
 
 /** Removes or overwrites something the caller cannot get back from here. */
 const DESTRUCTIVE: ToolAnnotations = { destructiveHint: true, openWorldHint: false };
 
 /** Changes state, but only ever adds to it. */
-const ADDITIVE: ToolAnnotations = { openWorldHint: false };
+const ADDITIVE: ToolAnnotations = { destructiveHint: false, openWorldHint: false };
 
 
 function ok(payload: unknown): ToolResult {
@@ -796,7 +806,7 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
     },
     {
       name: "undo_chore",
-      annotations: ADDITIVE,
+      annotations: DESTRUCTIVE,
       description:
         "Undo the most recent completion of a chore. Expect this to fail: on the Donetick version this " +
         "server was verified against, the endpoint answers \"no recent action found\" immediately after " +

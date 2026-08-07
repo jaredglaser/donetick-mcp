@@ -22,6 +22,8 @@ export interface RawFrequencyMetadata {
   timezone?: string | null;
   weekPattern?: string | null;
   occurrences?: number[] | null;
+  /** Deprecated in Donetick in favour of occurrences, but its getOccurrences still reads either. */
+  weekNumbers?: number[] | null;
 }
 
 /** The list-row shape. Detail-only fields are optional so a merged object types cleanly. */
