@@ -143,6 +143,66 @@ describe("TtlCache", () => {
     expect(calls).toBe(2);
   });
 
+  test("a read issued after invalidate is not served a load that started before it", async () => {
+    // The test above awaits the first get before reading again, so inFlight has
+    // already been cleared and the window this covers never opens there. Here the
+    // second read happens while the first load is still running, which is the real
+    // sequence: a write lands, invalidates, and re-reads to get its own effect back.
+    let calls = 0;
+    let resolveFirst!: (value: string[]) => void;
+    const firstLoad = new Promise<string[]>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const cache = new TtlCache(async () => {
+      calls += 1;
+      if (calls === 1) return firstLoad;
+      return ["second"];
+    }, 10_000, () => 1_000);
+
+    const firstGet = cache.get();
+    cache.invalidate();
+    const afterInvalidate = cache.get();
+    resolveFirst(["first"]);
+
+    expect(await firstGet).toEqual(["first"]);
+    expect(await afterInvalidate).toEqual(["second"]);
+    expect(calls).toBe(2);
+  });
+
+  test("a load abandoned by invalidate does not clear a newer load's slot when it settles", async () => {
+    // The abandoned load's finally still runs. Clearing inFlight unconditionally
+    // there would orphan the load that replaced it, costing an extra fetch on the
+    // next read and, worse, making the cache look idle while a load is running.
+    let calls = 0;
+    const resolvers: Array<(value: string[]) => void> = [];
+    const cache = new TtlCache(
+      () =>
+        new Promise<string[]>((resolve) => {
+          calls += 1;
+          resolvers.push(resolve);
+        }),
+      10_000,
+      () => 1_000,
+    );
+
+    const first = cache.get();
+    cache.invalidate();
+    const second = cache.get();
+    expect(calls).toBe(2);
+
+    resolvers[0]!(["first"]);
+    await first;
+
+    // The second load still owns the slot, so a read now joins it rather than
+    // starting a third.
+    const third = cache.get();
+    expect(calls).toBe(2);
+
+    resolvers[1]!(["second"]);
+    expect(await second).toEqual(["second"]);
+    expect(await third).toEqual(["second"]);
+  });
+
   test("a loader returning undefined is treated as a cold cache on every read", async () => {
     let calls = 0;
     const cache = new TtlCache<string | undefined>(async () => {

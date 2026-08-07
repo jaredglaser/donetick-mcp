@@ -57,12 +57,10 @@ export function listChores(args: ListArgs, ctx: ListContext): ListResult {
     return bucket(due, scope, ctx.now, zoneFor(chore, ctx.timezone), args.days ?? 7);
   });
 
-  // An unmatched filter used to yield zero rows, which reads as "you have nothing
-  // in the Garage project" when the truth is "there is no Garage project". The
-  // caller cannot tell those apart from an empty list, and the same names already
-  // throw with suggestions on the write path, so the two sides disagreed about the
-  // same string. Returning nothing is the right safety property; saying why is
-  // what makes the answer true.
+  // An unmatched filter used to yield zero rows, which reads as "you have nothing in
+  // the Garage project" when the truth is "there is no Garage project". The caller
+  // cannot tell those apart from an empty list, and the write path already throws
+  // with suggestions on the same string.
   if (args.project !== undefined) {
     const wanted = normalizeName(args.project);
     const project = ctx.projects.find((p) => normalizeName(p.name) === wanted);

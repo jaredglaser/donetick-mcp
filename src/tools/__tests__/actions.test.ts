@@ -236,6 +236,33 @@ describe("completeChore", () => {
     expect(body.completedTime).toBe("2026-08-06T13:00:00.000Z");
   });
 
+  test("an explicit future time later today is refused, not quietly rewritten to now", async () => {
+    // The clamp above exists for a bare day, whose 09:00 the caller never asked for.
+    // Keyed on the calendar day alone it also swallowed a stated time: "I did it at
+    // 20:00 tonight", asked at noon, recorded noon and answered plain success. The
+    // schema promises a future time is rejected, so this is the case that has to
+    // stay on the refusing side of the line.
+    const noon = new Date("2026-08-06T16:00:00Z"); // 12:00 America/New_York
+    const fake = fakeService({ chores: [listRow] });
+    const ctx = { service: fake.service as never, now: () => noon, timezone: tz };
+
+    await expect(
+      completeChore({ chore_id: 7, completed_at: "2026-08-06T20:00:00-04:00" }, ctx),
+    ).rejects.toThrow(/future/i);
+    expect(fake.calls.some((c) => c.method === "POST")).toBe(false);
+  });
+
+  test("an explicit earlier time today is kept exactly, not clamped to now", async () => {
+    const noon = new Date("2026-08-06T16:00:00Z"); // 12:00 America/New_York
+    const fake = fakeService({ chores: [listRow] });
+    const ctx = { service: fake.service as never, now: () => noon, timezone: tz };
+
+    await completeChore({ chore_id: 7, completed_at: "2026-08-06T08:00:00-04:00" }, ctx);
+
+    const body = fake.calls.find((c) => c.method === "POST")!.body as Record<string, unknown>;
+    expect(body.completedTime).toBe("2026-08-06T12:00:00.000Z");
+  });
+
   test("a future day is still refused, so the clamp does not swallow a real mistake", async () => {
     const fake = fakeService({ chores: [listRow] });
 

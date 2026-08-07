@@ -70,10 +70,10 @@ describe("module boundaries", () => {
   });
 
   test("no doc comment is orphaned from what it describes", async () => {
-    // Five review passes have found a JSDoc block separated from its function by a
-    // newer block inserted above it, on three different functions. Each time the
-    // fix was another edit, and each time it happened again, because prose has no
-    // compiler. This is the compiler.
+    // Review passes keep finding a JSDoc block separated from its function by a newer
+    // block inserted above it, on several different functions. Each time the fix was
+    // another edit, and each time it happened again, because prose has no compiler.
+    // This is the compiler.
     const orphans: string[] = [];
     for (const { path, text } of await readAll()) {
       const lines = text.split("\n");

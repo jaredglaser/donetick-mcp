@@ -25,8 +25,7 @@ export interface SetSubtaskOutcome {
  * Always sends the PUT even when the subtask is already in the requested state.
  * The endpoint is idempotent on the server side, subtask state resets every cycle
  * on a recurring chore, and short-circuiting here would need a second source of
- * truth for "current state" that could drift from what the caller actually wants
- * written, for no real cost saved.
+ * truth for "current state" that could drift from what the caller wants written.
  */
 export async function setSubtaskCompleted(
   input: SetSubtaskInput,

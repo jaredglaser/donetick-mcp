@@ -47,11 +47,10 @@ export interface ToolResult {
   isError?: boolean;
   /**
    * Present when the tool needs the caller's answer before it can proceed
-   * (protocol revision 2026-07-28's multi-round-trip flow). content still
-   * carries a text fallback of the same message, so a client on an older
-   * protocol era, or a caller that ignores the sentinel, still sees the
-   * question rather than a silently completed action. src/index.ts is the
-   * only place this field is read; everywhere else it rides along unused.
+   * (protocol revision 2026-07-28's multi-round-trip flow). content still carries a
+   * text fallback of the same message, so a client on an older protocol era, or one
+   * that ignores the sentinel, sees the question rather than a silently completed
+   * action. Read only in src/index.ts.
    */
   confirmRequired?: { key: string; message: string };
 }
@@ -299,18 +298,10 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
       // chore and false for every flag.
       const anywhere = (await service.allChores()).find((chore) => chore.id === args.chore_id);
       if (anywhere) return anywhere;
-      // Not in the cached list (e.g. archived, or the cache is between refreshes).
-      // A failure here means the id does not exist, but the details endpoint answers
-      // that with a 500, which errors.ts reads as an instance fault. Say what is
-      // actually true instead, or the user goes looking for an outage.
-      // Reached only when the id is in neither list, so this is the not-found probe
-      // rather than a data source. Its return value is a /details view and must not
-      // be projected as though it were a list row.
       // /details is the not-found probe here, never a data source: it omits every
       // list-only field, and projectChore reports a default for each rather than
       // saying it does not know. A successful read means the chore exists but is
-      // invisible to both lists, which is a state this server cannot describe
-      // truthfully, so it reports that rather than inventing one.
+      // invisible to both lists, which this server cannot describe truthfully.
       try {
         await service.choreDetails(args.chore_id);
       } catch (error) {

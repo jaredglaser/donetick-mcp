@@ -863,6 +863,109 @@ describe("a stored recurrence Donetick cannot schedule", () => {
     } as unknown as RawChore;
     expect(() => mergeEditRequest(fine, { name: "Renamed" }, ctx())).not.toThrow();
   });
+
+  // The three shapes below come from Donetick's own validateFrequencyLogic, which is
+  // dead code: its registration is commented out, so the binding accepts all of them
+  // and the failure only appears later, from the scheduler, on completion. A chore
+  // shaped this way in the web UI reaches the carry-forward branch through any
+  // unrelated edit.
+
+  test("an interval with no unit is refused, since it crashes rather than fails", () => {
+    const noUnit = {
+      ...existing,
+      frequencyType: "interval",
+      frequency: 3,
+      frequencyMetadata: { timezone: tz },
+    } as unknown as RawChore;
+    expect(() => mergeEditRequest(noUnit, { name: "Renamed" }, ctx())).toThrow(/cannot schedule/);
+    expect(() =>
+      mergeEditRequest(noUnit, { frequency: { type: "interval", every: 3, unit: "days" } }, ctx()),
+    ).not.toThrow();
+  });
+
+  test("days_of_the_week with no days is refused", () => {
+    const noDays = {
+      ...existing,
+      frequencyType: "days_of_the_week",
+      frequencyMetadata: { days: [], timezone: tz },
+    } as unknown as RawChore;
+    expect(() => mergeEditRequest(noDays, { name: "Renamed" }, ctx())).toThrow(/cannot schedule/);
+    expect(() =>
+      mergeEditRequest(
+        noDays,
+        { frequency: { type: "days_of_the_week", days: ["monday"] } },
+        ctx(),
+      ),
+    ).not.toThrow();
+  });
+
+  test("a week_of_month pattern with no occurrences is refused", () => {
+    const noOccurrences = {
+      ...existing,
+      frequencyType: "days_of_the_week",
+      frequencyMetadata: { days: ["saturday"], weekPattern: "week_of_month", timezone: tz },
+    } as unknown as RawChore;
+    expect(() => mergeEditRequest(noOccurrences, { name: "Renamed" }, ctx())).toThrow(
+      /cannot schedule/,
+    );
+  });
+
+  test("weekNumbers alone satisfies the occurrence requirement, as getOccurrences reads either", () => {
+    const deprecatedField = {
+      ...existing,
+      frequencyType: "days_of_the_week",
+      frequencyMetadata: {
+        days: ["saturday"],
+        weekPattern: "week_of_month",
+        weekNumbers: [1],
+        timezone: tz,
+      },
+    } as unknown as RawChore;
+    expect(() => mergeEditRequest(deprecatedField, { name: "Renamed" }, ctx())).not.toThrow();
+  });
+
+  test("every_week needs no occurrences, so it is not caught by the pattern check", () => {
+    const everyWeek = {
+      ...existing,
+      frequencyType: "days_of_the_week",
+      frequencyMetadata: { days: ["saturday"], weekPattern: "every_week", timezone: tz },
+    } as unknown as RawChore;
+    expect(() => mergeEditRequest(everyWeek, { name: "Renamed" }, ctx())).not.toThrow();
+  });
+
+  test("day_of_the_month with a day of 0 is refused, since 0 is not nullish and carries forward", () => {
+    // The day lives in `frequency`, and the carry-forward sends `existing.frequency ?? 1`.
+    // 0 survives that, and the scheduler refuses anything outside 1 to 31.
+    const zeroDay = {
+      ...existing,
+      frequencyType: "day_of_the_month",
+      frequency: 0,
+      frequencyMetadata: { months: ["october"], timezone: tz },
+    } as unknown as RawChore;
+    expect(() => mergeEditRequest(zeroDay, { name: "Renamed" }, ctx())).toThrow(/cannot schedule/);
+  });
+
+  test("day_of_the_month with a day of 32 is refused at the other bound", () => {
+    const tooHigh = {
+      ...existing,
+      frequencyType: "day_of_the_month",
+      frequency: 32,
+      frequencyMetadata: { months: ["october"], timezone: tz },
+    } as unknown as RawChore;
+    expect(() => mergeEditRequest(tooHigh, { name: "Renamed" }, ctx())).toThrow(/cannot schedule/);
+  });
+
+  test("day 1 and day 31 are both allowed, so the bounds are inclusive", () => {
+    for (const frequency of [1, 31]) {
+      const row = {
+        ...existing,
+        frequencyType: "day_of_the_month",
+        frequency,
+        frequencyMetadata: { months: ["october"], timezone: tz },
+      } as unknown as RawChore;
+      expect(() => mergeEditRequest(row, { name: "Renamed" }, ctx())).not.toThrow();
+    }
+  });
 });
 
 describe("settings an unrelated edit must not change", () => {

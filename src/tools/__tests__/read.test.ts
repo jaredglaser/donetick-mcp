@@ -201,11 +201,9 @@ describe("listChores additional coverage", () => {
   });
 
   test("sort: 'name' with an emoji-prefixed name: localeCompare ranks the emoji ahead of letters", () => {
-    // Documenting actual behavior rather than asserting it is ideal: localeCompare
-    // treats the leading emoji as sorting before ASCII letters here, so an
-    // emoji-prefixed chore name floats to the top rather than sorting by the first
-    // letter of the visible word. Accepted as adequate for a chore-name sort: it is
-    // stable and locale-aware, just not "ignore leading emoji" smart.
+    // Pinned as observed, not as desired: localeCompare sorts a leading emoji ahead of
+    // ASCII letters rather than by the first letter of the visible word. Accepted for
+    // a chore-name sort, which needs to be stable and locale-aware, not smart.
     const named: RawChore[] = [
       { id: 20, name: "banana", nextDueDate: null, assignedTo: null, priority: 0, status: 0, frequencyType: "once", createdBy: 1 },
       { id: 21, name: "Apple", nextDueDate: null, assignedTo: null, priority: 0, status: 0, frequencyType: "once", createdBy: 1 },

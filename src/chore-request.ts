@@ -296,8 +296,8 @@ export function requireDueDateFor(
 
 /**
  * A due date is required whenever isRolling is set; Donetick binds them together.
- * Applied identically on create and merge so a rolling chore never ends up with a
- * null nextDueDate regardless of which path produced isRolling: true.
+ * Applied on both create and merge, so no path can produce isRolling with a null
+ * nextDueDate.
  */
 function ensureDueDateForRolling(dueDate: Date | null, isRolling: boolean, ctx: BuildContext): Date | null {
   if (isRolling && dueDate === null) {
@@ -403,20 +403,69 @@ function assertSchedulableFrequency(existing: RawChore): void {
     );
   }
 
-  if (existing.frequencyType !== "day_of_the_month") return;
   const meta = (existing.frequencyMetadata ?? {}) as Record<string, unknown>;
-  const hasWeekdays = Array.isArray(meta.days) && meta.days.length > 0;
-  const months = meta.months;
-  const hasMonths = Array.isArray(months) && months.length > 0;
-  if (!hasWeekdays && hasMonths) return;
+  const nonEmptyArray = (value: unknown): boolean => Array.isArray(value) && value.length > 0;
+  const blocked = (detail: string, repair: string): never => {
+    throw new Error(
+      `"${existing.name}" has a recurrence Donetick cannot schedule: ${detail}, so every completion fails. ` +
+        `${repair} Every tool that rewrites the whole chore is blocked until then, reassign_chore included.`,
+    );
+  };
 
-  throw new Error(
-    `"${existing.name}" has a recurrence Donetick cannot schedule: it is day_of_the_month ${
-      hasWeekdays ? "carrying weekday names" : "with no months"
-    }, so every completion fails. This server used to build "the first saturday of every month" that ` +
-      'way. Pass frequency: {type: "days_of_the_week", days: ["saturday"], week_pattern: ' +
-      '"week_of_month", occurrences: [1]} to repair it through edit_chore, or day_of_the_month with day_of_month and months. Every tool that rewrites the whole chore is blocked until then, reassign_chore included.',
-  );
+  // Donetick's own validateFrequencyLogic is the authoritative list of these, and it
+  // is dead code: its registration is commented out, so the binding accepts every
+  // shape below and the failure surfaces later, from the scheduler, on completion.
+  if (existing.frequencyType === "interval" && typeof meta.unit !== "string") {
+    // Not a 500 like the others. scheduleNextDueDate dereferences Unit without a nil
+    // check, and the router is built with gin.New() and no Recovery, so the panic
+    // drops the connection and this arrives as a 502.
+    blocked(
+      "it is an interval with no unit, which crashes the request rather than failing it",
+      'Pass frequency: {type: "interval", every: N, unit: "days"} through edit_chore to repair it.',
+    );
+  }
+
+  if (existing.frequencyType === "days_of_the_week") {
+    if (!nonEmptyArray(meta.days)) {
+      blocked(
+        "it is days_of_the_week with no days",
+        'Pass frequency: {type: "days_of_the_week", days: ["monday"]} through edit_chore to repair it.',
+      );
+    }
+    const pattern = meta.weekPattern;
+    if (pattern === "week_of_month" || pattern === "week_of_quarter") {
+      // getOccurrences reads either field, so either one being present is enough.
+      if (!nonEmptyArray(meta.occurrences) && !nonEmptyArray(meta.weekNumbers)) {
+        blocked(
+          `it is a ${pattern} pattern with no occurrences`,
+          `Pass frequency: {type: "days_of_the_week", days: ["saturday"], week_pattern: "${pattern}", occurrences: [1]} through edit_chore to repair it.`,
+        );
+      }
+    }
+  }
+
+  if (existing.frequencyType !== "day_of_the_month") return;
+
+  const hasWeekdays = nonEmptyArray(meta.days);
+  if (hasWeekdays || !nonEmptyArray(meta.months)) {
+    blocked(
+      `it is day_of_the_month ${hasWeekdays ? "carrying weekday names" : "with no months"}`,
+      'This server used to build "the first saturday of every month" that way. Pass frequency: ' +
+        '{type: "days_of_the_week", days: ["saturday"], week_pattern: "week_of_month", occurrences: [1]} ' +
+        "to repair it through edit_chore, or day_of_the_month with day_of_month and months.",
+    );
+  }
+
+  // The day itself lives in `frequency`, not the metadata. Checked against the
+  // scheduler's own bounds rather than against nullishness: 0 is not nullish, so a
+  // chore stored with frequency 0 is carried forward verbatim and refused there.
+  const day = existing.frequency;
+  if (typeof day !== "number" || day <= 0 || day > 31) {
+    blocked(
+      `it is day_of_the_month with a day of ${String(day)}, outside the 1 to 31 Donetick accepts`,
+      "Pass frequency: {type: \"day_of_the_month\", day_of_month: N, months: [...]} with a day in range through edit_chore to repair it.",
+    );
+  }
 }
 
 /**

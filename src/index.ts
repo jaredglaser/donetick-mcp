@@ -12,14 +12,11 @@ import { createProbeGate } from "@/probe";
 /**
  * Compile-time bridge between the SDK's response view and the restated one in
  * confirm.ts. That restatement exists so the confirmation decision can be tested
- * without importing the SDK, but it types `kind` as string, which means a rename
- * in the SDK would leave both sides compiling while decideConfirmation silently
- * stopped recognizing an unanswered request. Every delete would then report that
- * nothing was deleted without ever asking. This file is the one place allowed to
- * see both types, so the check belongs here.
- *
- * The second line is the load-bearing one: it fails if "missing" ever leaves the
- * SDK's kind union, which is the rename that would do the damage.
+ * without importing the SDK, but it types `kind` as string, so an SDK rename would
+ * leave both sides compiling while decideConfirmation stopped recognizing an
+ * unanswered request, and every delete would report that nothing was deleted
+ * without ever asking. _missingStaysAKind is the one that catches that rename.
+ * This file is the only place allowed to see both types.
  */
 type SdkResponseView = ReturnType<typeof inputResponse>;
 const _viewStaysAssignable: ConfirmationResponseView = undefined as unknown as SdkResponseView;

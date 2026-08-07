@@ -63,6 +63,36 @@ describe("mapHttpError", () => {
     expect(err.invalidatesCache).toBe(true);
   });
 
+  test("500 on approve names the recurrence, since approve is the third scheduling write", () => {
+    // ApproveChore calls scheduleNextDueDate exactly as complete and skip do, so an
+    // unschedulable recurrence 500s here too. It reaches approve by the only route it
+    // has: complete_chore on an approval-gated chore reports pending, and approve is
+    // the second half. Left out of SCHEDULING_WRITE_PATHS it fell through to the
+    // id-scoped message and reported a chore still visible in list_chores as gone.
+    //
+    // Asserted on the recurrence half of the sentence: both messages contain "no
+    // longer exists", so matching that alone cannot tell them apart.
+    const err = mapHttpError({
+      status: 500,
+      body: JSON.stringify({ error: "Error scheduling next due date" }),
+      path: "/api/v1/chores/7/approve",
+      method: "POST",
+    });
+    expect(err.message).toMatch(/recurrence/i);
+  });
+
+  test("500 on reject keeps the id-scoped message, since reject never schedules", () => {
+    // ChoreRepository.RejectChore takes no due date and never calls
+    // scheduleNextDueDate, so a recurrence explanation there would be a guess.
+    const err = mapHttpError({
+      status: 500,
+      body: JSON.stringify({ error: "Failed to retrieve chore" }),
+      path: "/api/v1/chores/7/reject",
+      method: "POST",
+    });
+    expect(err.message).not.toMatch(/recurrence/i);
+  });
+
   test("500 on a read is an instance error, not a missing chore", () => {
     const err = mapHttpError({
       status: 500,

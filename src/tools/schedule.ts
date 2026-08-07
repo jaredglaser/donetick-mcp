@@ -60,11 +60,6 @@ function loadActiveChore(chore_id: number | undefined, ctx: ToolContext): Promis
   return loadChoreById(chore_id, ctx);
 }
 
-/**
- * The default chore list excludes archived chores, so a chore being unarchived is by
- * definition absent from it. Resolving against the active cache here would make every
- * unarchiveChore call fail with "not found" on exactly the chore it is meant to act on.
- */
 function loadArchivedChore(chore_id: number | undefined, ctx: ToolContext): Promise<RawChore> {
   return loadArchivedChoreById(chore_id, ctx);
 }

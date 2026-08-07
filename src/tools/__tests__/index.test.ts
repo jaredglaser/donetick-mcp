@@ -58,7 +58,7 @@ describe("buildToolDefinitions", () => {
   });
 });
 
-// Additional coverage below. The 4 tests above are a fixed contract.
+// Additional coverage below. The describe block above is a fixed contract.
 
 const member1 = {
   userId: 1,

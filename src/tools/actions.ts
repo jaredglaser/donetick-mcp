@@ -1,4 +1,4 @@
-import { parseDueDate } from "@/dates";
+import { carriesTimeOfDay, parseDueDate } from "@/dates";
 import { zonedYmd } from "@/time";
 import { endpoints } from "@/endpoints";
 import { loadChoreById } from "@/tools/chore-lookup";
@@ -72,8 +72,14 @@ export async function completeChore(input: CompleteInput, ctx: ToolContext): Pro
       // something the user just did. Same calendar day means now, since that is
       // what a bare "today" asks for; any other day keeps its resolved instant so
       // "yesterday" still records yesterday.
+      //
+      // Only when the caller named no time. Keyed on the calendar day alone this
+      // also swallowed an explicit timestamp: "I did it at 8pm tonight", asked at
+      // noon, recorded noon and reported plain success, which is the opposite of
+      // the refusal the schema promises.
       const sameDay = isSameCalendarDay(parsed, ctx.now(), ctx.timezone);
-      const effective = sameDay && parsed.getTime() > nowMs ? ctx.now() : parsed;
+      const defaultedHour = !carriesTimeOfDay(input.completed_at);
+      const effective = defaultedHour && sameDay && parsed.getTime() > nowMs ? ctx.now() : parsed;
 
       if (effective.getTime() > nowMs) {
         throw new Error(
@@ -108,12 +114,10 @@ export async function completeChore(input: CompleteInput, ctx: ToolContext): Pro
   // A chore awaiting sign-off comes back 200 with the full chore object at status 3
   // and no message field at all, and its due date is unchanged.
   //
-  // Status when the response carries one, and only then the cached flag. The old
-  // `status === 3 || chore.requireApproval` reported a completion that actually
-  // landed as pending whenever the chore merely had approval enabled, which sends
-  // the user to chase an approver for nothing and reports a stale next due date
-  // alongside it. Reporting a write as not having happened is the same defect as
-  // reporting one that did not, in the other direction.
+  // The response's status decides it; the cached flag is consulted only when the
+  // response carries none. Under `status === 3 || chore.requireApproval` a completion
+  // that actually landed was reported as pending whenever the chore merely had
+  // approval enabled, with a stale next due date alongside it.
   const status = statusOf(response);
   const pendingApproval = status !== undefined ? status === 3 : chore.requireApproval === true;
 

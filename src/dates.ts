@@ -68,6 +68,19 @@ export function parseDueDate(input: string | null, now: Date, tz: string): Date 
   throw new Error(FORMAT_HELP);
 }
 
+/**
+ * Whether the caller stated a time of day, or only a date that parseDueDate then
+ * resolved to 09:00.
+ *
+ * complete_chore needs the difference. It clamps a future instant back to now so
+ * that a bare "today" before 09:00 is not refused as future for something the user
+ * has just done, but clamping an explicit timestamp would silently record a
+ * different time than the one asked for.
+ */
+export function carriesTimeOfDay(input: string): boolean {
+  return tryInstant(input.trim()) !== null;
+}
+
 function tryInstant(s: string): Date | null {
   try {
     return new Date(Temporal.Instant.from(s).epochMilliseconds);

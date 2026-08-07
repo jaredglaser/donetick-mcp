@@ -43,11 +43,9 @@ function isValidCreatedId(value: unknown): value is number {
 }
 
 /**
- * POST /api/v1/chores/ returns a bare number on success. 0 is falsy but is not a
- * valid Donetick id (ids are positive auto-increment), so a naive `if (!response)`
- * check would misreport 0 as "no id returned" instead of the more precise "not a
- * valid id", and would treat a genuine but unlikely id-less success shape the same
- * as a real failure. Both are rejected explicitly here instead.
+ * POST /api/v1/chores/ returns a bare number on success. Ids are positive
+ * auto-increment, so 0 is falsy without being valid and a naive `if (!response)`
+ * would report it as "no id returned" rather than as a bad one.
  */
 function extractCreatedId(response: unknown): { id: number; warnings?: unknown } {
   if (isValidCreatedId(response)) return { id: response };
@@ -97,9 +95,8 @@ export async function createChore(input: CreateInput, ctx: ToolContext): Promise
   try {
     detail = await ctx.service.choreDetails(id);
   } catch (error) {
-    // The chore was created (we have its id); only the confirmation fetch failed.
-    // Reporting a bare failure here would be wrong, since it would tell the caller
-    // the create did not happen when it did.
+    // The chore was created; only the confirmation fetch failed. A bare failure here
+    // would tell the caller the create did not happen when it did.
     const message = error instanceof Error ? error.message : String(error);
     return {
       kind: "created_detail_unavailable",

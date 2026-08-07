@@ -64,12 +64,23 @@ export const ID_SCOPED_WRITE_PATHS = [
 export const CREATOR_ONLY_WRITE_PATHS = [endpoints.archiveChore, endpoints.unarchiveChore].map(suffixOf);
 
 /**
- * The two writes that also fail with a 500 when Donetick cannot compute the next
+ * The writes that also fail with a 500 when Donetick cannot compute the next
  * occurrence, which has nothing to do with whether the chore exists. Measured on
  * v0.1.76: a day_of_the_month chore with no months, or one shaped as a weekday
  * pattern, is created happily and then answers 500 on every completion.
+ *
+ * These three are exactly the callers of scheduleNextDueDate. Approve belongs here
+ * and was missing: it is the second half of every approval-gated completion, so the
+ * unschedulable chore reaches it by the only route it has. Without it a 500 fell
+ * through to the id-scoped message and told the caller the chore no longer exists,
+ * about a chore still sitting in list_chores. Reject stays out, since
+ * ChoreRepository.RejectChore takes no due date and never schedules.
  */
-export const SCHEDULING_WRITE_PATHS = [endpoints.completeChore, endpoints.skipChore].map(suffixOf);
+export const SCHEDULING_WRITE_PATHS = [
+  endpoints.completeChore,
+  endpoints.skipChore,
+  endpoints.approveChore,
+].map(suffixOf);
 
 export function isSchedulingWrite(path: string, method: string): boolean {
   return method !== "GET" && SCHEDULING_WRITE_PATHS.some((suffix) => path.endsWith(suffix));
