@@ -7,7 +7,7 @@ import {
   type EditInput,
 } from "@/chore-request";
 import { endpoints } from "@/endpoints";
-import { loadChoreById } from "@/tools/chore-lookup";
+import { loadAnyChoreById, loadChoreById } from "@/tools/chore-lookup";
 import { projectChore } from "@/projection";
 import type { DonetickService } from "@/service";
 import type { Member, Project, ProjectedChore, RawChore } from "@/types";
@@ -159,14 +159,17 @@ export async function deleteChore(
 ): Promise<DeleteOutcome> {
   // Resolved before any confirmation is offered, so a nonexistent id fails outright
   // instead of asking the user to confirm deleting a chore that is not there.
-  const existing = await loadChoreById(input.chore_id, ctx);
+  const existing = await loadAnyChoreById(input.chore_id, ctx);
 
   if (answer === undefined) {
-    return {
-      kind: "confirm_required",
-      chore: existing.name,
-      message: `Delete "${existing.name}"? This permanently removes the chore and its completion history. If you want to keep the history, archive it instead.`,
-    };
+    // Offering "archive it instead" to a chore that is already archived would be
+    // advice to do the thing that has been done, so the archived case makes the
+    // point that matters there: the history is what is actually at stake.
+    const message =
+      existing.isActive === false
+        ? `Delete "${existing.name}"? It is already archived, so it is out of your active lists; deleting also removes its completion history, permanently.`
+        : `Delete "${existing.name}"? This permanently removes the chore and its completion history. If you want to keep the history, archive it instead.`;
+    return { kind: "confirm_required", chore: existing.name, message };
   }
 
   if (!answer.confirm) {

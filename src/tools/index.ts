@@ -429,8 +429,8 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
         "Permanently delete a chore and its completion history. This asks for confirmation before " +
         "deleting: the first call reports what would be deleted, and a second call with the user's answer " +
         "actually deletes it. If the goal is only to stop seeing a chore while keeping its history, use " +
-        "archive_chore instead. Only the chore's creator can delete it; Donetick rejects anyone else's " +
-        "attempt.",
+        "archive_chore instead. Archived chores can be deleted too, without unarchiving them first. " +
+        "Only the chore's creator can delete it; Donetick rejects anyone else's attempt.",
       inputSchema: {
         chore_id: z.number().int().optional(),
         name: z.string().optional(),

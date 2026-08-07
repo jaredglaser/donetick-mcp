@@ -122,11 +122,6 @@ instead of a prompt, and cannot delete. A client that declares the capability bu
 refuses the prompt gets a plain "nothing was deleted" result. Every other tool works
 regardless. Archiving is the alternative and keeps the chore's history.
 
-**`delete_chore` does not reach an archived chore.** It resolves ids against the
-active list, so deleting one that has been archived reports that the chore is not
-in that list. Unarchive it first, or leave it archived, which is already the
-non-destructive form of the same intent.
-
 These were verified against a live Donetick instance, not assumed from its source.
 
 - **Labels are read-only.** `/api/v1/labels` requires JWT session auth, which an API token cannot provide, so this server cannot list all labels that exist in the circle. Labels already attached to a chore are readable and filterable through `list_chores` and `get_chore`. A label attached to nothing is invisible to this server.
