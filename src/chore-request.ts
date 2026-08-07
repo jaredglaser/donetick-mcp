@@ -1,7 +1,7 @@
 import { parseDueDate } from "@/dates";
 import { buildFrequency, type FrequencyInput } from "@/frequency";
 import { normalizeName } from "@/resolve";
-import type { Member, Project, RawChore, RawSubTask } from "@/types";
+import { PRIORITY_VALUE, type Member, type Project, type RawChore, type RawSubTask } from "@/types";
 
 const ASSIGN_STRATEGIES_TUPLE = [
   "no_assignee",
@@ -15,18 +15,7 @@ const ASSIGN_STRATEGIES_TUPLE = [
 
 export type AssignStrategy = (typeof ASSIGN_STRATEGIES_TUPLE)[number];
 
-// Exported as readonly string[], mirroring FREQUENCY_TYPES in frequency.ts, so a
-// caller comparing against a plain string array with bun:test's toEqual (which
-// fixes the expected type from actual) does not need a literal-union match.
-export const ASSIGN_STRATEGIES: readonly string[] = ASSIGN_STRATEGIES_TUPLE;
-
-const PRIORITY_VALUE: Record<string, number> = {
-  none: 0,
-  p1: 1,
-  p2: 2,
-  p3: 3,
-  p4: 4,
-};
+export const ASSIGN_STRATEGIES: readonly AssignStrategy[] = ASSIGN_STRATEGIES_TUPLE;
 
 export interface NotifyInput {
   due_date?: boolean;
@@ -56,9 +45,9 @@ export interface CreateInput {
 
 export interface EditInput extends Partial<Omit<CreateInput, "name" | "points">> {
   name?: string;
-  // Widened to allow an explicit null in tests and callers. See the "clearing a
-  // field" note on mergeEditRequest: this module cannot distinguish an explicit
-  // null from an omitted field, so passing null does not clear the value.
+  // Null clears the value, which is why the merge checks this against undefined
+  // rather than folding it into a ?? chain: under ?? an explicit null is nullish
+  // and would fall through to the existing value exactly like an omitted field.
   points?: number | null;
   add_assignees?: string[];
 }
@@ -72,6 +61,15 @@ export interface BuildContext {
 
 export interface ChoreRequestBody {
   id?: number;
+  /**
+   * The version of the chore this body was merged onto, echoed back as an
+   * optimistic-concurrency token. Verified on v0.1.76: sending the value the row
+   * was read with is accepted, sending an older one is refused with 403 "chore has
+   * been modified by another user", and sending nothing at all skips the check
+   * entirely and overwrites whatever landed in between. Absent on a create, which
+   * has no prior version to be stale against.
+   */
+  updatedAt?: string;
   name: string;
   /**
    * Never null, and never absent. Verified on v0.1.76: PUT /api/v1/chores/ with
@@ -106,6 +104,31 @@ export interface ChoreRequestBody {
     templates?: Array<{ value: number; unit: string }>;
   };
   subTasks?: Array<{ id?: number; name: string; orderId: number; completedAt: string | null }>;
+}
+
+/**
+ * The optimistic-concurrency token for the id-scoped writes, which compare it
+ * against the stored row and refuse anything older.
+ *
+ * Not simply the current instant. Measured against a live instance: the rule is
+ * sent >= stored, and the server's clock ran a few milliseconds ahead of the
+ * client's, so a write issued right after another one sent a "now" that was
+ * already behind the row it was editing and drew a 403 that read as a permission
+ * problem. The stored value also carries nanosecond precision, which a Date round
+ * trip truncates downward and turns into the same failure, so when it wins it is
+ * passed through as the original string rather than reformatted.
+ *
+ * The full-edit body does not use this: it sends the merge base's own updatedAt,
+ * because there the token means "apply this on top of the version I read", and
+ * substituting a later instant would wave through the concurrent edit it exists
+ * to catch.
+ */
+export function concurrencyToken(existing: RawChore, now: Date): string {
+  const stored = existing.updatedAt;
+  if (stored === undefined) return now.toISOString();
+  const storedMs = Date.parse(stored);
+  if (Number.isNaN(storedMs)) return now.toISOString();
+  return storedMs >= now.getTime() ? stored : now.toISOString();
 }
 
 function resolveMemberIds(names: string[] | undefined, members: Member[]): number[] {
@@ -360,6 +383,11 @@ export function mergeEditRequest(existing: RawChore, input: EditInput, ctx: Buil
 
   return {
     id: existing.id,
+    // Deliberately the value from the merge base, not the current time: it says
+    // "apply this on top of the version I read", which is the whole point. Omitted
+    // rather than faked when the row carries none, since inventing one would ask
+    // Donetick to compare against a version that never existed.
+    ...(existing.updatedAt !== undefined ? { updatedAt: existing.updatedAt } : {}),
     name: input.name ?? existing.name,
     description: input.description ?? existing.description ?? "",
     nextDueDate: dueDate === null ? null : dueDate.toISOString(),
@@ -371,7 +399,11 @@ export function mergeEditRequest(existing: RawChore, input: EditInput, ctx: Buil
     assignees: assigneeIds.map((userId) => ({ userId })),
     labelsV2: (existing.labelsV2 ?? []).map((label) => ({ labelId: label.id })),
     priority: priorityValue(input.priority, existing.priority),
-    points: input.points ?? existing.points ?? null,
+    // Checked against undefined, not with ??, so an explicit null clears the value
+    // instead of falling through to the existing one. The schema advertises points
+    // as nullable, and a ?? chain there turned "remove the points" into a silent
+    // no-op that still reported success, which is worse than not offering it.
+    points: input.points !== undefined ? input.points : (existing.points ?? null),
     projectId: input.project !== undefined ? resolveProjectId(input.project, ctx.projects) : (existing.projectId ?? null),
     isRolling,
     isPrivate: input.is_private ?? existing.isPrivate ?? false,

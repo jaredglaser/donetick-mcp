@@ -1,10 +1,10 @@
-import { mergeEditRequest, type BuildContext } from "@/chore-request";
+import { concurrencyToken, mergeEditRequest, type BuildContext } from "@/chore-request";
 import { parseDueDate } from "@/dates";
 import { endpoints } from "@/endpoints";
 import { loadArchivedChoreById, loadChoreById } from "@/tools/chore-lookup";
 import { resolveMember } from "@/resolve";
 import type { WriteContext } from "@/tools/write";
-import type { RawChore } from "@/types";
+import { PRIORITY_VALUE, type RawChore } from "@/types";
 
 export interface RescheduleInput {
   chore_id?: number;
@@ -67,11 +67,7 @@ export async function rescheduleChore(input: RescheduleInput, ctx: WriteContext)
   const existing = await loadActiveChore(input.chore_id, ctx);
   const parsed = parseDueDate(input.due_date, ctx.now(), ctx.timezone);
   const dueDate = parsed === null ? null : parsed.toISOString();
-  // updatedAt is an optimistic-concurrency token Donetick checks against the stored
-  // row. It must be the current instant, not existing.updatedAt: sourcing it from the
-  // 10-second chore cache would make a concurrent web-UI edit produce an intermittent
-  // 403 here.
-  const updatedAt = ctx.now().toISOString();
+  const updatedAt = concurrencyToken(existing, ctx.now());
 
   await ctx.service.write(() =>
     ctx.service.client.put(endpoints.updateDueDate(existing.id), { dueDate, updatedAt }),
@@ -94,7 +90,7 @@ export async function reassignChore(input: ReassignInput, ctx: WriteContext): Pr
   const target = resolveMember(input.assignee, members);
 
   if (currentAssigneeIds(existing).includes(target.userId)) {
-    const updatedAt = ctx.now().toISOString();
+    const updatedAt = concurrencyToken(existing, ctx.now());
     await ctx.service.write(() =>
       ctx.service.client.put(endpoints.updateAssignee(existing.id), { assignee: target.userId, updatedAt }),
     );
@@ -115,14 +111,6 @@ export async function reassignChore(input: ReassignInput, ctx: WriteContext): Pr
   await ctx.service.write(() => ctx.service.client.put(endpoints.editChore(), body));
   return { kind: "reassigned", chore_id: existing.id, assignee: target.displayName, method: "full_edit" };
 }
-
-const PRIORITY_VALUE: Record<string, number> = {
-  none: 0,
-  p1: 1,
-  p2: 2,
-  p3: 3,
-  p4: 4,
-};
 
 /**
  * Both a P-label and a raw 0-4 integer are accepted: the projection reports priority

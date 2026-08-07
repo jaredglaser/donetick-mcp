@@ -21,7 +21,7 @@ import { DonetickClient } from "@/client";
 import { parseConfig } from "@/config";
 import { endpoints } from "@/endpoints";
 import { DonetickError } from "@/errors";
-import { mergeEditRequest } from "@/chore-request";
+import { concurrencyToken, mergeEditRequest } from "@/chore-request";
 import type { Member, Project, RawChore } from "@/types";
 
 type Status = "pass" | "warn" | "fail";
@@ -125,15 +125,30 @@ async function listRowById(id: number): Promise<Record<string, unknown>> {
   return row;
 }
 
-async function createScratchChore(body: ChoreCreateBody): Promise<number> {
-    const response = await client.post(endpoints.createChore(), body);
-    if (typeof response !== "number" || !Number.isInteger(response) || response <= 0) {
+/**
+   * Create answers with a bare id, or with {res, warnings} when Donetick defaulted
+   * something. Both shapes are the contract, and the check below pins that; this
+   * helper only needs the id out of either.
+   */
+  function createdIdOf(response: unknown): number {
+    const bare =
+      typeof response === "number"
+        ? response
+        : response && typeof response === "object" && "res" in response
+          ? (response as { res: unknown }).res
+          : undefined;
+    if (typeof bare !== "number" || !Number.isInteger(bare) || bare <= 0) {
       throw new Error(
-        `POST ${endpoints.createChore()} did not return a bare positive integer id, got ${JSON.stringify(response)}`,
+        `POST ${endpoints.createChore()} did not return a positive integer id, got ${JSON.stringify(response)}`,
       );
     }
-    createdChoreIds.push(response);
-    return response;
+    return bare;
+  }
+
+  async function createScratchChore(body: ChoreCreateBody): Promise<number> {
+    const id = createdIdOf(await client.post(endpoints.createChore(), body));
+    createdChoreIds.push(id);
+    return id;
   }
 
   try {
@@ -168,9 +183,46 @@ async function createScratchChore(body: ChoreCreateBody): Promise<number> {
 
     // Create and shape.
 
-    await check("POST /chores/ returns a bare positive number, not an object", async () => {
-      const id = await createScratchChore(baseChoreBody(scoped("bare-id"), { frequencyType: "daily" }));
-      return { detail: `created chore ${id}` };
+    await check("POST /chores/ returns a bare id, or {res, warnings} when it defaults a field", async () => {
+      // Both shapes are real, and the warnings one only became visible once the
+      // client stopped unwrapping any envelope containing res: that stripped the
+      // siblings, so create_chore's warnings were permanently undefined while its
+      // type and tests both claimed otherwise. Omitting isActive is the reliable
+      // way to provoke one on v0.1.76.
+      const withDefault = await client.post(
+        endpoints.createChore(),
+        baseChoreBody(scoped("warns")),
+      );
+      const warnedId = createdIdOf(withDefault);
+      createdChoreIds.push(warnedId);
+
+      const warnings =
+        withDefault && typeof withDefault === "object" && "warnings" in withDefault
+          ? (withDefault as { warnings: unknown }).warnings
+          : undefined;
+
+      const explicit = await client.post(endpoints.createChore(), {
+        ...baseChoreBody(scoped("bare-id")),
+        isActive: true,
+      } as ChoreCreateBody);
+      const bareId = createdIdOf(explicit);
+      createdChoreIds.push(bareId);
+
+      if (warnings === undefined) {
+        return {
+          status: "warn",
+          detail:
+            `chore ${warnedId} created with no isActive and Donetick returned no warnings. ` +
+            "Nothing breaks, but the envelope shape create_chore reports warnings from is no longer exercised here.",
+        };
+      }
+      if (typeof explicit === "number") {
+        return { detail: `warned create returned {res, warnings: ${JSON.stringify(warnings)}}, clean create returned a bare ${bareId}` };
+      }
+      return {
+        status: "warn",
+        detail: `even a create with every field set answered with an envelope (${JSON.stringify(explicit)}), so the bare-number shape may be gone`,
+      };
     });
 
     await check(
@@ -408,13 +460,66 @@ async function createScratchChore(body: ChoreCreateBody): Promise<number> {
       };
     });
 
+    await check("the updatedAt token must be at least the stored value, which a Date round trip can undershoot", async () => {
+      // Measured on v0.1.76. The comparison is sent >= stored, and stored carries
+      // nanosecond precision, so rebuilding it through Date truncates downward and
+      // lands just under. The same shape of failure happens with a plain "now" when
+      // the server's clock runs ahead of the client's, which it did by a few
+      // milliseconds here. concurrencyToken() in chore-request.ts exists for both.
+      const id = await createScratchChore(baseChoreBody(scoped("token"), { frequencyType: "daily" }));
+      const row = (await listRowById(id)) as unknown as RawChore;
+      const stored = row.updatedAt;
+      if (stored === undefined) {
+        return {
+          status: "warn",
+          detail: "the chores list row no longer carries updatedAt, so concurrencyToken has nothing to read",
+        };
+      }
+
+      const attempt = async (token: string): Promise<boolean> => {
+        try {
+          await client.put(endpoints.updateDueDate(id), {
+            dueDate: new Date(Date.now() + 86_400_000).toISOString(),
+            updatedAt: token,
+          });
+          return true;
+        } catch {
+          return false;
+        }
+      };
+
+      const truncated = new Date(stored).toISOString();
+      const truncatedRejected = truncated === stored ? null : !(await attempt(truncated));
+      const rawAccepted = await attempt(stored);
+
+      if (!rawAccepted) {
+        throw new Error(
+          `the row's own updatedAt (${stored}) was refused, so concurrencyToken cannot produce a token this endpoint accepts`,
+        );
+      }
+      if (truncatedRejected === false) {
+        return {
+          status: "warn",
+          detail:
+            "a millisecond-truncated updatedAt is now accepted, so the precision half of concurrencyToken is no longer load-bearing",
+        };
+      }
+      return {
+        detail:
+          truncatedRejected === null
+            ? `stored stamp accepted; it had no sub-millisecond digits to lose`
+            : `stored stamp accepted, its millisecond-truncated form refused`,
+      };
+    });
+
     await check("PUT /:id/dueDate with updatedAt succeeds and returns the pre-update chore", async () => {
       const id = await createScratchChore(baseChoreBody(scoped("duedate-echo"), { frequencyType: "daily" }));
       const before = (await client.get(endpoints.choreDetails(id))) as Record<string, unknown>;
+      const row = (await listRowById(id)) as unknown as RawChore;
       const sentDueDate = new Date(Date.now() + 86_400_000).toISOString();
       const response = (await client.put(endpoints.updateDueDate(id), {
         dueDate: sentDueDate,
-        updatedAt: new Date().toISOString(),
+        updatedAt: concurrencyToken(row, new Date()),
       })) as Record<string, unknown>;
       if (typeof response !== "object" || response === null || !("nextDueDate" in response)) {
         throw new Error(`expected an object with nextDueDate back, got ${JSON.stringify(response)}`);

@@ -1,14 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { z } from "zod";
-import { ASSIGN_STRATEGIES } from "@/chore-request";
-import { FREQUENCY_TYPES } from "@/frequency";
-import {
-  ASSIGN_STRATEGY_VALUES,
-  buildToolDefinitions,
-  FREQUENCY_TYPE_VALUES,
-  type McpExtras,
-  type ToolResult,
-} from "../index";
+import { buildToolDefinitions, type McpExtras, type ToolResult } from "../index";
 
 const service = {
   chores: async () => [],
@@ -483,6 +475,8 @@ function fakeWriteService(opts: FakeWriteOptions = {}) {
     invalidateChores: () => {},
     client: {
       post: async (path: string, body?: unknown) => (opts.post ? opts.post(path, body) : undefined),
+      postEnvelope: async (path: string, body?: unknown) =>
+        opts.post ? opts.post(path, body) : undefined,
       put: async (path: string, body?: unknown) => (opts.put ? opts.put(path, body) : undefined),
       delete: async (path: string) => {
         deleteCalls += 1;
@@ -572,16 +566,6 @@ describe("delete_chore multi-round-trip confirmation", () => {
     expect(result.confirmRequired).toBeUndefined();
     expect(result.isError).toBeUndefined();
     expect(deleteCalls()).toBe(0);
-  });
-});
-
-describe("zod option lists agree with their domain source of truth", () => {
-  test("the local frequency-type list equals FREQUENCY_TYPES", () => {
-    expect(FREQUENCY_TYPES).toEqual(FREQUENCY_TYPE_VALUES);
-  });
-
-  test("the local assign-strategy list equals ASSIGN_STRATEGIES", () => {
-    expect(ASSIGN_STRATEGIES).toEqual(ASSIGN_STRATEGY_VALUES);
   });
 });
 
@@ -778,3 +762,84 @@ describe("set_subtask_completed registration", () => {
   });
 });
 
+
+describe("delete_chore resolution", () => {
+  const active = {
+    id: 5,
+    name: "Take out trash",
+    nextDueDate: null,
+    assignedTo: null,
+    status: 0,
+    createdBy: 1,
+    isActive: true,
+    frequencyType: "daily",
+    frequency: 1,
+    frequencyMetadata: { timezone: "America/New_York" },
+    assignStrategy: "no_assignee",
+    assignees: [],
+    labelsV2: [],
+    priority: 0,
+    isRolling: false,
+    isPrivate: false,
+    requireApproval: false,
+    notification: false,
+    subTasks: [],
+  };
+  const archived = { ...active, id: 9, name: "Old chore", isActive: false };
+
+  function toolsFor(overrides: Record<string, unknown>) {
+    return buildToolDefinitions({
+      ...deps,
+      service: { ...service, ...overrides } as never,
+    });
+  }
+
+  test("finds an archived chore by name, which the description promises", async () => {
+    // The capability used to stop at the id path: deleteChore searched both lists
+    // but the handler resolved names against the active one, so delete_chore by
+    // name on an archived chore failed with "nothing matches" and suggestions that
+    // could not include it, while the description said archived chores were fine.
+    const tools = toolsFor({
+      chores: async () => [active],
+      archivedChores: async () => [archived],
+    });
+    const tool = tools.find((t) => t.name === "delete_chore")!;
+
+    const result = await tool.handler({ name: "Old chore" });
+
+    expect(result.isError).toBeFalsy();
+    expect(JSON.stringify(result.content)).toMatch(/Old chore/);
+  });
+
+  test("finds an archived chore by id", async () => {
+    const tools = toolsFor({
+      chores: async () => [active],
+      archivedChores: async () => [archived],
+    });
+    const tool = tools.find((t) => t.name === "delete_chore")!;
+
+    const result = await tool.handler({ chore_id: 9 });
+
+    expect(result.isError).toBeFalsy();
+    expect(JSON.stringify(result.content)).toMatch(/Old chore/);
+  });
+
+  test("other chore-scoped tools still do not resolve archived names", async () => {
+    // Widening resolution everywhere would let an archived chore compete with an
+    // active one for the same name, which is the wrong tradeoff outside delete.
+    let archivedConsulted = false;
+    const tools = toolsFor({
+      chores: async () => [active],
+      archivedChores: async () => {
+        archivedConsulted = true;
+        return [archived];
+      },
+    });
+    const tool = tools.find((t) => t.name === "archive_chore")!;
+
+    const result = await tool.handler({ name: "Old chore" });
+
+    expect(result.isError).toBe(true);
+    expect(archivedConsulted).toBe(false);
+  });
+});

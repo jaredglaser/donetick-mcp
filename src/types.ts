@@ -51,7 +51,6 @@ export interface RawChore {
   createdBy: number;
   updatedAt?: string;
   subTasks?: RawSubTask[] | null;
-  attachments?: unknown[] | null;
   lastCompletedDate?: string | null;
   lastCompletedBy?: number | null;
   totalCompletedCount?: number | null;
@@ -88,6 +87,16 @@ export const PRIORITY_LABEL: Record<number, string> = {
   4: "P4",
 };
 
+/**
+ * Derived from PRIORITY_LABEL rather than written out again, so the two directions
+ * cannot disagree. Priority is inverted here (P1 is the most urgent, 0 is unset),
+ * which makes a hand-maintained second copy the worst place in this codebase for a
+ * transcription slip: every value would still look plausible.
+ */
+export const PRIORITY_VALUE: Record<string, number> = Object.fromEntries(
+  Object.entries(PRIORITY_LABEL).map(([value, label]) => [label.toLowerCase(), Number(value)]),
+);
+
 export interface ProjectedChore {
   id: number;
   name: string;
@@ -103,7 +112,6 @@ export interface ProjectedChore {
   requires_approval: boolean;
   completion_window: number | null;
   subtasks: Array<{ name: string; done: boolean }>;
-  attachment_count: number;
   last_completed_at: string | null;
   last_completed_by: string | null;
 }

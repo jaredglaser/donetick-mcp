@@ -14,10 +14,7 @@ const FREQUENCY_TYPES_TUPLE = [
 
 export type FrequencyType = (typeof FREQUENCY_TYPES_TUPLE)[number];
 
-// Exported as readonly string[] rather than the literal tuple type so that callers
-// comparing against a plain string array (bun:test's expect(actual).toEqual(expected)
-// fixes the expected type from actual) do not need a literal-union match.
-export const FREQUENCY_TYPES: readonly string[] = FREQUENCY_TYPES_TUPLE;
+export const FREQUENCY_TYPES: readonly FrequencyType[] = FREQUENCY_TYPES_TUPLE;
 
 export const WEEK_PATTERNS = ["every_week", "week_of_month", "week_of_quarter"] as const;
 

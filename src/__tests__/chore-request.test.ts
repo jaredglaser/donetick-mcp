@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test";
 import {
   ASSIGN_STRATEGIES,
   buildCreateRequest,
+  concurrencyToken,
   mergeEditRequest,
+  type AssignStrategy,
   type BuildContext,
 } from "@/chore-request";
 import type { Member, Project, RawChore } from "@/types";
@@ -24,17 +26,16 @@ function ctx(overrides: Partial<BuildContext> = {}): BuildContext {
 
 describe("ASSIGN_STRATEGIES", () => {
   test("covers all seven Donetick assign strategies", () => {
-    expect([...ASSIGN_STRATEGIES].sort()).toEqual(
-      [
-        "no_assignee",
-        "least_assigned",
-        "least_completed",
-        "random",
-        "keep_last_assigned",
-        "random_except_last_assigned",
-        "round_robin",
-      ].sort(),
-    );
+    const expected: AssignStrategy[] = [
+      "no_assignee",
+      "least_assigned",
+      "least_completed",
+      "random",
+      "keep_last_assigned",
+      "random_except_last_assigned",
+      "round_robin",
+    ];
+    expect([...ASSIGN_STRATEGIES].sort()).toEqual(expected.sort());
   });
 });
 
@@ -385,13 +386,21 @@ describe("mergeEditRequest", () => {
   });
 
   describe("clearing a field", () => {
-    test("points: null is indistinguishable from not provided and does not clear the value", () => {
-      // EditInput has no unset sentinel distinct from "field omitted": the merge uses
-      // `??` fallback chains, under which an explicit null is nullish and falls through
-      // to the existing value exactly like undefined does. Clearing points is not
-      // expressible through mergeEditRequest today.
-      const body = mergeEditRequest(existing, { points: null }, ctx());
-      expect(body.points).toBe(5);
+    test("points: null clears the value, because the schema advertises that it can", () => {
+      // The merge used a ?? chain here, under which an explicit null is nullish and
+      // falls through to the existing value exactly like undefined. The schema says
+      // points is nullable, so a caller asked to "remove the points" sends null and
+      // was told it worked while nothing changed. Advertising a capability that
+      // no-ops is worse than not offering it, so the check is against undefined.
+      expect(mergeEditRequest(existing, { points: null }, ctx()).points).toBeNull();
+    });
+
+    test("omitting points still preserves the existing value", () => {
+      expect(mergeEditRequest(existing, { name: "Renamed" }, ctx()).points).toBe(5);
+    });
+
+    test("points: 0 is kept rather than treated as absent", () => {
+      expect(mergeEditRequest(existing, { points: 0 }, ctx()).points).toBe(0);
     });
 
     test("an explicit empty assignee list does clear assignees, unlike points: null", () => {
@@ -473,5 +482,40 @@ describe("description is never null on the wire", () => {
     expect(mergeEditRequest(existing, { description: "new text" }, ctx()).description).toBe(
       "new text",
     );
+  });
+});
+
+describe("concurrencyToken", () => {
+  const now = new Date("2026-08-06T16:00:00.500Z");
+  const withStamp = (updatedAt: string | undefined) =>
+    ({ ...existing, updatedAt }) as unknown as RawChore;
+
+  test("uses the current instant when the row's stamp is older", () => {
+    expect(concurrencyToken(withStamp("2026-08-06T15:00:00.000Z"), now)).toBe(now.toISOString());
+  });
+
+  test("uses the row's own stamp when it is newer than the local clock", () => {
+    // Measured live: the server's clock ran ahead of the client's, so a write
+    // issued right after another sent a "now" already behind the row it was
+    // editing, and Donetick refused it with a 403 that reads as a permission
+    // problem rather than a clock problem.
+    const ahead = "2026-08-06T16:00:01.000Z";
+    expect(concurrencyToken(withStamp(ahead), now)).toBe(ahead);
+  });
+
+  test("passes a same-millisecond stamp through verbatim rather than reformatting it", () => {
+    // Donetick stamps with nanosecond precision. Rebuilding the value through Date
+    // truncates it downward, which lands just under the stored value and is refused
+    // for being older, so the original string has to survive intact.
+    const nanos = "2026-08-06T16:00:00.500123456Z";
+    expect(concurrencyToken(withStamp(nanos), now)).toBe(nanos);
+  });
+
+  test("falls back to now when the row carries no stamp", () => {
+    expect(concurrencyToken(withStamp(undefined), now)).toBe(now.toISOString());
+  });
+
+  test("falls back to now when the stamp is unparseable rather than sending garbage", () => {
+    expect(concurrencyToken(withStamp("not a date"), now)).toBe(now.toISOString());
   });
 });

@@ -91,8 +91,13 @@ describe("projectChore", () => {
     ]);
   });
 
-  test("counts attachments without projecting them", () => {
-    expect(projectChore(chore({ attachments: [{}, {}] }), members, projects, now).attachment_count).toBe(2);
+  test("reports no attachment count, because neither wire view carries attachments", () => {
+    // Verified live on v0.1.76: neither the chores list row nor GET /:id/details
+    // has an attachments key, so the old count read undefined and reported 0 for
+    // every chore, including ones that do have attachments. A field that can only
+    // ever say zero is worse than no field, since a caller reads it as an answer.
+    const projected = projectChore(chore({}), members, projects, now) as unknown as Record<string, unknown>;
+    expect(projected).not.toHaveProperty("attachment_count");
   });
 
   test("projects the approval flag so complete_chore can explain itself", () => {
