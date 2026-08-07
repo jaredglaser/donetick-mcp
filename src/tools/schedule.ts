@@ -32,6 +32,8 @@ export interface ReassignOutcome {
   chore_id: number;
   assignee: string;
   method: "fast" | "full_edit";
+  /** Set when this write changed something the caller did not ask about. */
+  warning?: string;
 }
 
 export interface SetPriorityInput {
@@ -54,6 +56,7 @@ export interface ArchiveOutcome {
   kind: "archived" | "unarchived";
   chore_id: number;
   name: string;
+  message?: string;
 }
 
 function loadActiveChore(chore_id: number | undefined, ctx: ToolContext): Promise<RawChore> {
@@ -119,8 +122,31 @@ export async function reassignChore(input: ReassignInput, ctx: ToolContext): Pro
   const body = mergeEditRequest(existing, { add_assignees: [input.assignee] }, buildCtx);
   body.assignedTo = target.userId;
 
+  // This path goes through the same merge edit_chore does, so it causes the same two
+  // side effects, and edit_chore warns about only one of them from only one of the
+  // two tools that reach it.
+  const notificationsSwitchedOff = existing.notification === true && body.notification === false;
+  const strategyPromoted =
+    existing.assignStrategy === "no_assignee" && body.assignStrategy !== "no_assignee";
+
   await ctx.service.write(() => ctx.service.client.put(endpoints.editChore(), body));
-  return { kind: "reassigned", chore_id: existing.id, assignee: target.displayName, method: "full_edit" };
+
+  const warnings = [
+    notificationsSwitchedOff
+      ? `Notifications on "${existing.name}" were switched off by this write. Donetick had them enabled with no reminder settings stored, a combination it crashes on when written back. Use edit_chore with notify to turn them on again.`
+      : "",
+    strategyPromoted
+      ? `The assign strategy changed from no_assignee to ${body.assignStrategy}, because a chore cannot both have an assignee and be set to assign nobody. Later occurrences will keep an assignee rather than reverting to unassigned.`
+      : "",
+  ].filter((w) => w.length > 0);
+
+  return {
+    kind: "reassigned",
+    chore_id: existing.id,
+    assignee: target.displayName,
+    method: "full_edit",
+    ...(warnings.length > 0 ? { warning: warnings.join(" ") } : {}),
+  };
 }
 
 /**
@@ -164,16 +190,25 @@ export async function setPriority(input: SetPriorityInput, ctx: ToolContext): Pr
 export async function archiveChore(input: ArchiveInput, ctx: ToolContext): Promise<ArchiveOutcome> {
   const existing = await loadActiveChore(input.chore_id, ctx);
 
-  // loadChoreById falls back to the unfiltered list, which includes archived rows,
-  // so this reported a second successful archive on a chore already archived.
-  // unarchive_chore has always scoped itself; the asymmetry was not deliberate.
-  if (existing.isActive === false) {
-    throw new Error(`"${existing.name}" is already archived. Use unarchive_chore to bring it back.`);
-  }
 
   await ctx.service.write(() => ctx.service.client.put(endpoints.archiveChore(existing.id), {}));
 
-  return { kind: "archived", chore_id: existing.id, name: existing.name };
+  // Reported rather than refused. isActive false means two different things, and
+  // they are indistinguishable from the row: a chore that was archived, and a
+  // non-recurring chore that has been completed. Donetick archives both happily, so
+  // refusing would have told someone their just-completed one-off was "already
+  // archived" and pointed them at unarchive_chore, which returns it to the active
+  // list with no due date.
+  return {
+    kind: "archived",
+    chore_id: existing.id,
+    name: existing.name,
+    ...(existing.isActive === false
+      ? {
+          message: `"${existing.name}" was already out of your active lists, either archived or a one-off that has been completed. It is archived now either way.`,
+        }
+      : {}),
+  };
 }
 
 export async function unarchiveChore(input: ArchiveInput, ctx: ToolContext): Promise<ArchiveOutcome> {

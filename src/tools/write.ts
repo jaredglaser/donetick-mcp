@@ -13,6 +13,7 @@ import { DonetickError } from "@/errors";
 import { loadChoreById } from "@/tools/chore-lookup";
 import type { ToolContext } from "@/tools/context";
 import { projectChore } from "@/projection";
+import { safeName } from "@/resolve";
 import type { Member, Project, ProjectedChore, RawChore } from "@/types";
 
 export type { ToolContext as WriteContext } from "@/tools/context";
@@ -160,7 +161,21 @@ export async function editChore(
     // behind the row and this endpoint refuses anything older. The only place two
     // writes hit one chore in sequence.
     ctx.service.invalidateChores();
-    const written = await loadChoreById(existing.id, ctx);
+    let written: RawChore;
+    try {
+      written = await loadChoreById(existing.id, ctx);
+    } catch (error) {
+      // Guarded for the same reason the write below it is. This read sits between
+      // two writes, and the main edit has already landed: reporting a read failure
+      // as an edit failure invites a retry of a change that applied.
+      return {
+        kind: "edited_detail_unavailable",
+        id: existing.id,
+        message: `"${existing.name}" was updated, but reading it back to clear its due date failed: ${
+          error instanceof Error ? error.message : String(error)
+        }. Everything else in the edit landed. Call reschedule_chore with due_date null to finish clearing it.`,
+      };
+    }
     try {
       await ctx.service.write(() =>
         ctx.service.client.put(endpoints.updateDueDate(written.id), {
@@ -238,10 +253,15 @@ export async function deleteChore(
     // Offering "archive it instead" to a chore that is already archived would be
     // advice to do the thing that has been done, so the archived case makes the
     // point that matters there: the history is what is actually at stake.
+    // The name is quoted through safeName and the id is stated, because this string
+    // is what the human reads before approving a permanent delete and it is the only
+    // copy they see. A name carrying quotes and a newline could otherwise end the
+    // first sentence early and make the rest read as a separate, benign prompt.
+    const label = `${JSON.stringify(safeName(existing.name))} (id ${existing.id})`;
     const message =
       existing.isActive === false
-        ? `Delete "${existing.name}"? It is already archived, so it is out of your active lists; deleting also removes its completion history, permanently.`
-        : `Delete "${existing.name}"? This permanently removes the chore and its completion history. If you want to keep the history, archive it instead.`;
+        ? `Delete ${label}? It is already archived, so it is out of your active lists; deleting also removes its completion history, permanently.`
+        : `Delete ${label}? This permanently removes the chore and its completion history. If you want to keep the history, archive it instead.`;
     return { kind: "confirm_required", chore: existing.name, message };
   }
 

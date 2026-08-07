@@ -40,6 +40,16 @@ function messageOf(response: unknown): string | undefined {
   return undefined;
 }
 
+/**
+ * isActive false has two causes and the row cannot distinguish them: the chore was
+ * archived, or it is non-recurring and has already been completed. Both mean it is
+ * absent from every active list, which is the part worth saying.
+ */
+function inactiveNote(chore: { name: string; isActive?: boolean }): string {
+  if (chore.isActive !== false) return "";
+  return ` "${chore.name}" is not in your active lists, either because it was archived or because it is a one-off that has already been completed. Nothing you do to it here will show up in list_chores.`;
+}
+
 export interface CompleteInput {
   chore_id?: number;
   completed_at?: string;
@@ -152,17 +162,25 @@ export async function completeChore(input: CompleteInput, ctx: ToolContext): Pro
     nextDueInstant !== null &&
     !Number.isNaN(nextDueInstant.getTime()) &&
     nextDueInstant.getTime() < ctx.now().getTime();
-  const pastNote = scheduledIntoThePast
-    ? ` Donetick set the next occurrence to ${nextDueInstant.toISOString()}, which is already in the past, so the chore is overdue again immediately. An adaptive recurrence does this when a chore is completed earlier than its interval; reschedule_chore sets a real next date.`
-    : "";
+  // The cause is not the same in both cases, and stating the adaptive one
+  // unconditionally was wrong for the far more common one. Donetick steps from the
+  // previous due date rather than from the completion, so any chore finished more
+  // than one period late lands in the past: being a day late on a daily chore is
+  // enough. Adaptive is the case where it happens on an early completion instead.
+  const pastNote = !scheduledIntoThePast
+    ? ""
+    : chore.frequencyType === "adaptive"
+      ? ` Donetick set the next occurrence to ${nextDueInstant.toISOString()}, which is already in the past. An adaptive recurrence does this when a chore is completed earlier than its learned interval, and it does not recover on its own; reschedule_chore sets a real next date.`
+      : ` Donetick set the next occurrence to ${nextDueInstant.toISOString()}, which is already in the past, so the chore is overdue again immediately. It steps from the previous due date rather than from the completion, so a chore finished more than one period late lands behind. Completing it again walks it forward, or reschedule_chore sets a date directly.`;
 
-  // An archived chore is in no active list, so a completion or skip advances a due
-  // date nobody will see. Donetick allows it and says nothing; every write tool here
-  // reported plain success on one.
-  const archivedNote =
-    chore.isActive === false
-      ? ` "${chore.name}" is archived, so it does not appear in any active list. Use unarchive_chore if that was not intended.`
-      : "";
+  // An inactive chore is in no active list, so a completion or skip advances a due
+  // date nobody will see. Donetick allows it and says nothing.
+  //
+  // Worded for both causes: isActive false means archived OR a non-recurring chore
+  // that has already been completed, and the row cannot tell them apart. Naming only
+  // archiving told someone their completed one-off had been archived, which it had
+  // not, and sent them to unarchive_chore.
+  const archivedNote = inactiveNote(chore);
 
   const rollingNote =
     isPastCompletion && chore.isRolling === true
@@ -205,6 +223,17 @@ export async function skipChore(input: SkipInput, ctx: ToolContext): Promise<Ski
   // does not move, no history row is written, and the session is not closed.
   // Measured against v0.1.76: due date unchanged, status still 1, history [Started].
   // Complete has no such condition on its own switch and works from either state.
+  // Worse than the timer case below, which is merely a no-op: this one destroys work
+  // someone else did. Measured on v0.1.76: skipping a chore at status 3 drops it to
+  // idle, advances the due date, leaves the pending history row orphaned, pays out
+  // nothing, and approve_chore then answers "Chore is not pending approval", so the
+  // completion and its points are unrecoverable.
+  if (chore.status === 3) {
+    throw new Error(
+      `"${chore.name}" has a completion waiting on sign-off. Skipping it discards that submission: the chore drops to idle, the due date advances, and approve_chore then reports that nothing is pending, so whoever completed it loses the credit and any points. Settle it with approve_chore or reject_chore first.`,
+    );
+  }
+
   if (chore.status === 1 || chore.status === 2) {
     const state = chore.status === 1 ? "running" : "paused";
     throw new Error(
@@ -220,10 +249,7 @@ export async function skipChore(input: SkipInput, ctx: ToolContext): Promise<Ski
   // occurrence that was just skipped, and reporting it under a field named
   // next_due_date is indistinguishable from a verified answer.
   const nextDue = nextDueDateOf(response);
-  const archivedNote =
-    chore.isActive === false
-      ? ` "${chore.name}" is archived, so it does not appear in any active list. Use unarchive_chore if that was not intended.`
-      : "";
+  const archivedNote = inactiveNote(chore);
   return {
     id: chore.id,
     name: chore.name,

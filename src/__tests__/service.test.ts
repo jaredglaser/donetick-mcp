@@ -217,3 +217,59 @@ describe("DonetickService", () => {
     expect(fake.calls.filter((c) => c.includes("circles/members")).length).toBe(1);
   });
 });
+
+describe("members the circle endpoint returns but the circle does not have", () => {
+  // Measured on v0.1.76 with a third account awaiting approval: a pending join
+  // request comes back on /circles/members looking exactly like a member. It was
+  // assignable, reported as the assignee, and that account's own list_chores was
+  // empty. It also sat in the point standings list_members advertises.
+  test("a pending join request is filtered out", async () => {
+    const service = new DonetickService(
+      fakeClient({
+        "/api/v1/circles/members": [
+          { userId: 1, username: "jared", displayName: "Jared", isActive: true, points: 10 },
+          { userId: 4, username: "pending", displayName: "Pending Person", isActive: false, points: 0 },
+        ],
+      }).client as never,
+      { cacheTtlMs: 0 },
+    );
+
+    const members = await service.members();
+    expect(members.map((m) => m.userId)).toEqual([1]);
+  });
+
+  test("a member with no isActive key is kept, since older rows may omit it", async () => {
+    const service = new DonetickService(
+      fakeClient({
+        "/api/v1/circles/members": [{ userId: 1, username: "jared", displayName: "Jared" }],
+      }).client as never,
+      { cacheTtlMs: 0 },
+    );
+
+    expect((await service.members()).map((m) => m.userId)).toEqual([1]);
+  });
+});
+
+describe("a response that is not the array every consumer assumes", () => {
+  // These reached the model as raw TypeErrors naming an internal property, or in one
+  // case quoting a whole arrow function. probe.ts has the right check and wording but
+  // only runs after a failure, so a healthy instance that starts answering with
+  // something else never reached it.
+  test("a non-array chore list is an explained error, not a TypeError", async () => {
+    const service = new DonetickService(
+      fakeClient({ "/api/v1/chores/?includeSubtasks=true": "nope" }).client as never,
+      { cacheTtlMs: 0 },
+    );
+
+    await expect(service.chores()).rejects.toThrow(/did not return an array/);
+  });
+
+  test("an empty projects body is still a real answer, not an error", async () => {
+    const service = new DonetickService(
+      fakeClient({ "/api/v1/projects": undefined }).client as never,
+      { cacheTtlMs: 0 },
+    );
+
+    expect(await service.projects()).toEqual([]);
+  });
+});

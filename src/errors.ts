@@ -49,7 +49,39 @@ function bodyError(body: string): string | undefined {
   return undefined;
 }
 
+/**
+ * A 5xx on a write says nothing about whether the write applied.
+ *
+ * Donetick's create inserts the chore row before several later steps that can fail,
+ * and its router has no Recovery middleware, so a panic after partial work drops the
+ * connection mid-request. Measured on v0.1.76: a create whose label step fails
+ * answers 500 with the chore row already committed. Reported as a flat failure, the
+ * obvious next move is to retry, which makes a duplicate. That is the whole reason
+ * DonetickError carries this flag, and until now only a transport error ever set it,
+ * so no HTTP response could.
+ *
+ * 4xx stays determinate: a rejected body, a bad token or a missing id all mean
+ * nothing was written.
+ */
 export function mapHttpError(input: {
+  status: number;
+  body: string;
+  path: string;
+  method: string;
+}): DonetickError {
+  const mapped = classifyHttpError(input);
+  if (input.status >= 500 && input.method !== "GET" && !mapped.indeterminate) {
+    return new DonetickError(mapped.message, {
+      status: mapped.status,
+      retryable: mapped.retryable,
+      invalidatesCache: mapped.invalidatesCache,
+      indeterminate: true,
+    });
+  }
+  return mapped;
+}
+
+function classifyHttpError(input: {
   status: number;
   body: string;
   path: string;

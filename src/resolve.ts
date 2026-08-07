@@ -1,7 +1,7 @@
 export class AmbiguousMatchError extends Error {
   constructor(query: string, candidates: string[]) {
     super(
-      `"${query}" matches ${candidates.length} items. Ask which one is meant, then call again with the id.\n${candidates.join("\n")}`,
+      `"${safeName(query)}" matches ${candidates.length} items. Ask which one is meant, then call again with the id.\n${candidates.join("\n")}`,
     );
     this.name = "AmbiguousMatchError";
   }
@@ -11,11 +11,29 @@ export class NoMatchError extends Error {
   constructor(query: string, suggestions: string[]) {
     super(
       suggestions.length > 0
-        ? `Nothing matches "${query}". Closest names: ${suggestions.join(", ")}.`
-        : `Nothing matches "${query}", and there is nothing to match against.`,
+        ? `Nothing matches "${safeName(query)}". Closest names: ${suggestions.join(", ")}.`
+        : `Nothing matches "${safeName(query)}", and there is nothing to match against.`,
     );
     this.name = "NoMatchError";
   }
+}
+
+/**
+ * Names come from Donetick and are written by anyone with an account, so they reach
+ * these messages as untrusted text. A newline in a name let it forge an entire extra
+ * candidate line, shape-identical to the real ones and carrying an id no lookup
+ * produced, which the model would then pass to the next tool call. Control characters
+ * are stripped rather than escaped, and the result is capped, because these lines are
+ * read rather than parsed.
+ */
+const CONTROL_CHARS = /[\u0000-\u001F\u007F\u200B-\u200F\u2028\u2029\u202A-\u202E\u2066-\u2069]/gu;
+const MAX_NAME_IN_MESSAGE = 120;
+
+export function safeName(value: string): string {
+  const flattened = value.replace(CONTROL_CHARS, " ").replace(/\s+/g, " ").trim();
+  return flattened.length > MAX_NAME_IN_MESSAGE
+    ? `${flattened.slice(0, MAX_NAME_IN_MESSAGE)}...`
+    : flattened;
 }
 
 const VARIATION_SELECTORS = /[\u{FE00}-\u{FE0F}]/gu;
@@ -87,7 +105,7 @@ export function resolveOne<T>(
           const id = typeof rawId === "number" || typeof rawId === "string" ? rawId : undefined;
           const label = id !== undefined ? `id ${id}` : `#${index + 1}`;
           const suffix = hint && hint.length > 0 ? ` (${hint})` : "";
-          return `  ${label}: ${nameOf(item)}${suffix}`;
+          return `  ${label}: ${safeName(nameOf(item))}${suffix}`;
         }),
       );
     }
@@ -97,7 +115,7 @@ export function resolveOne<T>(
     .map((item) => ({ name: nameOf(item), distance: editDistance(normalizedQuery, normalizeName(nameOf(item))) }))
     .sort((a, b) => a.distance - b.distance)
     .slice(0, 3)
-    .map((entry) => entry.name);
+    .map((entry) => safeName(entry.name));
 
   throw new NoMatchError(query, suggestions);
 }

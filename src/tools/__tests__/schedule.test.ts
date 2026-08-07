@@ -413,17 +413,28 @@ describe("reassignChore's path choice", () => {
   });
 });
 
-describe("archiving a chore that is already archived", () => {
-  // loadChoreById falls back to the unfiltered list, which includes archived rows,
-  // so this reported a second successful archive. unarchive_chore has always scoped
-  // itself, and the asymmetry was not deliberate.
-  test("is refused rather than reported as archived a second time", async () => {
+describe("archiving a chore that is already inactive", () => {
+  // This first asserted a refusal, on the reading that isActive false means archived.
+  // It means archived OR a non-recurring chore that has been completed, and the row
+  // cannot tell them apart. Donetick archives both, so refusing told someone their
+  // just-completed one-off was "already archived" and pointed them at
+  // unarchive_chore, which returns it to the active list with no due date.
+  test("goes through, and says the chore was already out of the active lists", async () => {
     const fake = fakeService({ chores: [{ ...listRow, isActive: false }] });
 
-    await expect(archiveChore({ chore_id: 5 }, ctxFor(fake.service))).rejects.toThrow(
-      /already archived/,
-    );
-    expect(fake.calls.some((c) => c.startsWith("PUT"))).toBe(false);
+    const outcome = await archiveChore({ chore_id: 5 }, ctxFor(fake.service));
+
+    expect(outcome.kind).toBe("archived");
+    expect(outcome.message).toMatch(/already out of your active lists/);
+    expect(fake.calls).toContain("PUT /api/v1/chores/5/archive");
+  });
+
+  test("an ordinary archive says nothing extra", async () => {
+    const fake = fakeService({ chores: [{ ...listRow, isActive: true }] });
+
+    const outcome = await archiveChore({ chore_id: 5 }, ctxFor(fake.service));
+
+    expect(outcome.message).toBeUndefined();
   });
 
   test("an active chore still archives", async () => {

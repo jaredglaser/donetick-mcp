@@ -309,3 +309,53 @@ describe("a 500 on complete or skip is not proof the chore is gone", () => {
     expect(error.retryable).toBe(true);
   });
 });
+
+describe("a 5xx on a write says nothing about whether it applied", () => {
+  // Only a transport error ever set indeterminate, so no HTTP response could, and
+  // the flag's own docstring names create as the reason it exists. Donetick inserts
+  // the chore row before later steps that can fail: measured on v0.1.76, a create
+  // whose label step fails answers 500 with the row already committed. Reported as a
+  // flat failure, the obvious next move is a retry that makes a duplicate.
+  test("a 500 on a create is indeterminate", () => {
+    const err = mapHttpError({
+      status: 500,
+      body: JSON.stringify({ error: "db locked" }),
+      path: "/api/v1/chores/",
+      method: "POST",
+    });
+    expect(err.indeterminate).toBe(true);
+  });
+
+  test("a 502 on an edit is indeterminate too", () => {
+    const err = mapHttpError({ status: 502, body: "", path: "/api/v1/chores/", method: "PUT" });
+    expect(err.indeterminate).toBe(true);
+  });
+
+  test("a 500 on a read is not, since a read changes nothing", () => {
+    const err = mapHttpError({
+      status: 500,
+      body: "",
+      path: "/api/v1/chores/?includeSubtasks=true",
+      method: "GET",
+    });
+    expect(err.indeterminate).toBe(false);
+  });
+
+  test("a 4xx on a write stays determinate, since nothing was written", () => {
+    for (const status of [400, 401, 403, 404]) {
+      const err = mapHttpError({ status, body: "", path: "/api/v1/chores/", method: "PUT" });
+      expect(err.indeterminate).toBe(false);
+    }
+  });
+
+  test("the specific message for the path is preserved, not replaced", () => {
+    const err = mapHttpError({
+      status: 500,
+      body: "",
+      path: "/api/v1/chores/7/approve",
+      method: "POST",
+    });
+    expect(err.indeterminate).toBe(true);
+    expect(err.message).toMatch(/recurrence/i);
+  });
+});

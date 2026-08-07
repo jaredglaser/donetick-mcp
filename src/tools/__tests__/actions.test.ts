@@ -383,35 +383,89 @@ describe("point totals after a write that moves them", () => {
   });
 });
 
-describe("acting on an archived chore", () => {
-  // Donetick allows every one of these and says nothing. The chore is in no active
-  // list, so the advanced due date is one nobody will see.
-  const archived = { ...listRow, isActive: false } as RawChore;
+describe("a next occurrence that lands in the past", () => {
+  // The note used to state the adaptive cause unconditionally. Donetick steps from
+  // the previous due date rather than from the completion, so any chore finished more
+  // than one period late lands behind: being a day late on a daily chore is enough,
+  // and that is the common case the adaptive explanation was wrong about.
+  const past = "2026-08-01T13:00:00Z"; // before the fixed clock
 
-  test("completing one succeeds but says it is archived", async () => {
-    const fake = fakeService({ chores: [archived] });
+  test("a plain recurring chore is told it stepped from the previous due date", async () => {
+    const fake = fakeService({
+      chores: [{ ...listRow, frequencyType: "daily" }],
+      post: () => ({ ...listRow, nextDueDate: past }),
+    });
+
+    const result = await completeChore({ chore_id: 7 }, ctxFor(fake.service));
+
+    expect(result.message).toMatch(/already in the past/);
+    expect(result.message).toMatch(/steps from the previous due date/);
+    expect(result.message).not.toMatch(/adaptive/i);
+  });
+
+  test("an adaptive chore gets the adaptive explanation, which is true only there", async () => {
+    const fake = fakeService({
+      chores: [{ ...listRow, frequencyType: "adaptive" }],
+      post: () => ({ ...listRow, nextDueDate: past }),
+    });
+
+    const result = await completeChore({ chore_id: 7 }, ctxFor(fake.service));
+
+    expect(result.message).toMatch(/adaptive recurrence/i);
+    expect(result.message).toMatch(/does not recover on its own/);
+  });
+
+  test("an ordinary completion says nothing about it", async () => {
+    const fake = fakeService({
+      chores: [listRow],
+      post: () => ({ ...listRow, nextDueDate: "2026-09-01T13:00:00Z" }),
+    });
+
+    const result = await completeChore({ chore_id: 7 }, ctxFor(fake.service));
+
+    expect(result.message).not.toMatch(/in the past/);
+  });
+});
+
+describe("acting on a chore that is not in the active lists", () => {
+  // Donetick allows every one of these and says nothing. The note names both causes
+  // of isActive false, archived and completed-one-off, because the row cannot tell
+  // them apart and an earlier version claimed the first about chores in the second
+  // state.
+  const inactive = { ...listRow, isActive: false } as RawChore;
+
+  test("completing one succeeds and says it is out of the active lists", async () => {
+    const fake = fakeService({ chores: [inactive] });
 
     const result = await completeChore({ chore_id: 7 }, ctxFor(fake.service));
 
     expect(result.completed).toBe(true);
-    expect(result.message).toMatch(/archived/);
-    expect(result.message).toMatch(/unarchive_chore/);
+    expect(result.message).toMatch(/not in your active lists/);
+    expect(result.message).toMatch(/one-off that has already been completed/);
+  });
+
+  test("the note does not claim the chore was archived, which may not be true", async () => {
+    const fake = fakeService({ chores: [inactive] });
+
+    const result = await completeChore({ chore_id: 7 }, ctxFor(fake.service));
+
+    expect(result.message).not.toMatch(/unarchive_chore/);
   });
 
   test("skipping one says the same", async () => {
-    const fake = fakeService({ chores: [{ ...archived, status: 0 }] });
+    const fake = fakeService({ chores: [{ ...inactive, status: 0 }] });
 
     const result = await skipChore({ chore_id: 7 }, ctxFor(fake.service));
 
-    expect(result.message).toMatch(/archived/);
+    expect(result.message).toMatch(/not in your active lists/);
   });
 
-  test("an active chore says nothing about archiving", async () => {
+  test("an active chore says nothing about it", async () => {
     const fake = fakeService({ chores: [listRow] });
 
     const result = await completeChore({ chore_id: 7 }, ctxFor(fake.service));
 
-    expect(result.message).not.toMatch(/archived/);
+    expect(result.message).not.toMatch(/active lists/);
   });
 });
 
@@ -445,9 +499,18 @@ describe("skipChore against a timer", () => {
     await expect(skipChore({ chore_id: 7 }, ctxFor(fake.service))).resolves.toBeDefined();
   });
 
-  test("a pending-approval chore is not mistaken for a timer, since 3 is not 1 or 2", async () => {
+  test("a pending-approval chore is refused for its own reason, not the timer one", async () => {
+    // Measured on v0.1.76: skipping at status 3 drops the chore to idle, advances
+    // the due date, orphans the pending history row and pays nothing, and
+    // approve_chore then reports nothing is pending. Worse than the timer case,
+    // which is only a no-op: this destroys work someone else did. This test used to
+    // assert the skip went through.
     const fake = fakeService({ chores: [{ ...listRow, status: 3 }] });
-    await expect(skipChore({ chore_id: 7 }, ctxFor(fake.service))).resolves.toBeDefined();
+
+    await expect(skipChore({ chore_id: 7 }, ctxFor(fake.service))).rejects.toThrow(
+      /waiting on sign-off/,
+    );
+    expect(fake.calls.some((c) => c.method === "POST")).toBe(false);
   });
 });
 

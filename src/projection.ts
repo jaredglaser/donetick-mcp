@@ -108,11 +108,13 @@ function ordinal(n: number): string {
 }
 
 /**
- * Reminder offsets are carried on the wire as negative values, because Donetick adds
- * them to the due date. Rendered back the way a caller states them, as time before,
- * so what get_chore reports and what create_chore accepts are the same vocabulary.
+ * Reminder offsets are carried on the wire as signed values, because Donetick adds
+ * them to the due date: negative is before, positive is an overdue nag after, zero is
+ * at the due date. The direction is rendered rather than dropped, and the four flags
+ * come with it, so a chore with notifications genuinely configured is distinguishable
+ * from one holding the metadata-less shape that any edit silently switches off.
  */
-function summarizeNotifications(chore: RawChore): { enabled: boolean; reminders: string[] } {
+function summarizeNotifications(chore: RawChore): ProjectedChore["notifications"] {
   const raw = chore.notificationMetadata?.templates;
   const templates: Array<{ value: number; unit: string }> = Array.isArray(raw)
     ? raw.filter(
@@ -123,9 +125,27 @@ function summarizeNotifications(chore: RawChore): { enabled: boolean; reminders:
           typeof (t as { unit?: unknown }).unit === "string",
       )
     : [];
+  const meta = chore.notificationMetadata ?? {};
+  const flagged = (key: string): boolean => meta[key] === true;
+
   return {
     enabled: chore.notification === true,
-    reminders: templates.map((t) => `${Math.abs(t.value)}${t.unit}`),
+    // The sign is the whole meaning: Donetick adds the value to the due date, so
+    // negative is a reminder before, positive is an overdue nag after, and 0 is at
+    // the due date. Rendering Math.abs erased exactly the distinction this server
+    // negates offsets to get right, so an overdue nag set in the web UI read back as
+    // a reminder half an hour early.
+    reminders: templates.map((t) => {
+      if (t.value === 0) return `at the due date`;
+      return `${Math.abs(t.value)}${t.unit} ${t.value < 0 ? "before" : "after"}`;
+    }),
+    // Without these a due-date-only notification read as "enabled, nothing
+    // configured", identical to the metadata-less shape an edit silently switches
+    // off. The two need to be tellable apart, since that is what this exists for.
+    on_due_date: flagged("dueDate"),
+    before_due: flagged("predue"),
+    when_overdue: flagged("nagging"),
+    on_completion: flagged("completion"),
   };
 }
 

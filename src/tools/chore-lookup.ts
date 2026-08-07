@@ -1,4 +1,5 @@
 import type { RawChore } from "@/types";
+import { DonetickError } from "@/errors";
 import type { ToolContext } from "@/tools/context";
 
 function requireChoreId(chore_id: number | undefined): number {
@@ -60,8 +61,14 @@ export async function loadArchivedChoreById(
   try {
     return await loadFrom(chore_id, () => ctx.service.archivedChores(), "the archived chore list");
   } catch (error) {
-    // The overwhelmingly likely case is that the chore is simply not archived, and
-    // the shared message blamed deletion for a chore sitting in the active list.
+    // Only the not-found case. A DonetickError means the archived-list request itself
+    // failed, and rewriting it here would drop the invalidatesCache and indeterminate
+    // flags that guardWith and fail() read, turning a transport problem into a
+    // confident claim about the chore's state.
+    if (error instanceof DonetickError) throw error;
+
+    // Otherwise the chore is very likely just not archived, and the shared message
+    // blamed deletion for a chore sitting in the active list.
     const id = requireChoreId(chore_id);
     const active = (await ctx.service.chores()).some((chore) => chore.id === id);
     if (!active) throw error;

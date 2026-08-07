@@ -162,35 +162,48 @@ describe("summarizeFrequency", () => {
 });
 
 describe("notification settings, which used to be write-only", () => {
-  // Settable through create_chore and edit_chore and readable nowhere, so "does the
-  // trash chore have a reminder on it" had no answer, and an edit that switched them
-  // off was invisible in the result.
-  test("reports the reminders as time before the due date, not as the negative wire values", () => {
-    const out = projectChore(
-      chore({
+  const at = new Date("2026-06-15T12:00:00Z");
+  const notif = (overrides: Record<string, unknown>) =>
+    projectChore(chore(overrides), [], [], at).notifications;
+
+  test("renders the direction, because the sign is the whole meaning", () => {
+    // Donetick adds the offset to the due date: negative is a reminder before,
+    // positive is an overdue nag after. Rendering the absolute value erased exactly
+    // the distinction this server negates offsets to get right, so a nag set in the
+    // web UI read back as a reminder half an hour early.
+    expect(
+      notif({
         notification: true,
-        notificationMetadata: { dueDate: true, templates: [{ value: -30, unit: "m" }, { value: -2, unit: "h" }] },
-      }),
-      [],
-      [],
-      new Date("2026-06-15T12:00:00Z"),
-    );
-    expect(out.notifications).toEqual({ enabled: true, reminders: ["30m", "2h"] });
+        notificationMetadata: { templates: [{ value: -30, unit: "m" }, { value: 2, unit: "h" }, { value: 0, unit: "m" }] },
+      }).reminders,
+    ).toEqual(["30m before", "2h after", "at the due date"]);
   });
 
-  test("a chore with notifications off reports no reminders", () => {
-    const out = projectChore(chore({ notification: false }), [], [], new Date("2026-06-15T12:00:00Z"));
-    expect(out.notifications).toEqual({ enabled: false, reminders: [] });
+  test("reports the four flags, so a configured chore is not confused with an empty one", () => {
+    // Both of these used to project identically, and one of them is the shape any
+    // edit silently switches off, which is what this exists to expose.
+    const configured = notif({
+      notification: true,
+      notificationMetadata: { dueDate: true, predue: true },
+    });
+    const empty = notif({ notification: true, notificationMetadata: null });
+
+    expect(configured).not.toEqual(empty);
+    expect(configured.on_due_date).toBe(true);
+    expect(configured.before_due).toBe(true);
+    expect(configured.when_overdue).toBe(false);
+    expect(empty.on_due_date).toBe(false);
   });
 
-  test("enabled with no stored metadata is the shape an edit switches off", () => {
-    const out = projectChore(
-      chore({ notification: true, notificationMetadata: null }),
-      [],
-      [],
-      new Date("2026-06-15T12:00:00Z"),
-    );
-    expect(out.notifications).toEqual({ enabled: true, reminders: [] });
+  test("a chore with notifications off reports nothing set", () => {
+    expect(notif({ notification: false })).toEqual({
+      enabled: false,
+      reminders: [],
+      on_due_date: false,
+      before_due: false,
+      when_overdue: false,
+      on_completion: false,
+    });
   });
 });
 

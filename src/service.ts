@@ -9,11 +9,30 @@ interface RawMember {
   username?: string;
   displayName?: string;
   role?: string;
+  /** False for a pending join request, which this endpoint returns alongside real members. */
+  isActive?: boolean;
   points?: number;
   pointsRedeemed?: number;
 }
 
 const MEMBER_TTL_MS = 300_000;
+
+/**
+ * Every consumer below treats these as arrays and would otherwise surface a raw
+ * TypeError to the model, naming an internal property or quoting a whole arrow
+ * function. probe.ts already has this check and this wording, but it only runs after
+ * a failure, so a healthy instance that starts answering with something else never
+ * reaches it. Donetick returns [] for an empty circle, so a non-array means a proxy
+ * or a version change rather than an empty result.
+ */
+function expectArray<T>(value: unknown, what: string): T[] {
+  if (!Array.isArray(value)) {
+    throw new Error(
+      `Donetick answered the ${what} request but did not return an array. The instance may be behind a proxy that is rewriting responses.`,
+    );
+  }
+  return value as T[];
+}
 
 export class DonetickService {
   private readonly choreCache: TtlCache<RawChore[]>;
@@ -26,14 +45,20 @@ export class DonetickService {
   ) {
     const now = options.now;
     this.choreCache = new TtlCache(
-      async () => (await this.client.get(endpoints.listChores())) as RawChore[],
+      async () => expectArray<RawChore>(await this.client.get(endpoints.listChores()), "chore list"),
       options.cacheTtlMs,
       now,
     );
     this.memberCache = new TtlCache(async () => {
-      const raw = (await this.client.get(endpoints.circleMembers())) as RawMember[];
+      const raw = expectArray<RawMember>(await this.client.get(endpoints.circleMembers()), "circle members");
       const seen = new Map<number, Member>();
       for (const row of raw) {
+        // A pending join request comes back on this endpoint looking like a member.
+        // Measured on v0.1.76 with a third account awaiting approval: it was
+        // assignable, reported as the assignee, and its own account could not see
+        // the chore at all. It also sat in the point standings list_members
+        // advertises, at zero, dragging the ranking.
+        if (row.isActive === false) continue;
         if (seen.has(row.userId)) continue;
         seen.set(row.userId, {
           userId: row.userId,
@@ -47,7 +72,11 @@ export class DonetickService {
       return [...seen.values()];
     }, MEMBER_TTL_MS, now);
     this.projectCache = new TtlCache(
-      async () => ((await this.client.get(endpoints.projects())) ?? []) as Project[],
+      async () => {
+        // An empty body is a real Donetick answer for an account with no projects.
+        const raw = await this.client.get(endpoints.projects());
+        return raw === undefined || raw === null ? [] : expectArray<Project>(raw, "projects");
+      },
       MEMBER_TTL_MS,
       now,
     );

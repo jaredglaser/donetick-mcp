@@ -163,7 +163,14 @@ export interface ProjectedChore {
    * Offsets are rendered the way a caller states them, as time before the due date,
    * rather than as the negative values the wire carries.
    */
-  notifications: { enabled: boolean; reminders: string[] };
+  notifications: {
+    enabled: boolean;
+    reminders: string[];
+    on_due_date: boolean;
+    before_due: boolean;
+    when_overdue: boolean;
+    on_completion: boolean;
+  };
   last_completed_at: string | null;
   last_completed_by: string | null;
 }
