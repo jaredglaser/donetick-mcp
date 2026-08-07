@@ -9,7 +9,7 @@ import { endpoints } from "@/endpoints";
 import { loadArchivedChoreById, loadChoreById } from "@/tools/chore-lookup";
 import { resolveMember } from "@/resolve";
 import type { WriteContext } from "@/tools/write";
-import { PRIORITY_VALUE, type RawChore } from "@/types";
+import { PRIORITY_LABEL, PRIORITY_VALUE, type RawChore } from "@/types";
 
 export interface RescheduleInput {
   chore_id?: number;
@@ -42,7 +42,8 @@ export interface SetPriorityInput {
 export interface SetPriorityOutcome {
   kind: "priority_set";
   chore_id: number;
-  priority: number;
+  priority: string;
+  message: string;
 }
 
 export interface ArchiveInput {
@@ -150,7 +151,19 @@ export async function setPriority(input: SetPriorityInput, ctx: WriteContext): P
 
   await ctx.service.write(() => ctx.service.client.put(endpoints.updatePriority(existing.id), { priority }));
 
-  return { kind: "priority_set", chore_id: existing.id, priority };
+  // A P-label, not the raw integer. Every read path in this codebase reports the
+  // label, and handing back the inverted number on the one scale the repo warns
+  // about three times invites "set to priority 1" being read as lowest.
+  const label = PRIORITY_LABEL[priority] ?? String(priority);
+  return {
+    kind: "priority_set",
+    chore_id: existing.id,
+    priority: label,
+    message:
+      priority === 0
+        ? `"${existing.name}" no longer has a priority set.`
+        : `"${existing.name}" is now ${label}, where P1 is the most urgent and P4 the least.`,
+  };
 }
 
 export async function archiveChore(input: ArchiveInput, ctx: WriteContext): Promise<ArchiveOutcome> {

@@ -254,3 +254,29 @@ describe("every occurrence shape reads back as the schedule Donetick runs", () =
     expect(dow({ days: ["monday", "thursday"] })).toBe("every monday, thursday");
   });
 });
+
+describe("fields the write tools set and nothing could read back", () => {
+  test("is_private, assign_strategy and the assignee list are all projected", () => {
+    // Two recent behavioral changes act on assign_strategy, and neither was
+    // observable from a tool result. assignees matters separately: replacing the list
+    // and adding to it produced identical-looking output without it.
+    const projected = projectChore(
+      chore({
+        isPrivate: true,
+        assignStrategy: "round_robin",
+        assignees: [{ userId: 1 }, { userId: 99 }],
+      }),
+      members,
+      projects,
+      now,
+    );
+
+    expect(projected.is_private).toBe(true);
+    expect(projected.assign_strategy).toBe("round_robin");
+    expect(projected.assignees).toEqual(["Jared Glaser", "member #99 (unknown)"]);
+  });
+
+  test("a chore with nobody on it reports an empty list, not null", () => {
+    expect(projectChore(chore({ assignees: [] }), members, projects, now).assignees).toEqual([]);
+  });
+});

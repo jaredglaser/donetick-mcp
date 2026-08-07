@@ -100,6 +100,10 @@ export function projectChore(
         ? null
         : (member?.displayName ?? `member #${chore.assignedTo} (unknown)`),
     description: chore.description ?? null,
+    is_private: chore.isPrivate === true,
+    assign_strategy: chore.assignStrategy ?? null,
+    assignees: (chore.assignees ?? [])
+      .map((a) => members.find((m) => m.userId === a.userId)?.displayName ?? `member #${a.userId} (unknown)`),
     points: chore.points ?? null,
     is_rolling: chore.isRolling === true,
     labels: (chore.labelsV2 ?? []).map((label) => label.name),

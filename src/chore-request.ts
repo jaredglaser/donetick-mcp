@@ -33,7 +33,7 @@ export interface CreateInput {
   assign_strategy?: AssignStrategy;
   reschedule_from?: "due_date" | "completion_date";
   assignees?: string[];
-  project?: string;
+  project?: string | null;
   priority?: string;
   points?: number;
   subtasks?: string[];
@@ -151,8 +151,8 @@ function resolveMemberIds(names: string[] | undefined, members: Member[]): numbe
   });
 }
 
-function resolveProjectId(name: string | undefined, projects: Project[]): number | null {
-  if (name === undefined) return null;
+function resolveProjectId(name: string | null | undefined, projects: Project[]): number | null {
+  if (name === undefined || name === null) return null;
   const wanted = normalizeName(name);
   const found = projects.find((p) => normalizeName(p.name) === wanted);
   if (!found) {
@@ -376,6 +376,25 @@ function assertNoThingTrigger(existing: RawChore): void {
  * get_chore renders it as an ordinary monthly chore, so nothing else points at it.
  */
 function assertSchedulableFrequency(existing: RawChore): void {
+  const meta0 = (existing.frequencyMetadata ?? {}) as Record<string, unknown>;
+
+  // An hourly interval carrying a time reschedules to the instant it is already at
+  // from its second completion, so the chore sits permanently overdue while every
+  // completion answers 200. Carrying that forward keeps it stuck.
+  if (
+    existing.frequencyType === "interval" &&
+    meta0.unit === "hours" &&
+    typeof meta0.time === "string" &&
+    meta0.time.length > 0
+  ) {
+    throw new Error(
+      `"${existing.name}" is an hourly chore carrying a time of day, which Donetick cannot advance: ` +
+        "it resets the clock to that time before adding the hours, so the chore freezes on its " +
+        'second completion. Pass frequency: {type: "interval", every: N, unit: "hours"} with no ' +
+        "time to repair it.",
+    );
+  }
+
   if (existing.frequencyType !== "day_of_the_month") return;
   const meta = (existing.frequencyMetadata ?? {}) as Record<string, unknown>;
   const hasWeekdays = Array.isArray(meta.days) && meta.days.length > 0;
@@ -546,7 +565,15 @@ export function mergeEditRequest(existing: RawChore, input: EditInput, ctx: Buil
     // as nullable, and a ?? chain there turned "remove the points" into a silent
     // no-op that still reported success, which is worse than not offering it.
     points: input.points !== undefined ? input.points : (existing.points ?? null),
-    projectId: input.project !== undefined ? resolveProjectId(input.project, ctx.projects) : (existing.projectId ?? null),
+    // Checked against undefined so an explicit null clears it, matching points. A ??
+    // chain here made "take this out of the project" a silent no-op that reported
+    // success, which is the defect the points fix repaired on the neighbouring field.
+    projectId:
+      input.project !== undefined
+        ? input.project === null
+          ? null
+          : resolveProjectId(input.project, ctx.projects)
+        : (existing.projectId ?? null),
     isRolling,
     isPrivate: input.is_private ?? existing.isPrivate ?? false,
     requireApproval: input.require_approval ?? existing.requireApproval ?? false,

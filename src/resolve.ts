@@ -120,7 +120,7 @@ export function resolveMember<T extends { displayName: string; username: string 
     throw new Error(
       `"${name}" is not a member of this circle. Known members: ${
         members.map((m) => m.displayName).join(", ") || "none"
-      }.`,
+      }. To leave a chore with nobody on it, call edit_chore with assignees: [] and assign_strategy: "no_assignee".`,
     );
   }
   return found;

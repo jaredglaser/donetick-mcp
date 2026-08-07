@@ -876,3 +876,49 @@ describe("settings an unrelated edit must not change", () => {
     ).toBe("no_assignee");
   });
 });
+
+describe("clearing a project", () => {
+  test("null takes the chore out of its project", () => {
+    // The same defect the points fix repaired on the neighbouring field: a ?? chain
+    // made "take this out of the project" a silent no-op that reported success.
+    expect(mergeEditRequest(existing, { project: null }, ctx()).projectId).toBeNull();
+  });
+
+  test("omitting it keeps the chore where it is", () => {
+    expect(mergeEditRequest(existing, { name: "Renamed" }, ctx()).projectId).toBe(4);
+  });
+
+  test("a name still moves it", () => {
+    expect(mergeEditRequest(existing, { project: "Yard" }, ctx()).projectId).toBe(9);
+  });
+});
+
+describe("an hourly chore already carrying a time", () => {
+  const frozen = {
+    ...existing,
+    frequencyType: "interval",
+    frequency: 4,
+    frequencyMetadata: { unit: "hours", time: "1970-01-01T07:00:00-04:00", timezone: tz },
+  } as unknown as RawChore;
+
+  test("an unrelated edit is refused rather than keeping it stuck", () => {
+    // It reschedules to the instant it is already at from the second completion, so
+    // carrying the shape forward leaves it permanently overdue.
+    expect(() => mergeEditRequest(frozen, { name: "Renamed" }, ctx())).toThrow(/freezes/);
+  });
+
+  test("the repair it names is allowed through", () => {
+    expect(() =>
+      mergeEditRequest(frozen, { frequency: { type: "interval", every: 4, unit: "hours" } }, ctx()),
+    ).not.toThrow();
+  });
+
+  test("an hourly chore with no time is untouched", () => {
+    const fine = {
+      ...existing,
+      frequencyType: "interval",
+      frequencyMetadata: { unit: "hours", timezone: tz },
+    } as unknown as RawChore;
+    expect(() => mergeEditRequest(fine, { name: "Renamed" }, ctx())).not.toThrow();
+  });
+});

@@ -140,6 +140,10 @@ export interface ProjectedChore {
   description: string | null;
   points: number | null;
   is_rolling: boolean;
+  is_private: boolean;
+  assign_strategy: string | null;
+  /** The whole list, not just assigned_to: replacing it and adding to it look identical otherwise. */
+  assignees: string[];
   labels: string[];
   priority: string;
   project: string | null;

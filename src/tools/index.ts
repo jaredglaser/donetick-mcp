@@ -344,11 +344,18 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
         "List chores from Donetick with filters. Use scope=overdue for what is late, scope=due_today for what is due now, and scope=archived for chores that have been archived. Priority filters use Donetick's inverted scale where P1 is the most urgent and 'none' means unset. Returns a trimmed view; call get_chore for full detail.",
       inputSchema: {
         scope: z.enum(SCOPES).optional().describe("Which chores to include. Defaults to all."),
-        days: z.number().int().positive().optional().describe("Window for scope=due_within_days."),
+        days: z.number().int().positive().optional().describe(
+          "The window size for scope=due_within_days, and read only with that scope. Passing days " +
+            "with any other scope, or with none, changes nothing: you get the full scope you asked " +
+            "for, not an N-day window.",
+        ),
         project: z.string().optional(),
         priority: z.enum(["P1", "P2", "P3", "P4", "none"]).optional(),
         label: z.string().optional(),
-        assignee: z.string().optional().describe("A member name, or 'unassigned'."),
+        assignee: z.string().optional().describe(
+          "A member name, or 'unassigned'. There is no 'me': this server cannot resolve the caller " +
+            "to a member, so ask which member they are before filtering by person.",
+        ),
         status: z
           .enum(["idle", "in_progress", "paused", "pending_approval"])
           .optional()
@@ -504,7 +511,10 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
       description:
         "Edit an existing chore by chore_id. Every field you do not pass is preserved as it was; only the " +
         "fields you pass are changed. Pass due_date: null to clear the due date. assignees replaces the " +
-        "full assignee list, while add_assignees adds to it without dropping anyone already assigned.",
+        "full assignee list, while add_assignees adds to it without dropping anyone already assigned." +
+        "Labels cannot be changed here: Donetick's label API needs session auth an API token cannot " +
+        "provide, so a labels field is ignored and the edit still reports success. Add or remove a label " +
+        "in the Donetick web UI.",
       inputSchema: {
         chore_id: z.number().int().describe("The chore to edit."),
         name: z
@@ -526,7 +536,11 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
         reschedule_from: z.enum(["due_date", "completion_date"]).optional(),
         assignees: z.array(z.string()).optional().describe("Replaces the full assignee list."),
         add_assignees: z.array(z.string()).optional().describe("Adds to the existing assignee list."),
-        project: z.string().optional(),
+        project: z
+          .string()
+          .nullable()
+          .optional()
+          .describe("The project to move the chore into, or null to take it out of its project."),
         priority: priorityEnumSchema.optional(),
         points: z.number().nullable().optional(),
         subtasks: z
@@ -604,9 +618,12 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
     {
       name: "reassign_chore",
       description:
-        "Reassign a chore to a different member. Adding someone who is not already on the chore rewrites " +
-        "the whole chore rather than just the assignee field, since Donetick's fast assignee endpoint only " +
-        "accepts people already assigned to it.",
+        "Reassign a chore to a different member. This sets who the current occurrence belongs to and " +
+        "does not remove anyone already on it; use edit_chore with assignees to set the full list. To " +
+        "leave a chore with nobody on it, call edit_chore with assignees: [] and assign_strategy set " +
+        "to no_assignee. Adding someone not already on the chore rewrites the whole chore rather than " +
+        "just the assignee field, since Donetick's fast assignee endpoint only accepts people already " +
+        "assigned to it.",
       inputSchema: {
         chore_id: choreIdSchema,
         assignee: z.string().describe("The member's name."),
