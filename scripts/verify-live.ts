@@ -245,33 +245,91 @@ async function main(): Promise<void> {
     );
 
     await check(
-      'day_of_the_month with weekPattern "week_of_month" and occurrences [-1] round-trips',
+      "completing a recurrence schedules the date it describes, not just a round trip",
       async () => {
-        const id = await createScratchChore(
-          baseChoreBody(scoped("last-dom"), {
+        // The old check here asserted only that weekPattern and occurrences survived
+        // storage. They do: Donetick keeps frequency_meta_v2 as opaque JSON. What it
+        // could not see is that the scheduler ignores them for day_of_the_month, so
+        // the shape this server used to send produced a chore whose every completion
+        // answered 500. Only a completion reveals that.
+        //
+        // Anchored on Thu 2026-09-10, where the answers are distinguishable: the next
+        // Saturday is Sep 12, the first Saturday of the following month is Oct 3.
+        const anchor = "2026-09-10T13:00:00Z";
+        const dayOf = (value: unknown) =>
+          typeof value === "string" ? new Date(value).toISOString().slice(0, 10) : String(value);
+
+        const scheduleAfterCompleting = async (
+          label: string,
+          overrides: Partial<ChoreCreateBody>,
+        ): Promise<string> => {
+          const id = await createScratchChore(
+            baseChoreBody(scoped(label), { nextDueDate: anchor, ...overrides }),
+          );
+          const response = (await client.post(endpoints.completeChore(id), {})) as Record<string, unknown>;
+          return dayOf(response.nextDueDate);
+        };
+
+        const firstSaturday = await scheduleAfterCompleting("dow-occurrence", {
+          frequencyType: "days_of_the_week",
+          frequency: 1,
+          frequencyMetadata: {
+            days: ["saturday"],
+            weekPattern: "week_of_month",
+            occurrences: [1],
+            timezone: config.timezone,
+          },
+        });
+        if (firstSaturday !== "2026-10-03") {
+          throw new Error(
+            `days_of_the_week with occurrences [1] scheduled ${firstSaturday}, not the first Saturday 2026-10-03. buildFrequency maps "first saturday of every month" onto this type.`,
+          );
+        }
+
+        const fifteenth = await scheduleAfterCompleting("dom-daynumber", {
+          frequencyType: "day_of_the_month",
+          frequency: 15,
+          frequencyMetadata: { months: ["october"], timezone: config.timezone },
+        });
+        if (fifteenth !== "2026-10-15") {
+          throw new Error(
+            `day_of_the_month with frequency 15 scheduled ${fifteenth}, not 2026-10-15. buildFrequency puts the calendar day in frequency because of this.`,
+          );
+        }
+
+        // The shape this server used to send, kept as a live tripwire: if Donetick
+        // ever starts scheduling it, day_of_the_month grew weekday support and the
+        // guard in buildFrequency can be revisited.
+        const legacyId = await createScratchChore(
+          baseChoreBody(scoped("dom-legacy"), {
+            nextDueDate: anchor,
             frequencyType: "day_of_the_month",
             frequency: 1,
             frequencyMetadata: {
-              days: ["monday"],
+              days: ["saturday"],
               weekPattern: "week_of_month",
-              occurrences: [-1],
+              occurrences: [1],
               timezone: config.timezone,
             },
           }),
         );
-        const details = await listRowById(id);
-        const metadata = details.frequencyMetadata as Record<string, unknown> | null | undefined;
-        if (details.frequencyType !== "day_of_the_month") {
-          throw new Error(`frequencyType round-tripped as ${JSON.stringify(details.frequencyType)}, not "day_of_the_month"`);
+        let legacyRefused = false;
+        try {
+          await client.post(endpoints.completeChore(legacyId), {});
+        } catch {
+          legacyRefused = true;
         }
-        if (!metadata || metadata.weekPattern !== "week_of_month") {
-          throw new Error(`weekPattern round-tripped as ${JSON.stringify(metadata?.weekPattern)}, not "week_of_month"`);
+        if (!legacyRefused) {
+          return {
+            status: "warn",
+            detail:
+              "day_of_the_month with days and occurrences now completes, so it may have grown weekday support and buildFrequency's refusal could be relaxed",
+          };
         }
-        const occurrences = metadata.occurrences;
-        if (!Array.isArray(occurrences) || occurrences.length !== 1 || occurrences[0] !== -1) {
-          throw new Error(`occurrences round-tripped as ${JSON.stringify(occurrences)}, not [-1]`);
-        }
-        return { detail: `chore ${id}: weekPattern "week_of_month" and occurrences [-1] intact` };
+
+        return {
+          detail: "occurrences [1] gave 2026-10-03, day 15 gave 2026-10-15, weekday-shaped day_of_the_month still refuses to complete",
+        };
       },
     );
 

@@ -59,6 +59,8 @@ export interface FrequencyInput {
   unit?: FrequencyUnit;
   days?: string[];
   months?: string[];
+  /** The calendar day for day_of_the_month, 1 to 31. Donetick carries it in `frequency`. */
+  day_of_month?: number;
   week_pattern?: WeekPattern;
   occurrences?: number[];
   time?: string;
@@ -69,6 +71,8 @@ export interface FrequencyMetadata {
   unit?: FrequencyUnit;
   days?: string[];
   months?: string[];
+  /** The calendar day for day_of_the_month, 1 to 31. Donetick carries it in `frequency`. */
+  day_of_month?: number;
   weekPattern?: WeekPattern;
   occurrences?: number[];
   time?: string;
@@ -117,16 +121,13 @@ export function buildFrequency(input: FrequencyInput, timezone: string, now: Dat
       return { frequencyType: "interval", frequency: every, frequencyMetadata: metadata };
     }
 
+    // weekPattern and occurrences belong here, not on day_of_the_month. Measured on
+    // v0.1.76 against a chore due Thu 2026-09-10: plain gave the next Saturday
+    // (Sep 12), occurrences [1] gave the first Saturday of the following month
+    // (Oct 3), occurrences [-1] gave the last Saturday of the current one (Sep 26).
+    // "First Saturday of every month" is this type, not day_of_the_month.
     case "days_of_the_week": {
       metadata.days = requireDays(input.days);
-      return { frequencyType: "days_of_the_week", frequency: 1, frequencyMetadata: metadata };
-    }
-
-    case "day_of_the_month": {
-      metadata.days = requireDays(input.days);
-      if (input.months !== undefined) {
-        metadata.months = normalizeNames(input.months, MONTHS, "month");
-      }
       if (input.week_pattern !== undefined) {
         if (!WEEK_PATTERNS.includes(input.week_pattern)) {
           throw new Error(
@@ -138,7 +139,36 @@ export function buildFrequency(input: FrequencyInput, timezone: string, now: Dat
       if (input.occurrences !== undefined) {
         metadata.occurrences = input.occurrences;
       }
-      return { frequencyType: "day_of_the_month", frequency: 1, frequencyMetadata: metadata };
+      return { frequencyType: "days_of_the_week", frequency: 1, frequencyMetadata: metadata };
+    }
+
+    // A calendar day number in named months, not a weekday. Donetick reads the
+    // frequency field as the day and requires months to be non-empty; measured on
+    // v0.1.76, frequency 15 with months ["october"] scheduled the 15th, and omitting
+    // months made every completion answer 500 with the chore left unschedulable.
+    case "day_of_the_month": {
+      if (input.days !== undefined) {
+        throw new Error(
+          'day_of_the_month schedules a calendar day number, not a weekday. For "the first ' +
+            'saturday of every month" use type days_of_the_week with days: ["saturday"], ' +
+            'week_pattern: "week_of_month" and occurrences: [1].',
+        );
+      }
+      const dayOfMonth = input.day_of_month;
+      if (typeof dayOfMonth !== "number" || !Number.isInteger(dayOfMonth) || dayOfMonth < 1 || dayOfMonth > 31) {
+        throw new Error(
+          `day_of_the_month needs "day_of_month" as a whole number from 1 to 31, got ${JSON.stringify(dayOfMonth)}.`,
+        );
+      }
+      if (input.months === undefined || input.months.length === 0) {
+        throw new Error(
+          'day_of_the_month needs "months". Donetick cannot schedule one without it, and the ' +
+            "chore would be created and then fail every completion. List every month it should " +
+            "run in, or use type monthly for every month.",
+        );
+      }
+      metadata.months = normalizeNames(input.months, MONTHS, "month");
+      return { frequencyType: "day_of_the_month", frequency: dayOfMonth, frequencyMetadata: metadata };
     }
 
     case "trigger":

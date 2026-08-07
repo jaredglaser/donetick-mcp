@@ -194,24 +194,23 @@ describe("live-observed edge cases", () => {
     expect(out.subtasks).toEqual([{ name: "Rake leaves", done: false }]);
   });
 
-  test("describes 'first Saturday of every month' rather than a generic fallback", () => {
+  test("describes 'first Saturday of every month' from days_of_the_week, where it lives", () => {
+    // Measured on v0.1.76: this pattern schedules under days_of_the_week. Read off
+    // day_of_the_month it described a chore Donetick could not schedule at all.
     const out = summarizeFrequency(
       chore({
-        frequencyType: "day_of_the_month",
+        frequencyType: "days_of_the_week",
         frequencyMetadata: { weekPattern: "week_of_month", occurrences: [1], days: ["saturday"] },
       }),
     );
     expect(out).toBe("the 1st saturday of every month");
   });
 
-  test("describes an occurrence pattern even without a weekday, rather than falling back", () => {
+  test("describes day_of_the_month by its calendar day, which Donetick keeps in frequency", () => {
     const out = summarizeFrequency(
-      chore({
-        frequencyType: "day_of_the_month",
-        frequencyMetadata: { weekPattern: "week_of_month", occurrences: [3] },
-      }),
+      chore({ frequencyType: "day_of_the_month", frequency: 15, frequencyMetadata: { months: ["october"] } }),
     );
-    expect(out).toBe("the 3rd of every month");
+    expect(out).toBe("the 15th of october");
   });
 
   test("resolves no project when projectId is absent entirely, not just null", () => {

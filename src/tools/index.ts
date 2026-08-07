@@ -140,9 +140,11 @@ const frequencySchema = z.object({
     .describe(
       '"Every 3 days" is type interval with every: 3 (every is required for interval). The fixed ' +
         "types daily, weekly, monthly, and yearly always step exactly one unit and ignore any count. " +
-        'days_of_the_week repeats on specific weekdays via days. "First Saturday of every month" is ' +
-        'type day_of_the_month with days: ["saturday"] and week_pattern: "week_of_month". trigger ' +
-        "recurrence is not supported here; use the Donetick web UI for it.",
+        "days_of_the_week repeats on specific weekdays via days, and takes week_pattern with " +
+        'occurrences to pick one of them: "first saturday of every month" is days_of_the_week with ' +
+        'days: ["saturday"], week_pattern: "week_of_month", occurrences: [1], and -1 means the last. ' +
+        "day_of_the_month is a calendar day number instead, and needs day_of_month plus months. " +
+        "trigger recurrence is not supported here; use the Donetick web UI for it.",
     ),
   every: z.number().int().positive().optional().describe("Count for type interval, e.g. 3 for every 3 days."),
   unit: z.enum(FREQUENCY_UNIT_VALUES).optional().describe("Unit for type interval. Defaults to days."),
@@ -154,8 +156,23 @@ const frequencySchema = z.object({
   week_pattern: z
     .enum(WEEK_PATTERNS)
     .optional()
-    .describe("For day_of_the_month: which occurrence of the weekday in days, e.g. week_of_month."),
-  occurrences: z.array(z.number()).optional(),
+    .describe(
+      "For days_of_the_week: pick a particular occurrence of the weekday rather than every one. " +
+        "Use week_of_month with occurrences.",
+    ),
+  occurrences: z
+    .array(z.number())
+    .optional()
+    .describe(
+      "Which occurrence of the weekday, with week_pattern. 1 is the first of the month, -1 the last.",
+    ),
+  day_of_month: z
+    .number()
+    .int()
+    .min(1)
+    .max(31)
+    .optional()
+    .describe("The calendar day for day_of_the_month, 1 to 31."),
   time: z.string().optional().describe("Time of day in HH:MM 24-hour format."),
 });
 

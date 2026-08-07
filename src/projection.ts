@@ -27,18 +27,19 @@ export function summarizeFrequency(chore: RawChore): string {
     }
     case "days_of_the_week": {
       const days = meta.days ?? [];
-      return days.length > 0 ? `every ${days.join(", ")}` : "on selected days";
+      if (days.length === 0) return "on selected days";
+      // weekPattern and occurrences live on this type, not on day_of_the_month.
+      if (meta.weekPattern === "week_of_month" && meta.occurrences && meta.occurrences.length > 0) {
+        return `the ${meta.occurrences.map(ordinal).join(", ")} ${days.join("/")} of every month`;
+      }
+      return `every ${days.join(", ")}`;
     }
     case "day_of_the_month": {
+      // Donetick carries the calendar day in frequency, not in the metadata.
+      const day = chore.frequency;
       const months = meta.months ?? [];
-      const monthsPart = months.length > 0 ? ` in ${months.join(", ")}` : "";
-      if (meta.weekPattern === "week_of_month" && meta.occurrences && meta.occurrences.length > 0) {
-        const ordinals = meta.occurrences.map(ordinal).join(", ");
-        const days = meta.days ?? [];
-        const dayPart = days.length > 0 ? ` ${days.join("/")}` : "";
-        return `the ${ordinals}${dayPart} of every month${monthsPart}`;
-      }
-      return months.length > 0 ? `monthly in ${months.join(", ")}` : "monthly on a set day";
+      const monthsPart = months.length > 0 ? months.join(", ") : "every month";
+      return typeof day === "number" ? `the ${ordinal(day)} of ${monthsPart}` : `monthly in ${monthsPart}`;
     }
     case "adaptive":
       return "adaptive, learned from history";

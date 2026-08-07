@@ -69,21 +69,60 @@ describe("buildFrequency", () => {
     );
   });
 
-  test("first saturday of every month carries weekPattern and occurrences", () => {
+  test("first saturday of every month is days_of_the_week, not day_of_the_month", () => {
+    // Measured on v0.1.76 against a chore due Thu 2026-09-10: days_of_the_week with
+    // occurrences [1] scheduled Sat Oct 3, the first Saturday of the next month,
+    // while the plain form scheduled Sat Sep 12. day_of_the_month shaped this way
+    // produced a chore whose every completion answered 500.
     const out = buildFrequency(
-      { type: "day_of_the_month", days: ["saturday"], week_pattern: "week_of_month", occurrences: [1] },
+      { type: "days_of_the_week", days: ["saturday"], week_pattern: "week_of_month", occurrences: [1] },
       tz,
       now,
     );
-    expect(out.frequencyType).toBe("day_of_the_month");
+    expect(out.frequencyType).toBe("days_of_the_week");
     expect(out.frequencyMetadata.weekPattern).toBe("week_of_month");
     expect(out.frequencyMetadata.occurrences).toEqual([1]);
     expect(out.frequencyMetadata.days).toEqual(["saturday"]);
   });
 
-  test("day_of_the_month carries a month list when given", () => {
+  test("day_of_the_month carries the day number in frequency, with months", () => {
+    // Measured: frequency 15 with months ["october"] scheduled 2026-10-15.
     const out = buildFrequency(
-      { type: "day_of_the_month", days: ["monday"], months: ["january", "july"] },
+      { type: "day_of_the_month", day_of_month: 15, months: ["october"] },
+      tz,
+      now,
+    );
+    expect(out.frequencyType).toBe("day_of_the_month");
+    expect(out.frequency).toBe(15);
+    expect(out.frequencyMetadata.months).toEqual(["october"]);
+  });
+
+  test("day_of_the_month refuses a weekday and points at the type that handles it", () => {
+    expect(() =>
+      buildFrequency({ type: "day_of_the_month", days: ["saturday"] }, tz, now),
+    ).toThrow(/days_of_the_week/);
+  });
+
+  test("day_of_the_month refuses to omit months, which makes the chore unschedulable", () => {
+    // Measured: omitting months creates the chore and then answers 500 on every
+    // completion, permanently.
+    expect(() => buildFrequency({ type: "day_of_the_month", day_of_month: 15 }, tz, now)).toThrow(
+      /months/,
+    );
+  });
+
+  test("day_of_the_month refuses a day outside 1 to 31", () => {
+    expect(() =>
+      buildFrequency({ type: "day_of_the_month", day_of_month: 0, months: ["october"] }, tz, now),
+    ).toThrow(/1 to 31/);
+    expect(() =>
+      buildFrequency({ type: "day_of_the_month", day_of_month: 32, months: ["october"] }, tz, now),
+    ).toThrow(/1 to 31/);
+  });
+
+  test("day_of_the_month carries its month list", () => {
+    const out = buildFrequency(
+      { type: "day_of_the_month", day_of_month: 3, months: ["january", "july"] },
       tz,
       now,
     );
@@ -139,7 +178,7 @@ describe("case-insensitive day and month names", () => {
 
   test("month names are lowercased regardless of input case", () => {
     const out = buildFrequency(
-      { type: "day_of_the_month", days: ["Saturday"], months: ["January", "JULY"] },
+      { type: "day_of_the_month", day_of_month: 3, months: ["January", "JULY"] },
       tz,
       now,
     );
@@ -173,7 +212,7 @@ describe("occurrences", () => {
     // set is the backend's to define, not this module's.
     const out = buildFrequency(
       {
-        type: "day_of_the_month",
+        type: "days_of_the_week",
         days: ["saturday"],
         week_pattern: "week_of_month",
         occurrences: [-1],
@@ -190,7 +229,7 @@ describe("week_pattern validation", () => {
     expect(() =>
       buildFrequency(
         {
-          type: "day_of_the_month",
+          type: "days_of_the_week",
           days: ["monday"],
           week_pattern: "fortnightly" as WeekPattern,
         },
@@ -232,7 +271,7 @@ describe("exhaustiveness across all eleven types", () => {
       case "days_of_the_week":
         return { type, days: ["monday"] };
       case "day_of_the_month":
-        return { type, days: ["monday"] };
+        return { type, day_of_month: 15, months: ["october"] };
       default:
         return { type };
     }
