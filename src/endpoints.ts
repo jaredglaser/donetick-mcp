@@ -28,6 +28,14 @@ export const endpoints = {
 } as const;
 
 /**
+ * The path suffix a builder produces, so the behavioral sets below stay tied to the
+ * builders above them. As string literals they had no such link, and renaming an
+ * endpoint would leave a set stale and silently degrade three behaviors at once: the
+ * error message, the retry flag, and the cache invalidation that hangs off it.
+ */
+const suffixOf = (build: (id: number) => string): string => build(0).slice(`${CHORES_BASE}/0`.length);
+
+/**
  * Write paths scoped to a single chore id whose handlers answer a missing chore with
  * 500 rather than 404, so a 500 here is not an instance fault. /do and /skip carry a
  * second cause and are matched by SCHEDULING_WRITE_PATHS first; for the rest a 500
@@ -35,16 +43,16 @@ export const endpoints = {
  * absent: it is the one id-scoped write that does return 404.
  */
 export const ID_SCOPED_WRITE_PATHS = [
-  "/do",
-  "/skip",
-  "/undo",
-  "/approve",
-  "/reject",
-  "/dueDate",
-  "/assignee",
-  "/priority",
-  "/subtask",
-] as const;
+  endpoints.completeChore,
+  endpoints.skipChore,
+  endpoints.undoChore,
+  endpoints.approveChore,
+  endpoints.rejectChore,
+  endpoints.updateDueDate,
+  endpoints.updateAssignee,
+  endpoints.updatePriority,
+  endpoints.updateSubtask,
+].map(suffixOf);
 
 /**
  * Archive and unarchive are id-scoped writes too, but they never look the chore up:
@@ -53,7 +61,7 @@ export const ID_SCOPED_WRITE_PATHS = [
  * surface as 500, so "the chore is gone" is only half the story, and it is the wrong
  * half when the caller has just read the chore out of the list.
  */
-export const CREATOR_ONLY_WRITE_PATHS = ["/archive", "/unarchive"] as const;
+export const CREATOR_ONLY_WRITE_PATHS = [endpoints.archiveChore, endpoints.unarchiveChore].map(suffixOf);
 
 /**
  * The two writes that also fail with a 500 when Donetick cannot compute the next
@@ -61,7 +69,7 @@ export const CREATOR_ONLY_WRITE_PATHS = ["/archive", "/unarchive"] as const;
  * v0.1.76: a day_of_the_month chore with no months, or one shaped as a weekday
  * pattern, is created happily and then answers 500 on every completion.
  */
-export const SCHEDULING_WRITE_PATHS = ["/do", "/skip"] as const;
+export const SCHEDULING_WRITE_PATHS = [endpoints.completeChore, endpoints.skipChore].map(suffixOf);
 
 export function isSchedulingWrite(path: string, method: string): boolean {
   return method !== "GET" && SCHEDULING_WRITE_PATHS.some((suffix) => path.endsWith(suffix));

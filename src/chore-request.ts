@@ -1,6 +1,6 @@
 import { parseDueDate } from "@/dates";
 import { buildFrequency, type FrequencyInput } from "@/frequency";
-import { normalizeName } from "@/resolve";
+import { findMember, normalizeName } from "@/resolve";
 import { PRIORITY_VALUE, type Member, type Project, type RawChore, type RawSubTask } from "@/types";
 
 const ASSIGN_STRATEGIES_TUPLE = [
@@ -138,10 +138,7 @@ export function concurrencyToken(existing: RawChore, now: Date): string {
 function resolveMemberIds(names: string[] | undefined, members: Member[]): number[] {
   if (names === undefined) return [];
   return names.map((name) => {
-    const wanted = normalizeName(name);
-    const found = members.find(
-      (m) => normalizeName(m.displayName) === wanted || normalizeName(m.username) === wanted,
-    );
+    const found = findMember(name, members);
     if (!found) {
       throw new Error(
         `"${name}" is not a member of this circle. Known members: ${members.map((m) => m.displayName).join(", ") || "none"}.`,

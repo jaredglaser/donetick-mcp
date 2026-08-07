@@ -1,6 +1,6 @@
 import { projectChore } from "@/projection";
 import { bucket, isValidTimezone, type Scope } from "@/time";
-import { normalizeName } from "@/resolve";
+import { findMember, normalizeName } from "@/resolve";
 import { CHORE_STATUS, PRIORITY_LABEL, type Member, type ProjectedChore, type Project, type RawChore } from "@/types";
 
 export interface ListArgs {
@@ -79,9 +79,7 @@ export function listChores(args: ListArgs, ctx: ListContext): ListResult {
     if (wanted === "unassigned") {
       rows = rows.filter((chore) => chore.assignedTo === null);
     } else {
-      const member = ctx.members.find(
-        (m) => normalizeName(m.displayName) === wanted || normalizeName(m.username) === wanted,
-      );
+      const member = findMember(args.assignee, ctx.members);
       if (member === undefined) {
         throw new Error(
           `"${args.assignee}" is not a member of this circle.${describeKnown(

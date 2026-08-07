@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { AmbiguousMatchError, NoMatchError, normalizeName, resolveOne, resolveMember } from "@/resolve";
+import { AmbiguousMatchError, NoMatchError, findMember, normalizeName, resolveMember, resolveOne } from "@/resolve";
 
 interface Item {
   id: number;
@@ -230,3 +230,30 @@ describe("resolveMember", () => {
   });
 });
 
+
+describe("one matcher, so the read and write paths cannot disagree", () => {
+  const people = [
+    { userId: 1, username: "jared", displayName: "Jared Glaser" },
+    { userId: 2, username: "sam", displayName: "Sam" },
+  ];
+
+  test("findMember matches a display name, a username, and either case", () => {
+    // The predicate lived in three copies while two comments claimed it had been
+    // consolidated. Any change to what counts as a match would have reached
+    // complete_chore and reassign_chore while missing create_chore's assignee list
+    // and list_chores' filter, which is the bug those comments said was fixed.
+    expect(findMember("Sam", people)?.userId).toBe(2);
+    expect(findMember("sam", people)?.userId).toBe(2);
+    expect(findMember("JARED", people)?.userId).toBe(1);
+    expect(findMember("jared", people)?.userId).toBe(1);
+  });
+
+  test("a name nobody has returns undefined rather than throwing", () => {
+    expect(findMember("Nobody", people)).toBeUndefined();
+  });
+
+  test("resolveMember is findMember plus the error", () => {
+    expect(resolveMember("Sam", people).userId).toBe(2);
+    expect(() => resolveMember("Nobody", people)).toThrow(/not a member/);
+  });
+});

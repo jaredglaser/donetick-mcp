@@ -105,17 +105,26 @@ export function resolveOne<T>(
 /**
  * Member lookup is case and whitespace insensitive, matching either the display
  * name or the username. Shared so every tool that takes a person's name agrees on
- * what counts as a match; an exact-equality copy in one tool made "sam" work in
- * reassign_chore and fail in complete_chore.
+ * what counts as a match. findMember is the single predicate; an exact-equality copy
+ * in one tool once made "sam" work in reassign_chore and fail in complete_chore, and
+ * three copies of the normalized version later drifted the same way waiting to
+ * happen.
  */
+export function findMember<T extends { displayName: string; username: string }>(
+  name: string,
+  members: T[],
+): T | undefined {
+  const wanted = normalizeName(name);
+  return members.find(
+    (m) => normalizeName(m.displayName) === wanted || normalizeName(m.username) === wanted,
+  );
+}
+
 export function resolveMember<T extends { displayName: string; username: string }>(
   name: string,
   members: T[],
 ): T {
-  const wanted = normalizeName(name);
-  const found = members.find(
-    (m) => normalizeName(m.displayName) === wanted || normalizeName(m.username) === wanted,
-  );
+  const found = findMember(name, members);
   if (!found) {
     throw new Error(
       `"${name}" is not a member of this circle. Known members: ${
