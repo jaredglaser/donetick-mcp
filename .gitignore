@@ -2,3 +2,7 @@ node_modules/
 dist/
 .env*
 !.env.example
+
+# Credentials minted for the disposable Donetick container. Throwaway, but a
+# token all the same, and the directory is recreated by `bun run verify:up`.
+.donetick-local/

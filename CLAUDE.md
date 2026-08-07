@@ -35,8 +35,14 @@ bun --watch src/index.ts # start with auto-restart on file change (bun run dev)
 bun run typecheck        # tsc --noEmit
 bun test --isolate       # run the test suite (also: bun run test)
 bun run test:watch       # run the test suite in watch mode
-bun run verify:live      # bun scripts/verify-live.ts, live check against a real instance
+bun run verify:live      # start the pinned Donetick container and check the wire contract against it
+bun run verify:up        # start and bootstrap that container without running any check
+bun run verify:down      # destroy it
 ```
+
+`verify:live` needs Docker and never touches a running instance. It reads no
+credentials from the environment, so a populated `.env` cannot redirect it. Aim it
+at a different Donetick version with `DONETICK_IMAGE_TAG=vX.Y.Z bun run verify:live`.
 
 ## Layout
 
@@ -57,6 +63,8 @@ bun run verify:live      # bun scripts/verify-live.ts, live check against a real
 - `src/probe.ts` decides whether Donetick is reachable and is actually Donetick. A failure is re-checked on the next tool call, never latched: the server is started at login alongside the containers it talks to, so losing that race is the likeliest way it ever fails.
 - `src/confirm.ts` holds the elicitation key and the pure decision that turns an elicitation response into consent, refusal, or "not asked yet". It is separate from `src/index.ts` only so it can be tested, since the suite cannot import the entry point.
 - `src/tools/read.ts`, `write.ts`, `schedule.ts`, `actions.ts` and `subtasks.ts` implement the twenty tools; `src/tools/chore-lookup.ts` is the single loader they all resolve a chore id through; `src/tools/index.ts` declares them as plain data.
+- `compose.verify.yaml` pins the Donetick version the wire contract is checked against, and `scripts/local-instance.ts` starts it and bootstraps a throwaway user and API token over plain HTTP. `scripts/verify-live.ts` runs the checks; `verify-up.ts` and `verify-down.ts` are the container's lifecycle on its own. The container's `TZ` is `America/New_York` rather than UTC because one check asserts undo fails if and only if the server stores timestamps behind UTC; UTC would satisfy it the other way round and stop guarding `explainUndoFailure`.
+- `.github/workflows/ci.yml` runs the type check, the unit suite, and `verify:live` on push and pull request.
 
 ## Design spec
 

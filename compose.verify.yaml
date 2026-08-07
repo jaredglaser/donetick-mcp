@@ -1,0 +1,42 @@
+# The disposable Donetick that `bun run verify:live` checks against.
+#
+# Pinned to an exact tag on purpose: verify-live re-establishes the wire facts of
+# one Donetick version, so the version has to be named. Checking against a newer
+# Donetick means bumping DONETICK_IMAGE_TAG, not aiming the script at a running
+# instance. Brought up by scripts/local-instance.ts, which supplies
+# DONETICK_JWT_SECRET; `docker compose -f compose.verify.yaml up -d` on its own
+# would start a container that panics on a weak secret.
+name: donetick-mcp-verify
+
+services:
+  donetick:
+    image: donetick/donetick:${DONETICK_IMAGE_TAG:-v0.1.76}
+    # 2021 is the port the selfhosted config listens on and the port the image
+    # exposes. The 8000 in Donetick's own docker-compose.yaml is stale.
+    ports:
+      - "127.0.0.1:${DONETICK_LOCAL_PORT:-12021}:2021"
+    environment:
+      # selfhosted is the only bundled config with sqlite, open signup, and no
+      # donetick.com behavior. It also turns on the JWT secret check below.
+      DT_ENV: selfhosted
+      # Donetick refuses to start on a secret shorter than 32 characters or one
+      # from its weak list, which the shipped selfhosted.yaml value is on.
+      DT_JWT_SECRET: ${DONETICK_JWT_SECRET:-}
+      # The default 300 requests per minute is below what one verify-live run
+      # sends. Rate limiting is not a wire fact under test, so it is lifted.
+      DT_SERVER_RATE_LIMIT: "100000"
+      # Not cosmetic, and not UTC. verify-live asserts that undo fails if and
+      # only if the server stores timestamps behind UTC, which is true of the
+      # instance this server is written for. On a UTC container that check would
+      # pass for the wrong reason and stop guarding explainUndoFailure.
+      TZ: America/New_York
+    # No volume anywhere: the sqlite file lives in the container's writable layer
+    # so `docker compose down` destroys the data, and nothing lands in the repo.
+    healthcheck:
+      # The image's own HEALTHCHECK probes /health, which v0.1.76 does not route.
+      # The real endpoint is /api/v1/health.
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:2021/api/v1/health"]
+      interval: 2s
+      timeout: 3s
+      retries: 45
+      start_period: 2s

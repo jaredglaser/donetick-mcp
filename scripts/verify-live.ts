@@ -1,26 +1,36 @@
 /**
- * Live wire-contract check against a real Donetick instance.
+ * Live wire-contract check against a real Donetick.
  *
  * The unit suite stubs fetch, so it proves this codebase is self-consistent, not
  * that Donetick's undocumented /api/v1 still behaves the way it was read. Every
  * fact this server depends on (field names, which view carries which field, what
  * a write requires, what a response echoes) was established by probing a live
  * instance, and several were wrong on first read. This script re-establishes
- * those facts after any Donetick upgrade and is the regression net for it.
+ * those facts against a named Donetick version and is the regression net for an
+ * upgrade.
  *
- * Not part of `bun test`: it needs a live instance and real credentials, and it
- * writes and deletes scratch chores. Run it deliberately with `bun run verify:live`.
+ * The instance is a container this script starts, pinned by tag in
+ * compose.verify.yaml, never a running deployment: these checks create, edit and
+ * delete chores, and doing that to anyone's data is not a risk worth taking for a
+ * test. There is deliberately no way to aim it elsewhere. Checking a newer
+ * Donetick means bumping DONETICK_IMAGE_TAG, which is also what makes the answer
+ * reproducible. It reads no credentials from the environment, so a populated .env
+ * cannot redirect it.
+ *
+ * Not part of `bun test`: it needs Docker and takes a minute. Run it deliberately
+ * with `bun run verify:live`.
  *
  * This script is not the server: it never speaks JSON-RPC and stdout is not a
  * transport here, so the "console.error only" rule in CLAUDE.md (stdout would
  * corrupt the protocol stream) does not apply. It prints its report to stdout on
- * purpose, so it can be piped or redirected like any other CLI report.
+ * purpose, so it can be piped or redirected like any other CLI report. Progress
+ * from the container bootstrap goes to stderr to keep that report clean.
  */
 
 import { DonetickClient } from "@/client";
 import { DonetickService } from "@/service";
 import { editChore } from "@/tools/write";
-import { parseConfig } from "@/config";
+import { ensureLocalInstance } from "./local-instance";
 import { endpoints } from "@/endpoints";
 import { DonetickError } from "@/errors";
 import { concurrencyToken, mergeEditRequest } from "@/chore-request";
@@ -76,11 +86,12 @@ interface ChoreCreateBody {
 }
 
 async function main(): Promise<void> {
-  const config = parseConfig(Bun.env);
+  const instance = await ensureLocalInstance();
+  const timezone = instance.timezone;
   const client = new DonetickClient({
-    baseUrl: config.baseUrl,
-    token: config.token,
-    timeoutMs: config.timeoutMs,
+    baseUrl: instance.baseUrl,
+    token: instance.token,
+    timeoutMs: 15_000,
   });
 
   const runPrefix = `zzverify-live-${Date.now()}`;
@@ -95,7 +106,7 @@ async function main(): Promise<void> {
       nextDueDate: new Date().toISOString(),
       frequencyType: "once",
       frequency: 1,
-      frequencyMetadata: { timezone: config.timezone },
+      frequencyMetadata: { timezone: timezone },
       assignStrategy: "no_assignee",
       assignedTo: null,
       assignees: [],
@@ -226,7 +237,7 @@ async function main(): Promise<void> {
           baseChoreBody(scoped("interval"), {
             frequencyType: "interval",
             frequency: 3,
-            frequencyMetadata: { unit: "days", timezone: config.timezone },
+            frequencyMetadata: { unit: "days", timezone: timezone },
           }),
         );
         const details = await listRowById(id);
@@ -278,7 +289,7 @@ async function main(): Promise<void> {
             days: ["saturday"],
             weekPattern: "week_of_month",
             occurrences: [1],
-            timezone: config.timezone,
+            timezone: timezone,
           },
         });
         if (firstSaturday !== "2026-10-03") {
@@ -290,7 +301,7 @@ async function main(): Promise<void> {
         const intervalNext = await scheduleAfterCompleting("interval-behaviour", {
           frequencyType: "interval",
           frequency: 3,
-          frequencyMetadata: { unit: "days", timezone: config.timezone },
+          frequencyMetadata: { unit: "days", timezone: timezone },
         });
         if (intervalNext !== "2026-09-13") {
           throw new Error(
@@ -301,7 +312,7 @@ async function main(): Promise<void> {
         const fifteenth = await scheduleAfterCompleting("dom-daynumber", {
           frequencyType: "day_of_the_month",
           frequency: 15,
-          frequencyMetadata: { months: ["october"], timezone: config.timezone },
+          frequencyMetadata: { months: ["october"], timezone: timezone },
         });
         if (fifteenth !== "2026-10-15") {
           throw new Error(
@@ -321,7 +332,7 @@ async function main(): Promise<void> {
               days: ["saturday"],
               weekPattern: "week_of_month",
               occurrences: [1],
-              timezone: config.timezone,
+              timezone: timezone,
             },
           }),
         );
@@ -355,7 +366,7 @@ async function main(): Promise<void> {
               days: ["saturday"],
               weekPattern: "week_of_quarter",
               occurrences: [1],
-              timezone: config.timezone,
+              timezone: timezone,
             },
           },
           quarterAnchor,
@@ -369,7 +380,7 @@ async function main(): Promise<void> {
               days: ["saturday"],
               weekPattern: "week_of_month",
               occurrences: [1],
-              timezone: config.timezone,
+              timezone: timezone,
             },
           },
           quarterAnchor,
@@ -381,7 +392,7 @@ async function main(): Promise<void> {
             days: ["saturday"],
             weekPattern: "week_of_month",
             occurrences: [1, 3],
-            timezone: config.timezone,
+            timezone: timezone,
           },
         });
         if (quarterly !== "2027-01-02" || monthlyFromSameAnchor !== "2026-12-05") {
@@ -465,7 +476,7 @@ async function main(): Promise<void> {
           baseChoreBody(scoped("edit-preserve"), {
             frequencyType: "interval",
             frequency: 3,
-            frequencyMetadata: { unit: "days", time: "", timezone: config.timezone },
+            frequencyMetadata: { unit: "days", time: "", timezone: timezone },
             // Deliberately left without a description, which is both the default and
             // the case that used to 502. Giving this chore one is what let the crash
             // hide behind a passing check.
@@ -501,7 +512,7 @@ async function main(): Promise<void> {
         const body = mergeEditRequest(
           before,
           { name: `${scoped("edit-preserve")}-renamed` },
-          { members, projects, now: new Date(), timezone: config.timezone },
+          { members, projects, now: new Date(), timezone: timezone },
         );
         await client.put(endpoints.editChore(), body);
 
@@ -564,7 +575,7 @@ async function main(): Promise<void> {
       const body = mergeEditRequest(
         row,
         { name: scoped("null-desc-renamed") },
-        { members: [], projects: [], now: new Date(), timezone: config.timezone },
+        { members: [], projects: [], now: new Date(), timezone: timezone },
       ) as unknown as Record<string, unknown>;
 
       body.description = null;
@@ -599,7 +610,7 @@ async function main(): Promise<void> {
       const id = await createScratchChore(baseChoreBody(scoped("cleardue"), { frequencyType: "daily" }));
       const row = (await listRowById(id)) as unknown as RawChore;
       await client.put(endpoints.editChore(), {
-        ...mergeEditRequest(row, {}, { members: [], projects: [], now: new Date(), timezone: config.timezone }),
+        ...mergeEditRequest(row, {}, { members: [], projects: [], now: new Date(), timezone: timezone }),
         nextDueDate: null,
       });
       const afterFullEdit = (await listRowById(id)) as unknown as RawChore;
@@ -626,7 +637,7 @@ async function main(): Promise<void> {
       // re-reads the row between the two writes, which is exactly the step the
       // production code was missing, so it could not have caught the stale token.
       const service = new DonetickService(client, { cacheTtlMs: 0 });
-      const ctx = { service, timezone: config.timezone, now: () => new Date() };
+      const ctx = { service, timezone: timezone, now: () => new Date() };
       const id = await createScratchChore(
         baseChoreBody(scoped("edit-clear"), { frequencyType: "daily", priority: 3 }),
       );
@@ -658,7 +669,7 @@ async function main(): Promise<void> {
       // the HH:MM this server used to send was refused on every create that set one.
       const withClock = {
         frequencyType: "days_of_the_week",
-        frequencyMetadata: { days: ["monday"], time: "1970-01-01T09:00:00-05:00", timezone: config.timezone },
+        frequencyMetadata: { days: ["monday"], time: "1970-01-01T09:00:00-05:00", timezone: timezone },
       };
       const id = await createScratchChore(baseChoreBody(scoped("time-rfc"), withClock));
       const row = (await listRowById(id)) as unknown as RawChore;
@@ -670,7 +681,7 @@ async function main(): Promise<void> {
           endpoints.createChore(),
           baseChoreBody(scoped("time-hhmm"), {
             frequencyType: "days_of_the_week",
-            frequencyMetadata: { days: ["monday"], time: "09:00", timezone: config.timezone },
+            frequencyMetadata: { days: ["monday"], time: "09:00", timezone: timezone },
           }),
         );
         createdChoreIds.push(createdIdOf(bad));
@@ -752,7 +763,7 @@ async function main(): Promise<void> {
           members: [],
           projects: [],
           now: new Date(),
-          timezone: config.timezone,
+          timezone: timezone,
         }),
       );
       const after = (await listRowById(id)) as unknown as RawChore;
@@ -821,7 +832,7 @@ async function main(): Promise<void> {
           frequencyMetadata: {
             unit: "hours",
             time: "1970-01-01T09:00:00-04:00",
-            timezone: config.timezone,
+            timezone: timezone,
           },
         }),
       );

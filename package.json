@@ -13,7 +13,9 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test --isolate",
     "test:watch": "bun test --isolate --watch",
-    "verify:live": "bun scripts/verify-live.ts"
+    "verify:live": "bun scripts/verify-live.ts",
+    "verify:up": "bun scripts/verify-up.ts",
+    "verify:down": "bun scripts/verify-down.ts"
   },
   "dependencies": {
     "@js-temporal/polyfill": "0.5.1",

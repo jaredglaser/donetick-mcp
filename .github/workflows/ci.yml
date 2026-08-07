@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - run: bun install --frozen-lockfile
+
+      - run: bun run typecheck
+
+      - run: bun test --isolate
+
+      # Starts the pinned Donetick from compose.verify.yaml, signs a throwaway
+      # user up, mints its token, and checks the wire contract against it. No
+      # secret is configured for this job on purpose: the script reads no
+      # credentials from the environment and can only reach the container it
+      # started itself.
+      - run: bun run verify:live
+
+      - name: Donetick container logs
+        if: failure()
+        run: docker compose --file compose.verify.yaml logs --no-color

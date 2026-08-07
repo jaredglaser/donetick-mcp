@@ -112,7 +112,7 @@ Add an entry to your MCP configuration, using an absolute path to `src/index.ts`
 
 This server calls Donetick's internal `/api/v1` routes rather than the documented `/eapi/v1` external API. The external API's create endpoint accepts a five-field `ChoreLiteReq` body and hardcodes `frequencyType` to `once`, so it has no way to create a recurring chore. The internal routes accept the same `secretkey` API token through Donetick's `MultiAuthMiddleware`, so no additional credential is needed.
 
-The tradeoff is that `/api/v1` is undocumented, and Donetick is on a beta version line where these routes can change without notice. This is mitigated by keeping every path this server calls in one place, `src/endpoints.ts`, and by a live verification script against a real instance.
+The tradeoff is that `/api/v1` is undocumented, and Donetick is on a beta version line where these routes can change without notice. This is mitigated by keeping every path this server calls in one place, `src/endpoints.ts`, and by a verification script that checks all of them against a Donetick container pinned to a known version.
 
 All 20 tools verified against Donetick `v0.1.76` (commit `d4eca08`), on MCP protocol revision
 `2026-07-28`. Check your own instance with `curl -s https://your-host/health`, which
@@ -123,17 +123,38 @@ rather than an error. The startup probe checks the response shape for this reaso
 ## Checking the API contract
 
 This server targets Donetick's undocumented internal API, so the unit tests prove
-the code is self-consistent, not that Donetick still behaves as it was read. After a
-Donetick upgrade, run:
+the code is self-consistent, not that Donetick still behaves as it was read. One
+command covers the rest:
 
 ```bash
 bun run verify:live
 ```
 
-It exercises 29 contract facts against a real instance, creates scratch chores with a
-run-scoped name prefix, and deletes them in a `finally` so a mid-run failure leaves
-nothing behind. It exits non-zero if any check fails, and distinguishes a warning
+It needs Docker and nothing else. It starts a Donetick container pinned to the tag
+in `compose.verify.yaml`, signs a throwaway user up over plain HTTP, mints that
+user's API token, and exercises 29 contract facts against it. Scratch chores carry
+a run-scoped name prefix and are deleted in a `finally`, so a mid-run failure
+leaves nothing behind. It exits non-zero if any check fails, and distinguishes a warning
 (something changed but nothing is broken) from a failure.
+
+It never talks to a running instance, and reads no credentials from the
+environment, so a populated `.env` cannot redirect it. Checking a newer Donetick
+means pointing it at a newer container:
+
+```bash
+DONETICK_IMAGE_TAG=v0.1.77 bun run verify:live
+```
+
+The container holds its database in its own writable layer, so nothing persists
+and nothing is written into the working tree. `bun run verify:up` brings it up and
+bootstraps it without running any check, which is worth doing once if several runs
+follow; `bun run verify:down` destroys it. The same three commands run in CI on
+every push and pull request, along with the type check and the unit suite.
+
+The container's timezone is `America/New_York` rather than UTC on purpose. One
+check asserts that `undo_chore` fails if and only if the server stores timestamps
+behind UTC; on a UTC container it would pass for the opposite reason and stop
+guarding the diagnosis the tool reports.
 
 ## Known limitations
 
@@ -149,7 +170,7 @@ These were verified against a live Donetick instance, not assumed from its sourc
 
 - **A chore driven by a Donetick Thing cannot be edited here.** Donetick drops the Thing association on every edit and restores it only for a request naming the Thing, which this server cannot build, so `edit_chore` refuses rather than severing the link silently.
 - **A completion window requires a due date**, and so does an adaptive chore. Donetick reads the due date without checking whether it is there, so a chore with a completion window can never be completed and an adaptive one can never be skipped.
-- **`undo_chore` does not work on this instance.** Donetick answers "no recent action found" immediately after both a completion and a skip, well inside its own five-minute window. Its handler accepts either action, so the refusal is not skip-specific. `verify:live` records the behavior rather than asserting a contract, and warns while it stays this way.
+- **`undo_chore` does not work on this instance.** Donetick answers "no recent action found" immediately after both a completion and a skip, well inside its own five-minute window. Its handler accepts either action, so the refusal is not skip-specific. The cause is a string comparison: `created_at` is written in the server's own UTC offset while the cutoff is built in UTC, so on a server behind UTC nothing is ever recent enough. `verify:live` asserts exactly that, failing if undo starts working without the offset changing, or stops working when it has not.
 - **A time of day applies to three recurrence types only.** Donetick's scheduler reads `frequency.time` for `interval`, `days_of_the_week` and `day_of_the_month`, and for an hourly interval reading it freezes the chore: the clock is reset to that time before the hours are added, so from the second completion it reschedules to where it already is. Both cases are refused at build time; set the hour through `due_date` instead, which every type honors.
 - **Labels are read-only.** `/api/v1/labels` requires JWT session auth, which an API token cannot provide, so this server cannot list all labels that exist in the circle. Labels already attached to a chore are readable and filterable through `list_chores` and `get_chore`. A label attached to nothing is invisible to this server.
 - **Deleting a chore is creator-only.** Donetick's delete handler compares the chore's `CreatedBy` field directly and never checks edit permission, so a circle admin cannot delete a chore they did not create, even though they can edit one.
