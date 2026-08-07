@@ -489,3 +489,14 @@ describe("a time of day only where Donetick reads one", () => {
     ).not.toThrow();
   });
 });
+
+describe("interval's unit default, which two places have to agree about", () => {
+  test("an interval with no unit takes a time, because it defaults to days", () => {
+    // The hourly gate and the interval branch each default the unit independently.
+    // Only one of the two defaults was pinned, so flipping the gate's to "hours"
+    // would refuse a schedule the other builds happily.
+    const out = buildFrequency({ type: "interval", every: 3, time: "09:00" }, tz, now);
+    expect(out.frequencyMetadata.unit).toBe("days");
+    expect(out.frequencyMetadata.time).toBe("1970-01-01T09:00:00-04:00");
+  });
+});

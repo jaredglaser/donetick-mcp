@@ -148,6 +148,7 @@ function resolveMemberIds(names: string[] | undefined, members: Member[]): numbe
   });
 }
 
+/** Null and undefined both mean "no project", so the one caller that clears can pass either. */
 function resolveProjectId(name: string | null | undefined, projects: Project[]): number | null {
   if (name === undefined || name === null) return null;
   const wanted = normalizeName(name);
@@ -572,9 +573,7 @@ export function mergeEditRequest(existing: RawChore, input: EditInput, ctx: Buil
     // success, which is the defect the points fix repaired on the neighbouring field.
     projectId:
       input.project !== undefined
-        ? input.project === null
-          ? null
-          : resolveProjectId(input.project, ctx.projects)
+        ? resolveProjectId(input.project, ctx.projects)
         : (existing.projectId ?? null),
     isRolling,
     isPrivate: input.is_private ?? existing.isPrivate ?? false,

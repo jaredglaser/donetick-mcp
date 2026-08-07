@@ -280,3 +280,22 @@ describe("fields the write tools set and nothing could read back", () => {
     expect(projectChore(chore({ assignees: [] }), members, projects, now).assignees).toEqual([]);
   });
 });
+
+describe("occurrence shapes Donetick stores but does not act on", () => {
+  const dow = (fm: Record<string, unknown>) =>
+    summarizeFrequency(chore({ frequencyType: "days_of_the_week", frequencyMetadata: fm }));
+
+  test("every_week reads as weekly, not monthly", () => {
+    // buildFrequency refuses this shape, but the projection reads whatever Donetick
+    // stores, so a chore created in the web UI reaches it. Rendering it as an
+    // occurrence pattern described a plain weekly chore as monthly, which is the
+    // defect the render condition was narrowed to fix and which nothing pinned.
+    expect(dow({ days: ["saturday"], weekPattern: "every_week", occurrences: [1] })).toBe(
+      "every saturday",
+    );
+  });
+
+  test("occurrences with no pattern read as weekly too, since Donetick ignores them", () => {
+    expect(dow({ days: ["saturday"], occurrences: [1] })).toBe("every saturday");
+  });
+});

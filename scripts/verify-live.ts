@@ -262,9 +262,10 @@ async function main(): Promise<void> {
         const scheduleAfterCompleting = async (
           label: string,
           overrides: Partial<ChoreCreateBody>,
+          from: string = anchor,
         ): Promise<string> => {
           const id = await createScratchChore(
-            baseChoreBody(scoped(label), { nextDueDate: anchor, ...overrides }),
+            baseChoreBody(scoped(label), { nextDueDate: from, ...overrides }),
           );
           const response = (await client.post(endpoints.completeChore(id), {})) as Record<string, unknown>;
           return dayOf(response.nextDueDate);
@@ -330,27 +331,49 @@ async function main(): Promise<void> {
         } catch {
           legacyRefused = true;
         }
-        if (!legacyRefused) {
-          return {
-            status: "warn",
-            detail:
-              "day_of_the_month with days and occurrences now completes, so it may have grown weekday support and buildFrequency's refusal could be relaxed",
-          };
-        }
+        // Recorded rather than returned: an early exit here skipped every assertion
+        // below it, so a Donetick change that relaxed day_of_the_month would have
+        // silently stopped checking the quarter and multi-occurrence behaviour too.
+        const legacyNote = legacyRefused
+          ? ""
+          : " day_of_the_month with days and occurrences now completes, so it may have grown weekday support and buildFrequency's refusal could be relaxed.";
 
         // week_of_quarter and multi-occurrence were measured when the mapping was
         // corrected but only ever asserted through storage, which is the evidence
         // grade that let the original bug survive.
-        const quarterly = await scheduleAfterCompleting("dow-quarter", {
-          frequencyType: "days_of_the_week",
-          frequency: 1,
-          frequencyMetadata: {
-            days: ["saturday"],
-            weekPattern: "week_of_quarter",
-            occurrences: [1],
-            timezone: config.timezone,
+        // Anchored mid-quarter on purpose: from Thu 2026-09-10, week_of_month [1]
+        // gives Oct 3 and so does week_of_quarter [1], so the original anchor could
+        // not tell the two patterns apart. Nov 12 sits inside Q4, whose first
+        // Saturday is Oct 3, already past, so the quarter pattern must reach Q1.
+        const quarterAnchor = "2026-11-12T13:00:00Z";
+        const quarterly = await scheduleAfterCompleting(
+          "dow-quarter",
+          {
+            frequencyType: "days_of_the_week",
+            frequency: 1,
+            frequencyMetadata: {
+              days: ["saturday"],
+              weekPattern: "week_of_quarter",
+              occurrences: [1],
+              timezone: config.timezone,
+            },
           },
-        });
+          quarterAnchor,
+        );
+        const monthlyFromSameAnchor = await scheduleAfterCompleting(
+          "dow-month-control",
+          {
+            frequencyType: "days_of_the_week",
+            frequency: 1,
+            frequencyMetadata: {
+              days: ["saturday"],
+              weekPattern: "week_of_month",
+              occurrences: [1],
+              timezone: config.timezone,
+            },
+          },
+          quarterAnchor,
+        );
         const multiple = await scheduleAfterCompleting("dow-multi", {
           frequencyType: "days_of_the_week",
           frequency: 1,
@@ -361,14 +384,18 @@ async function main(): Promise<void> {
             timezone: config.timezone,
           },
         });
-        if (quarterly !== "2026-10-03" || multiple !== "2026-09-19") {
+        if (quarterly !== "2027-01-02" || monthlyFromSameAnchor !== "2026-12-05") {
           throw new Error(
-            `week_of_quarter [1] gave ${quarterly} (expected 2026-10-03) and week_of_month [1,3] gave ${multiple} (expected 2026-09-19)`,
+            `from ${quarterAnchor.slice(0, 10)}, week_of_quarter [1] gave ${quarterly} (expected 2027-01-02) and week_of_month [1] gave ${monthlyFromSameAnchor} (expected 2026-12-05). The two must differ, or this check cannot tell the patterns apart.`,
           );
+        }
+        if (multiple !== "2026-09-19") {
+          throw new Error(`week_of_month [1,3] gave ${multiple}, not 2026-09-19`);
         }
 
         return {
-          detail: `interval gave ${intervalNext}, occurrences [1] gave 2026-10-03, quarter gave ${quarterly}, [1,3] gave ${multiple}, day 15 gave 2026-10-15`,
+          status: legacyNote === "" ? undefined : "warn",
+          detail: `${legacyNote}interval gave ${intervalNext}, occurrences [1] gave 2026-10-03, [1,3] gave ${multiple}, day 15 gave 2026-10-15, and from a mid-quarter anchor month gave ${monthlyFromSameAnchor} while quarter gave ${quarterly}`,
         };
       },
     );
@@ -802,7 +829,14 @@ async function main(): Promise<void> {
       const dates: string[] = [];
       for (let i = 0; i < 3; i += 1) {
         const response = (await client.post(endpoints.completeChore(id), {})) as Record<string, unknown>;
-        dates.push(String(response.nextDueDate));
+        // Typed before comparing: String(undefined) twice compares equal, so a /do
+        // that stopped reporting a due date would read as the freeze this check hunts.
+        if (typeof response.nextDueDate !== "string") {
+          throw new Error(
+            `completion ${i + 1} returned no nextDueDate (${JSON.stringify(response.nextDueDate)}), so this check cannot tell a freeze from a missing field`,
+          );
+        }
+        dates.push(response.nextDueDate);
       }
 
       if (dates[1] !== dates[2]) {

@@ -940,3 +940,34 @@ describe("a rolling chore cannot be left without a due date", () => {
     expect(() => requireDueDateFor(null, "interval", null, false)).not.toThrow();
   });
 });
+
+describe("the hourly guard's boundaries", () => {
+  // Each condition narrows the guard, and each was free to delete. Dropping the unit
+  // check locks every interval chore carrying a time out of editing, including
+  // unit: "days", a schedule buildFrequency permits and Donetick honors. Dropping the
+  // length check locks out any chore stored with time: "", which is a real shape.
+  const interval = (fm: Record<string, unknown>) =>
+    ({ ...existing, frequencyType: "interval", frequencyMetadata: fm }) as unknown as RawChore;
+
+  test("a daily interval carrying a time still edits", () => {
+    expect(() =>
+      mergeEditRequest(interval({ unit: "days", time: "1970-01-01T09:00:00-04:00" }), { name: "x" }, ctx()),
+    ).not.toThrow();
+  });
+
+  test("an hourly interval with an empty time still edits", () => {
+    expect(() =>
+      mergeEditRequest(interval({ unit: "hours", time: "" }), { name: "x" }, ctx()),
+    ).not.toThrow();
+  });
+
+  test("an hourly interval with no time key still edits", () => {
+    expect(() => mergeEditRequest(interval({ unit: "hours" }), { name: "x" }, ctx())).not.toThrow();
+  });
+
+  test("only the hourly-plus-real-time combination is refused", () => {
+    expect(() =>
+      mergeEditRequest(interval({ unit: "hours", time: "1970-01-01T09:00:00-04:00" }), { name: "x" }, ctx()),
+    ).toThrow(/freezes/);
+  });
+});
