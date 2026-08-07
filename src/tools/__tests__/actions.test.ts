@@ -206,6 +206,42 @@ describe("completeChore", () => {
     expect(result.message).toMatch(/rolling/i);
   });
 
+  test('completed_at "today" before 09:00 records now rather than being refused as future', async () => {
+    // parseDueDate resolves a bare day to 09:00, which is right for a due date and
+    // wrong for a completion: at 07:30 local, "today" resolved to later this
+    // morning and the future check rejected something the user had just done.
+    const earlyMorning = new Date("2026-08-06T11:30:00Z"); // 07:30 America/New_York
+    const fake = fakeService({ chores: [listRow] });
+    const ctx = { service: fake.service as never, now: () => earlyMorning, timezone: tz };
+
+    const result = await completeChore({ chore_id: 7, completed_at: "today" }, ctx);
+
+    const body = fake.calls.find((c) => c.method === "POST")!.body as Record<string, unknown>;
+    expect(body.completedTime).toBe(earlyMorning.toISOString());
+    expect(result.completed).toBe(true);
+  });
+
+  test('completed_at "today" after 09:00 keeps the resolved 09:00 instant', async () => {
+    // Still in the past at that point, so there is nothing to clamp and the
+    // caller's own resolution stands.
+    const afternoon = new Date("2026-08-06T20:00:00Z"); // 16:00 America/New_York
+    const fake = fakeService({ chores: [listRow] });
+    const ctx = { service: fake.service as never, now: () => afternoon, timezone: tz };
+
+    await completeChore({ chore_id: 7, completed_at: "today" }, ctx);
+
+    const body = fake.calls.find((c) => c.method === "POST")!.body as Record<string, unknown>;
+    expect(body.completedTime).toBe("2026-08-06T13:00:00.000Z");
+  });
+
+  test("a future day is still refused, so the clamp does not swallow a real mistake", async () => {
+    const fake = fakeService({ chores: [listRow] });
+
+    await expect(
+      completeChore({ chore_id: 7, completed_at: "tomorrow" }, ctxFor(fake.service)),
+    ).rejects.toThrow(/future/i);
+  });
+
   test("backdating a non-rolling chore does not mention rolling", async () => {
     const fake = fakeService({ chores: [{ ...listRow, isRolling: false }] });
 
@@ -417,13 +453,16 @@ describe("nudgeChore", () => {
     expect(result.message).toMatch(/0 device/);
   });
 
-  test("invalidates the cache on success and on failure", async () => {
+  test("does not invalidate the cache, because a nudge changes no chore field", async () => {
+    // Every other action here writes to the chore and must drop the cached list.
+    // A nudge sends a push notification, so invalidating would discard a warm
+    // cache only to refetch an identical answer.
     const ok = fakeService({
       chores: [listRow],
       post: () => ({ message: "Nudge sent to 1 user(s) across 1 device(s)" }),
     });
     await nudgeChore({ chore_id: 7 }, ctxFor(ok.service));
-    expect(ok.invalidations()).toBe(1);
+    expect(ok.invalidations()).toBe(0);
 
     const failing = fakeService({
       chores: [listRow],
@@ -432,6 +471,6 @@ describe("nudgeChore", () => {
       },
     });
     await expect(nudgeChore({ chore_id: 7 }, ctxFor(failing.service))).rejects.toThrow("nope");
-    expect(failing.invalidations()).toBe(1);
+    expect(failing.invalidations()).toBe(0);
   });
 });

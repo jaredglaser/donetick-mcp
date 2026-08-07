@@ -89,7 +89,6 @@ export function projectChore(
       name: sub.name,
       done: Boolean(sub.completedAt),
     })),
-    attachment_count: (chore.attachments ?? []).length,
     last_completed_at: chore.lastCompletedDate ?? null,
     last_completed_by: lastBy?.displayName ?? null,
   };

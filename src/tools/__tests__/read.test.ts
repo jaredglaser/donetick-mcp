@@ -93,14 +93,32 @@ describe("getChore", () => {
 });
 
 describe("listChores additional coverage", () => {
-  test("an unknown project name returns nothing rather than everything", () => {
-    const out = listChores({ scope: "all", project: "Nonexistent Project" }, ctx);
-    expect(out.chores).toEqual([]);
+  test("an unknown project name says so instead of returning an empty list", () => {
+    // Returning nothing is the right safety property, but the caller cannot tell
+    // "no chores in that project" from "no such project", and would report the
+    // first when the second is true. The write path already throws on the same
+    // string, so the two sides used to disagree about it.
+    expect(() => listChores({ scope: "all", project: "Nonexistent Project" }, ctx)).toThrow(
+      /not a known project/,
+    );
   });
 
-  test("an unknown assignee name returns nothing rather than everything", () => {
-    const out = listChores({ scope: "all", assignee: "Nobody Real" }, ctx);
-    expect(out.chores).toEqual([]);
+  test("the unknown-project error lists the projects that do exist", () => {
+    expect(() => listChores({ scope: "all", project: "Nope" }, ctx)).toThrow(/Garden/);
+  });
+
+  test("an unknown assignee name says so instead of returning an empty list", () => {
+    expect(() => listChores({ scope: "all", assignee: "Nobody Real" }, ctx)).toThrow(
+      /not a member of this circle/,
+    );
+  });
+
+  test("the unknown-assignee error points at 'unassigned', which is not a member name", () => {
+    expect(() => listChores({ scope: "all", assignee: "Nobody Real" }, ctx)).toThrow(/unassigned/);
+  });
+
+  test("a known project still filters rather than throwing", () => {
+    expect(() => listChores({ scope: "all", project: "Garden" }, ctx)).not.toThrow();
   });
 
   test("a chore's own frequencyMetadata.timezone overrides the global timezone for bucketing", () => {

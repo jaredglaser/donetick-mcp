@@ -1,8 +1,9 @@
 import { z } from "zod";
-import type { AssignStrategy, CreateInput, EditInput } from "@/chore-request";
+import { ASSIGN_STRATEGIES, type CreateInput, type EditInput } from "@/chore-request";
 import { CONFIRM_KEY } from "@/confirm";
 import { endpoints } from "@/endpoints";
-import { type FrequencyType, WEEK_PATTERNS } from "@/frequency";
+import { DonetickError } from "@/errors";
+import { FREQUENCY_TYPES, WEEK_PATTERNS } from "@/frequency";
 import { resolveOne } from "@/resolve";
 import { humanizeDueIn } from "@/time";
 import type { DonetickService } from "@/service";
@@ -76,46 +77,32 @@ function fail(error: unknown): ToolResult {
   return { content: [{ type: "text", text: message }], isError: true };
 }
 
-/** Every handler funnels through here so no tool ever rejects across the JSON-RPC transport. */
-function guard(
+/**
+ * Every handler funnels through here so no tool ever rejects across the JSON-RPC
+ * transport.
+ *
+ * It is also where invalidatesCache is honored. A 403, 404, or a 500 on an
+ * id-scoped write all mean the cached list disagrees with the server about which
+ * chores exist, and leaving it in place makes the next read repeat the same wrong
+ * answer: the user is told a chore both exists and does not, until the TTL runs
+ * out. Dropping it costs one refetch and only on an error path.
+ */
+function guardWith(
+  service: DonetickService,
+): (
   handler: (args: Record<string, unknown>, mcp?: McpExtras) => Promise<ToolResult>,
-): (args: Record<string, unknown>, mcp?: McpExtras) => Promise<ToolResult> {
-  return async (args, mcp) => {
+) => (args: Record<string, unknown>, mcp?: McpExtras) => Promise<ToolResult> {
+  return (handler) => async (args, mcp) => {
     try {
       return await handler(args, mcp);
     } catch (error) {
+      if (error instanceof DonetickError && error.invalidatesCache) {
+        service.invalidateChores();
+      }
       return fail(error);
     }
   };
 }
-
-// Local literal tuples for zod, since FREQUENCY_TYPES and ASSIGN_STRATEGIES are exported as
-// readonly string[] (see the note on each) and z.enum needs a literal tuple to typecheck.
-// A test in __tests__/index.test.ts asserts these agree with their source of truth so the
-// two copies cannot silently drift.
-export const FREQUENCY_TYPE_VALUES = [
-  "once",
-  "daily",
-  "weekly",
-  "monthly",
-  "yearly",
-  "adaptive",
-  "interval",
-  "days_of_the_week",
-  "day_of_the_month",
-  "trigger",
-  "no_repeat",
-] as const satisfies readonly FrequencyType[];
-
-export const ASSIGN_STRATEGY_VALUES = [
-  "no_assignee",
-  "least_assigned",
-  "least_completed",
-  "random",
-  "keep_last_assigned",
-  "random_except_last_assigned",
-  "round_robin",
-] as const satisfies readonly AssignStrategy[];
 
 const FREQUENCY_UNIT_VALUES = ["hours", "days", "weeks", "months", "years"] as const;
 
@@ -127,7 +114,7 @@ const priorityEnumSchema = z
 
 const frequencySchema = z.object({
   type: z
-    .enum(FREQUENCY_TYPE_VALUES)
+    .enum(FREQUENCY_TYPES)
     .describe(
       '"Every 3 days" is type interval with every: 3 (every is required for interval). The fixed ' +
         "types daily, weekly, monthly, and yearly always step exactly one unit and ignore any count. " +
@@ -211,8 +198,17 @@ function enrichHistoryRow(row: RawHistoryRow, chores: RawChore[], members: Membe
       : (members.find((m) => m.userId === row.completedBy)?.displayName ??
         `member #${row.completedBy} (unknown)`);
 
+  // An archived chore keeps its history, which is the entire reason this server
+  // steers users to archive rather than delete. Labelling those rows "(deleted)"
+  // told them the safe operation had destroyed exactly what it preserves.
+  const label = chore
+    ? chore.isActive === false
+      ? `${chore.name} (archived)`
+      : chore.name
+    : `chore #${row.choreId} (deleted)`;
+
   return {
-    chore: chore ? chore.name : `chore #${row.choreId} (deleted)`,
+    chore: label,
     completed_by: completedBy,
     performed_at: row.performedAt,
     due_date: row.dueDate,
@@ -223,10 +219,26 @@ function enrichHistoryRow(row: RawHistoryRow, chores: RawChore[], members: Membe
 export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
   const { service, timezone, now } = deps;
   const writeCtx: WriteContext = { service, timezone, now };
+  const guard = guardWith(service);
 
-  async function resolveChore(args: Record<string, unknown>): Promise<RawChore> {
+  /**
+   * includeArchived widens both the id and the name path. It is off by default
+   * because an archived chore should not compete for a name with an active one,
+   * and on for delete_chore, whose whole job reaches chores in either state.
+   */
+  async function resolveChore(
+    args: Record<string, unknown>,
+    { includeArchived = false }: { includeArchived?: boolean } = {},
+  ): Promise<RawChore> {
+    const pool = async (): Promise<RawChore[]> => {
+      const active = await service.chores();
+      if (!includeArchived) return active;
+      const archived = await service.archivedChores();
+      return [...active, ...archived];
+    };
+
     if (typeof args.chore_id === "number") {
-      const all = await service.chores();
+      const all = await pool();
       const found = all.find((chore) => chore.id === args.chore_id);
       if (found) return found;
       // Not in the cached list (e.g. archived, or the cache is between refreshes).
@@ -244,7 +256,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
     if (typeof args.name !== "string") {
       throw new Error("Pass either chore_id or name to identify the chore.");
     }
-    const [all, members] = await Promise.all([service.chores(), service.members()]);
+    const [all, members] = await Promise.all([pool(), service.members()]);
     return resolveOne(
       args.name,
       all,
@@ -339,7 +351,14 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
           service.members(),
         ]);
         const rows = Array.isArray(raw) ? (raw as RawHistoryRow[]) : [];
-        return ok(rows.map((row) => enrichHistoryRow(row, chores, members)));
+
+        // History outlives archiving, so a row whose chore is not in the active
+        // list is usually archived rather than deleted. The archived list is an
+        // uncached request, so it is fetched only when a row actually misses.
+        const missing = rows.some((row) => !chores.some((chore) => chore.id === row.choreId));
+        const pool = missing ? [...chores, ...(await service.archivedChores())] : chores;
+
+        return ok(rows.map((row) => enrichHistoryRow(row, pool, members)));
       }),
     },
     {
@@ -375,7 +394,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
             'An RFC3339 timestamp, YYYY-MM-DD, or a phrase like "tomorrow", "in 3 days", or "next monday". Omit for no due date.',
           ),
         frequency: frequencySchema.optional().describe("Defaults to a one-time chore (type once) when omitted."),
-        assign_strategy: z.enum(ASSIGN_STRATEGY_VALUES).optional(),
+        assign_strategy: z.enum(ASSIGN_STRATEGIES).optional(),
         reschedule_from: z
           .enum(["due_date", "completion_date"])
           .optional()
@@ -408,7 +427,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
           .optional()
           .describe('An RFC3339 timestamp, YYYY-MM-DD, a phrase like "tomorrow", or null to clear it.'),
         frequency: frequencySchema.optional(),
-        assign_strategy: z.enum(ASSIGN_STRATEGY_VALUES).optional(),
+        assign_strategy: z.enum(ASSIGN_STRATEGIES).optional(),
         reschedule_from: z.enum(["due_date", "completion_date"]).optional(),
         assignees: z.array(z.string()).optional().describe("Replaces the full assignee list."),
         add_assignees: z.array(z.string()).optional().describe("Adds to the existing assignee list."),
@@ -436,8 +455,11 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
         name: z.string().optional(),
       },
       handler: guard(async (args, mcp) => {
-        const resolved = await resolveChore(args);
-        const outcome = await deleteChore({ chore_id: resolved.id }, writeCtx, mcp?.confirmation);
+        // Resolved once, here, and handed over whole. Passing only the id made
+        // deleteChore look the same chore up a second time, and across the two
+        // elicitation rounds that doubled again.
+        const resolved = await resolveChore(args, { includeArchived: true });
+        const outcome = await deleteChore(resolved, writeCtx, mcp?.confirmation);
         if (outcome.kind === "confirm_required") {
           return {
             content: [{ type: "text", text: outcome.message }],

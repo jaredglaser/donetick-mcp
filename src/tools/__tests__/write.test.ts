@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { createChore, deleteChore, editChore, type WriteContext } from "../write";
 import type { CreateInput } from "@/chore-request";
+import { DonetickClient } from "@/client";
+import { DonetickError } from "@/errors";
 import type { Member, Project, RawChore } from "@/types";
 
 const now = new Date("2026-08-06T16:00:00Z");
@@ -13,7 +15,8 @@ const members: Member[] = [
 const projects: Project[] = [{ id: 4, name: "Household" }];
 
 interface FakeOptions {
-  chores?: RawChore[];
+  /** A function lets a test change what the list returns between calls, for the retry path. */
+  chores?: RawChore[] | (() => RawChore[]);
   archivedChores?: RawChore[];
   members?: Member[];
   projects?: Project[];
@@ -30,11 +33,14 @@ function fakeService(opts: FakeOptions = {}) {
   const service = {
     chores: async () => {
       calls.push("GET chores");
-      return opts.chores ?? [];
+      return typeof opts.chores === "function" ? opts.chores() : (opts.chores ?? []);
     },
     archivedChores: async () => {
       calls.push("GET archivedChores");
       return opts.archivedChores ?? [];
+    },
+    invalidateChores: () => {
+      calls.push("invalidateChores");
     },
     members: async () => opts.members ?? members,
     projects: async () => opts.projects ?? projects,
@@ -52,6 +58,14 @@ function fakeService(opts: FakeOptions = {}) {
     },
     client: {
       post: async (path: string, body?: unknown) => {
+        calls.push(`POST ${path}`);
+        if (!opts.post) return undefined;
+        return opts.post(path, body);
+      },
+      // create uses postEnvelope so it can see warnings alongside res. The fake
+      // routes both to the same handler, and the warnings test below deliberately
+      // goes through a real client instead, since only that crosses unwrap.
+      postEnvelope: async (path: string, body?: unknown) => {
         calls.push(`POST ${path}`);
         if (!opts.post) return undefined;
         return opts.post(path, body);
@@ -120,7 +134,6 @@ const detailsShapedRow = {
   lastCompletedDate: null,
   lastCompletedBy: null,
   totalCompletedCount: 0,
-  attachments: [],
 } as unknown as RawChore;
 
 describe("createChore", () => {
@@ -209,8 +222,47 @@ describe("createChore", () => {
   });
 
   test("surfaces warnings from the create response when present", async () => {
+    // Deliberately routed through a real DonetickClient over an injected fetch,
+    // not through a fake standing in for the client. The fake used to return the
+    // {res, warnings} envelope raw, one layer below the unwrapping the real client
+    // always performs, so this test passed while unwrap discarded warnings and the
+    // feature could not work at all. Anything asserting on a response shape has to
+    // cross the layer that reshapes it.
+    const client = new DonetickClient({
+      baseUrl: "https://donetick.test",
+      token: "t",
+      timeoutMs: 1000,
+      fetchFn: (async (_url: string, init?: { method?: string }) => {
+        const payload =
+          init?.method === "POST"
+            ? { res: 42, warnings: ["defaulted to once"] }
+            : { res: { ...listRow, id: 42 } };
+        return new Response(JSON.stringify(payload), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }) as unknown as typeof fetch,
+    });
+
+    const service = {
+      members: async () => members,
+      projects: async () => projects,
+      choreDetails: async (id: number) => ({ ...listRow, id }),
+      write: async <T>(operation: () => Promise<T>) => operation(),
+      client,
+    };
+
+    const outcome = await createChore({ name: "Trash" }, ctxFor(service as never));
+
+    expect(outcome.kind).toBe("created");
+    if (outcome.kind === "created") {
+      expect(outcome.warnings).toEqual(["defaulted to once"]);
+    }
+  });
+
+  test("a bare numeric id still works, since Donetick only sends an envelope when it has something to say", async () => {
     const fake = fakeService({
-      post: () => ({ res: 42, warnings: ["defaulted to once"] }),
+      post: () => 42,
       choreDetails: (id) => ({ ...listRow, id }),
     });
 
@@ -218,7 +270,7 @@ describe("createChore", () => {
 
     expect(outcome.kind).toBe("created");
     if (outcome.kind === "created") {
-      expect(outcome.warnings).toEqual(["defaulted to once"]);
+      expect(outcome.warnings).toBeUndefined();
     }
   });
 });
@@ -291,13 +343,139 @@ describe("editChore", () => {
       /999/,
     );
   });
+
+  describe("optimistic concurrency", () => {
+    const versioned = (updatedAt: string, overrides: Partial<RawChore> = {}): RawChore => ({
+      ...listRow,
+      updatedAt,
+      ...overrides,
+    });
+
+    test("sends the merge base's updatedAt, not the current time", async () => {
+      // Verified live on v0.1.76: sending the value the row was read with is
+      // accepted, an older one is refused, and sending nothing skips the check and
+      // overwrites whatever landed in between. The current time would always be
+      // newer than the stored version, which is the one shape that reads as a
+      // token while behaving like no token at all.
+      let sent: Record<string, unknown> | undefined;
+      const fake = fakeService({
+        chores: [versioned("2026-08-06T10:00:00Z")],
+        put: (_path, body) => {
+          sent = body as Record<string, unknown>;
+          return undefined;
+        },
+        choreDetails: () => detailsShapedRow,
+      });
+
+      await editChore({ chore_id: 5, name: "Renamed" }, ctxFor(fake.service));
+
+      expect(sent?.updatedAt).toBe("2026-08-06T10:00:00Z");
+    });
+
+    test("omits updatedAt when the row carries none, rather than inventing one", async () => {
+      let sent: Record<string, unknown> | undefined;
+      const fake = fakeService({
+        chores: [listRow],
+        put: (_path, body) => {
+          sent = body as Record<string, unknown>;
+          return undefined;
+        },
+        choreDetails: () => detailsShapedRow,
+      });
+
+      await editChore({ chore_id: 5, name: "Renamed" }, ctxFor(fake.service));
+
+      expect(sent).not.toHaveProperty("updatedAt");
+    });
+
+    test("rebuilds on the newer version and retries once when Donetick reports a conflict", async () => {
+      // Someone else edits between this server's read and its write. Donetick
+      // refuses rather than letting the stale body overwrite them, and the fix is
+      // to re-merge onto their version: input is a sparse patch, so their change
+      // survives and only the caller's field is applied on top.
+      const versions = [
+        versioned("2026-08-06T10:00:00Z", { points: 5 }),
+        versioned("2026-08-06T10:00:05Z", { points: 99 }),
+      ];
+      let read = 0;
+      const sent: Array<Record<string, unknown>> = [];
+      const fake = fakeService({
+        chores: () => [versions[Math.min(read++, versions.length - 1)]!],
+        put: (_path, body) => {
+          sent.push(body as Record<string, unknown>);
+          if (sent.length === 1) {
+            throw new DonetickError("chore has been modified by another user", {
+              status: 403,
+              retryable: true,
+              invalidatesCache: true,
+            });
+          }
+          return undefined;
+        },
+        choreDetails: () => detailsShapedRow,
+      });
+
+      const outcome = await editChore({ chore_id: 5, name: "Renamed" }, ctxFor(fake.service));
+
+      expect(outcome.kind).toBe("edited");
+      expect(sent.length).toBe(2);
+      expect(sent[0]?.updatedAt).toBe("2026-08-06T10:00:00Z");
+      expect(sent[1]?.updatedAt).toBe("2026-08-06T10:00:05Z");
+      // The other writer's change survives, and the caller's is applied on top.
+      expect(sent[1]?.points).toBe(99);
+      expect(sent[1]?.name).toBe("Renamed");
+      expect(fake.calls).toContain("invalidateChores");
+    });
+
+    test("gives up after one retry rather than looping on a permission failure", async () => {
+      let attempts = 0;
+      const fake = fakeService({
+        chores: [versioned("2026-08-06T10:00:00Z")],
+        put: () => {
+          attempts += 1;
+          throw new DonetickError("Donetick refused: not your chore", {
+            status: 403,
+            retryable: true,
+            invalidatesCache: true,
+          });
+        },
+        choreDetails: () => detailsShapedRow,
+      });
+
+      await expect(editChore({ chore_id: 5, name: "Renamed" }, ctxFor(fake.service))).rejects.toThrow(
+        /refused/,
+      );
+      expect(attempts).toBe(2);
+    });
+
+    test("does not retry an error that is not retryable", async () => {
+      let attempts = 0;
+      const fake = fakeService({
+        chores: [versioned("2026-08-06T10:00:00Z")],
+        put: () => {
+          attempts += 1;
+          throw new DonetickError("Donetick rejected the request: bad frequency", { status: 400 });
+        },
+        choreDetails: () => detailsShapedRow,
+      });
+
+      await expect(editChore({ chore_id: 5, name: "Renamed" }, ctxFor(fake.service))).rejects.toThrow(
+        /bad frequency/,
+      );
+      expect(attempts).toBe(1);
+    });
+  });
 });
 
 describe("deleteChore", () => {
-  test("with no answer, returns confirm_required, makes no DELETE call, and names the chore and archiving", async () => {
-    const fake = fakeService({ chores: [listRow] });
+  // Takes the chore itself: the handler in tools/index.ts resolves it, including
+  // the archived list, and hands it over. Resolution behavior is covered there.
+  const archivedRow: RawChore = { ...listRow, id: 7, name: "Old chore", isActive: false };
 
-    const outcome = await deleteChore({ chore_id: 5 }, ctxFor(fake.service), undefined);
+  test("with no answer, returns confirm_required, makes no DELETE call, and names the chore and archiving", async () => {
+    const fake = fakeService({});
+
+    const outcome = await deleteChore(listRow, ctxFor(fake.service), undefined);
 
     expect(outcome.kind).toBe("confirm_required");
     if (outcome.kind === "confirm_required") {
@@ -309,64 +487,39 @@ describe("deleteChore", () => {
   });
 
   test("with confirm: false, returns declined and makes no DELETE call", async () => {
-    const fake = fakeService({ chores: [listRow] });
+    const fake = fakeService({});
 
-    const outcome = await deleteChore({ chore_id: 5 }, ctxFor(fake.service), { confirm: false });
+    const outcome = await deleteChore(listRow, ctxFor(fake.service), { confirm: false });
 
     expect(outcome).toEqual({ kind: "declined", chore: "Take out trash" });
     expect(fake.calls.some((c) => c.startsWith("DELETE"))).toBe(false);
   });
 
   test("with confirm: true, issues DELETE /api/v1/chores/<id>", async () => {
-    const fake = fakeService({ chores: [listRow] });
+    const fake = fakeService({});
 
-    const outcome = await deleteChore({ chore_id: 5 }, ctxFor(fake.service), { confirm: true });
+    const outcome = await deleteChore(listRow, ctxFor(fake.service), { confirm: true });
 
     expect(fake.calls).toContain("DELETE /api/v1/chores/5");
     expect(outcome).toEqual({ kind: "deleted", deleted: 5, name: "Take out trash" });
-  });
-
-  test("errors clearly when chore_id is absent", async () => {
-    const fake = fakeService({ chores: [listRow] });
-
-    await expect(deleteChore({}, ctxFor(fake.service), undefined)).rejects.toThrow(/chore_id/);
-  });
-
-  test("resolves the chore before asking for confirmation, so a nonexistent id errors rather than prompting", async () => {
-    const fake = fakeService({ chores: [listRow] });
-
-    await expect(deleteChore({ chore_id: 999 }, ctxFor(fake.service), undefined)).rejects.toThrow(
-      /999/,
-    );
-    expect(fake.calls.some((c) => c.startsWith("DELETE"))).toBe(false);
-  });
-
-  test("an id in neither list reports both were searched, so the message is not read as 'archived ones are safe'", async () => {
-    const fake = fakeService({ chores: [listRow], archivedChores: [] });
-
-    await expect(deleteChore({ chore_id: 999 }, ctxFor(fake.service), undefined)).rejects.toThrow(
-      /active or archived/,
-    );
   });
 
   test("deletes an archived chore, which Donetick's DELETE accepts", async () => {
     // Verified live on 2026-08-06: archiving then deleting the same chore
     // succeeds and the row is gone. Refusing it here would be this server
     // inventing a restriction the API does not have.
-    const archivedRow = { ...listRow, id: 7, name: "Old chore", isActive: false };
-    const fake = fakeService({ chores: [], archivedChores: [archivedRow] });
+    const fake = fakeService({});
 
-    const outcome = await deleteChore({ chore_id: 7 }, ctxFor(fake.service), { confirm: true });
+    const outcome = await deleteChore(archivedRow, ctxFor(fake.service), { confirm: true });
 
     expect(fake.calls).toContain("DELETE /api/v1/chores/7");
     expect(outcome).toEqual({ kind: "deleted", deleted: 7, name: "Old chore" });
   });
 
   test("does not offer to archive a chore that is already archived", async () => {
-    const archivedRow = { ...listRow, id: 7, name: "Old chore", isActive: false };
-    const fake = fakeService({ chores: [], archivedChores: [archivedRow] });
+    const fake = fakeService({});
 
-    const outcome = await deleteChore({ chore_id: 7 }, ctxFor(fake.service), undefined);
+    const outcome = await deleteChore(archivedRow, ctxFor(fake.service), undefined);
 
     expect(outcome.kind).toBe("confirm_required");
     if (outcome.kind === "confirm_required") {
@@ -376,13 +529,14 @@ describe("deleteChore", () => {
     }
   });
 
-  test("does not fetch the archived list when the id is in the cached active one", async () => {
-    // The archived list is an uncached request. Deleting an active chore is the
-    // common case and must not pay for it.
-    const fake = fakeService({ chores: [listRow], archivedChores: [] });
+  test("looks nothing up, because its caller already did", async () => {
+    // The confirmation gate runs this twice per delete. Re-resolving on each pass
+    // is what turned one lookup into four.
+    const fake = fakeService({});
 
-    await deleteChore({ chore_id: 5 }, ctxFor(fake.service), { confirm: true });
+    await deleteChore(listRow, ctxFor(fake.service), { confirm: true });
 
+    expect(fake.calls).not.toContain("GET chores");
     expect(fake.calls).not.toContain("GET archivedChores");
   });
 });

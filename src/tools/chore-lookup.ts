@@ -48,29 +48,3 @@ export function loadArchivedChoreById(
   return loadFrom(chore_id, () => ctx.service.archivedChores(), "the archived chore list");
 }
 
-/**
- * For the one operation that applies to a chore in either state: deleting.
- * Donetick's delete accepts an archived chore (verified live, 2026-08-06), so
- * refusing one here would be this server inventing a restriction the API does
- * not have.
- *
- * The active list is searched first because it is the cached one, so deleting an
- * active chore costs no request the caller would not have made anyway, and the
- * archived list is fetched only when that misses.
- */
-export async function loadAnyChoreById(
-  chore_id: number | undefined,
-  ctx: WriteContext,
-): Promise<RawChore> {
-  const id = requireChoreId(chore_id);
-
-  const active = (await ctx.service.chores()).find((chore) => chore.id === id);
-  if (active) return active;
-
-  const archived = (await ctx.service.archivedChores()).find((chore) => chore.id === id);
-  if (archived) return archived;
-
-  throw new Error(
-    `No chore with id ${id} exists, active or archived. It may have already been deleted.`,
-  );
-}

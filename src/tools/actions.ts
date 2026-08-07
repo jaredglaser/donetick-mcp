@@ -1,8 +1,16 @@
 import { parseDueDate } from "@/dates";
+import { zonedYmd } from "@/time";
 import { endpoints } from "@/endpoints";
 import { loadChoreById } from "@/tools/chore-lookup";
 import { resolveMember } from "@/resolve";
 import type { WriteContext } from "@/tools/write";
+
+/** Same day in the given zone, which is not the same question as "within 24 hours". */
+function isSameCalendarDay(a: Date, b: Date, tz: string): boolean {
+  const left = zonedYmd(a, tz);
+  const right = zonedYmd(b, tz);
+  return left.y === right.y && left.m === right.m && left.d === right.d;
+}
 
 function statusOf(response: unknown): number | undefined {
   if (response && typeof response === "object" && "status" in response) {
@@ -58,15 +66,24 @@ export async function completeChore(input: CompleteInput, ctx: WriteContext): Pr
     const parsed = parseDueDate(input.completed_at, ctx.now(), ctx.timezone);
     if (parsed !== null) {
       const nowMs = ctx.now().getTime();
-      if (parsed.getTime() > nowMs) {
+      // parseDueDate resolves a bare day to 09:00, which is the right default for
+      // a due date and the wrong one for a completion: "today" before 09:00 local
+      // resolves to later this morning and would be refused as a future time for
+      // something the user just did. Same calendar day means now, since that is
+      // what a bare "today" asks for; any other day keeps its resolved instant so
+      // "yesterday" still records yesterday.
+      const sameDay = isSameCalendarDay(parsed, ctx.now(), ctx.timezone);
+      const effective = sameDay && parsed.getTime() > nowMs ? ctx.now() : parsed;
+
+      if (effective.getTime() > nowMs) {
         throw new Error(
-          `A completion time cannot be in the future. "${input.completed_at}" resolves to ${parsed.toISOString()}.`,
+          `A completion time cannot be in the future. "${input.completed_at}" resolves to ${effective.toISOString()}.`,
         );
       }
-      isPastCompletion = parsed.getTime() < nowMs;
+      isPastCompletion = effective.getTime() < nowMs;
       // The wire field is completedTime, not completedAt or completedDate. A wrong
       // name here is silently ignored and Donetick records time.Now() with a 200.
-      body.completedTime = parsed.toISOString();
+      body.completedTime = effective.toISOString();
     }
   }
 
@@ -87,9 +104,16 @@ export async function completeChore(input: CompleteInput, ctx: WriteContext): Pr
   );
 
   // A chore awaiting sign-off comes back 200 with the full chore object at status 3
-  // and no message field at all, and its due date is unchanged. Status is the only
-  // reliable signal; chore.requireApproval is a backup in case it is ever absent.
-  const pendingApproval = statusOf(response) === 3 || chore.requireApproval === true;
+  // and no message field at all, and its due date is unchanged.
+  //
+  // Status when the response carries one, and only then the cached flag. The old
+  // `status === 3 || chore.requireApproval` reported a completion that actually
+  // landed as pending whenever the chore merely had approval enabled, which sends
+  // the user to chase an approver for nothing and reports a stale next due date
+  // alongside it. Reporting a write as not having happened is the same defect as
+  // reporting one that did not, in the other direction.
+  const status = statusOf(response);
+  const pendingApproval = status !== undefined ? status === 3 : chore.requireApproval === true;
 
   if (pendingApproval) {
     return {
@@ -222,12 +246,13 @@ export async function nudgeChore(input: NudgeInput, ctx: WriteContext): Promise<
     );
   }
 
-  const response = await ctx.service.write(() =>
-    ctx.service.client.post(endpoints.nudgeChore(chore.id), {
-      all_assignees: input.all_assignees ?? false,
-      message: input.message ?? "",
-    }),
-  );
+  // Not wrapped in service.write: a nudge sends a push notification and changes no
+  // chore field, so invalidating the list would throw away a warm cache to refetch
+  // an identical answer.
+  const response = await ctx.service.client.post(endpoints.nudgeChore(chore.id), {
+    all_assignees: input.all_assignees ?? false,
+    message: input.message ?? "",
+  });
 
   const message = messageOf(response) ?? "Nudge sent.";
   // Nudge reaches registered mobile devices only, not Telegram or Pushover, and

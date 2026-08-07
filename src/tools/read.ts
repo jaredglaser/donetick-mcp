@@ -40,6 +40,11 @@ function zoneFor(chore: RawChore, fallback: string): string {
   return zone && zone.length > 0 ? zone : fallback;
 }
 
+/** Lists what does exist, so the caller can correct itself without another round trip. */
+function describeKnown(names: string[]): string {
+  return names.length === 0 ? " There are none." : ` Known: ${names.join(", ")}.`;
+}
+
 export function listChores(args: ListArgs, ctx: ListContext): ListResult {
   const scope: Scope = args.scope ?? "all";
   const limit = args.limit ?? 50;
@@ -49,10 +54,21 @@ export function listChores(args: ListArgs, ctx: ListContext): ListResult {
     return bucket(due, scope, ctx.now, zoneFor(chore, ctx.timezone), args.days ?? 7);
   });
 
+  // An unmatched filter used to yield zero rows, which reads as "you have nothing
+  // in the Garage project" when the truth is "there is no Garage project". The
+  // caller cannot tell those apart from an empty list, and the same names already
+  // throw with suggestions on the write path, so the two sides disagreed about the
+  // same string. Returning nothing is the right safety property; saying why is
+  // what makes the answer true.
   if (args.project !== undefined) {
     const wanted = normalizeName(args.project);
     const project = ctx.projects.find((p) => normalizeName(p.name) === wanted);
-    rows = rows.filter((chore) => project !== undefined && chore.projectId === project.id);
+    if (project === undefined) {
+      throw new Error(
+        `"${args.project}" is not a known project.${describeKnown(ctx.projects.map((p) => p.name))}`,
+      );
+    }
+    rows = rows.filter((chore) => chore.projectId === project.id);
   }
 
   if (args.assignee !== undefined) {
@@ -63,7 +79,14 @@ export function listChores(args: ListArgs, ctx: ListContext): ListResult {
       const member = ctx.members.find(
         (m) => normalizeName(m.displayName) === wanted || normalizeName(m.username) === wanted,
       );
-      rows = rows.filter((chore) => member !== undefined && chore.assignedTo === member.userId);
+      if (member === undefined) {
+        throw new Error(
+          `"${args.assignee}" is not a member of this circle.${describeKnown(
+            ctx.members.map((m) => m.displayName),
+          )} Use "unassigned" for chores with nobody on them.`,
+        );
+      }
+      rows = rows.filter((chore) => chore.assignedTo === member.userId);
     }
   }
 

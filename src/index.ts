@@ -6,8 +6,28 @@ import { DonetickClient } from "@/client";
 import { parseConfig } from "@/config";
 import { DonetickService } from "@/service";
 import { buildToolDefinitions } from "@/tools/index";
-import { CONFIRM_KEY, decideConfirmation } from "@/confirm";
+import { CONFIRM_KEY, decideConfirmation, type ConfirmationResponseView } from "@/confirm";
 import { createProbeGate } from "@/probe";
+
+/**
+ * Compile-time bridge between the SDK's response view and the restated one in
+ * confirm.ts. That restatement exists so the confirmation decision can be tested
+ * without importing the SDK, but it types `kind` as string, which means a rename
+ * in the SDK would leave both sides compiling while decideConfirmation silently
+ * stopped recognizing an unanswered request. Every delete would then report that
+ * nothing was deleted without ever asking. This file is the one place allowed to
+ * see both types, so the check belongs here.
+ *
+ * The second line is the load-bearing one: it fails if "missing" ever leaves the
+ * SDK's kind union, which is the rename that would do the damage.
+ */
+type SdkResponseView = ReturnType<typeof inputResponse>;
+const _viewStaysAssignable: ConfirmationResponseView = undefined as unknown as SdkResponseView;
+const _missingStaysAKind: SdkResponseView["kind"] = "missing";
+const _acceptStaysAnAction: Extract<SdkResponseView, { action: unknown }>["action"] = "accept";
+void _viewStaysAssignable;
+void _missingStaysAKind;
+void _acceptStaysAnAction;
 
 async function main(): Promise<void> {
   const config = parseConfig(process.env);

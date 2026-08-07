@@ -7,7 +7,8 @@ import {
   type EditInput,
 } from "@/chore-request";
 import { endpoints } from "@/endpoints";
-import { loadAnyChoreById, loadChoreById } from "@/tools/chore-lookup";
+import { DonetickError } from "@/errors";
+import { loadChoreById } from "@/tools/chore-lookup";
 import { projectChore } from "@/projection";
 import type { DonetickService } from "@/service";
 import type { Member, Project, ProjectedChore, RawChore } from "@/types";
@@ -90,7 +91,7 @@ export async function createChore(input: CreateInput, ctx: WriteContext): Promis
   const body = buildCreateRequest(input, buildCtx);
 
   const { id, warnings } = await ctx.service.write(async () => {
-    const response = await ctx.service.client.post(endpoints.createChore(), body);
+    const response = await ctx.service.client.postEnvelope(endpoints.createChore(), body);
     return extractCreatedId(response);
   });
 
@@ -118,11 +119,33 @@ export async function editChore(
   input: EditInput & { chore_id?: number },
   ctx: WriteContext,
 ): Promise<EditOutcome> {
-  const existing = await loadChoreById(input.chore_id, ctx);
+  let existing = await loadChoreById(input.chore_id, ctx);
   const buildCtx = await loadBuildContext(ctx);
-  const body = mergeEditRequest(existing, input, buildCtx);
 
-  await ctx.service.write(() => ctx.service.client.put(endpoints.editChore(), body));
+  // The body that actually landed, kept for the read-back merge below: it holds the
+  // write-shaped fields /details omits, and after a retry it is the second one.
+  let body: ChoreRequestBody;
+
+  const put = async (base: RawChore): Promise<void> => {
+    body = mergeEditRequest(base, input, buildCtx);
+    await ctx.service.write(() => ctx.service.client.put(endpoints.editChore(), body));
+  };
+
+  try {
+    await put(existing);
+  } catch (error) {
+    // The merge base is a cached row, so between reading it and writing, someone
+    // on the web UI or the phone can land an edit of their own. Donetick refuses
+    // that with a 403 rather than letting this overwrite them, and the answer is
+    // to rebuild on their version: input is a sparse patch, so re-merging applies
+    // only the caller's fields onto whatever is current and keeps the rest of
+    // their change. Retried once, not in a loop, so a genuine permission failure
+    // surfaces on the second attempt instead of spinning.
+    if (!(error instanceof DonetickError) || !error.retryable) throw error;
+    ctx.service.invalidateChores();
+    existing = await loadChoreById(input.chore_id, ctx);
+    await put(existing);
+  }
 
   // The edit has already landed. A failure past this point is a reporting failure,
   // not a write failure, and saying otherwise would invite the caller to retry a
@@ -145,22 +168,23 @@ export async function editChore(
   // the only source with the read-shaped labels this edit actually left in place.
   const merged = {
     ...existing,
-    ...bodyAsRawFields(body),
+    ...bodyAsRawFields(body!),
     ...(detail as Partial<RawChore>),
     labelsV2: existing.labelsV2 ?? null,
   } as RawChore;
   return { kind: "edited", chore: projectChore(merged, buildCtx.members, buildCtx.projects, buildCtx.now) };
 }
 
+/**
+ * Takes the chore itself rather than an id, because its caller has already
+ * resolved one: the confirmation gate means this runs twice for a single delete,
+ * and re-resolving on each pass turned one lookup into four.
+ */
 export async function deleteChore(
-  input: { chore_id?: number; name?: string },
+  existing: RawChore,
   ctx: WriteContext,
   answer: { confirm: boolean } | undefined,
 ): Promise<DeleteOutcome> {
-  // Resolved before any confirmation is offered, so a nonexistent id fails outright
-  // instead of asking the user to confirm deleting a chore that is not there.
-  const existing = await loadAnyChoreById(input.chore_id, ctx);
-
   if (answer === undefined) {
     // Offering "archive it instead" to a chore that is already archived would be
     // advice to do the thing that has been done, so the archived case makes the

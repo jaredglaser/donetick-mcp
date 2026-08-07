@@ -10,6 +10,11 @@ export interface ClientOptions {
 /**
  * Donetick wraps most internal API responses in {"res": ...} but returns bare
  * arrays from a few handlers. Both shapes reach here.
+ *
+ * res is always unwrapped, including when siblings ride alongside it: POST /:id/do
+ * answers {res, message} and callers read status off the chore, so keeping the
+ * envelope for those would break every one of them. A caller that needs a sibling
+ * asks for the envelope explicitly through the raw variants below.
  */
 function unwrap(payload: unknown): unknown {
   if (payload && typeof payload === "object" && !Array.isArray(payload) && "res" in payload) {
@@ -39,6 +44,16 @@ export class DonetickClient {
     return this.request("POST", path, body);
   }
 
+  /**
+   * The response with its envelope intact, for the caller that needs a sibling of
+   * res rather than res itself. Create answers {res, warnings} when it defaults a
+   * field, and those warnings are the only signal that the chore Donetick made is
+   * not quite the one that was asked for.
+   */
+  postEnvelope(path: string, body?: unknown): Promise<unknown> {
+    return this.request("POST", path, body, { unwrapRes: false });
+  }
+
   put(path: string, body?: unknown): Promise<unknown> {
     return this.request("PUT", path, body);
   }
@@ -47,7 +62,12 @@ export class DonetickClient {
     return this.request("DELETE", path);
   }
 
-  private async request(method: string, path: string, body?: unknown): Promise<unknown> {
+  private async request(
+    method: string,
+    path: string,
+    body?: unknown,
+    { unwrapRes = true }: { unwrapRes?: boolean } = {},
+  ): Promise<unknown> {
     const url = `${this.baseUrl}${path}`;
     const headers: Record<string, string> = {
       secretkey: this.token,
@@ -98,7 +118,8 @@ export class DonetickClient {
     if (text.trim().length === 0) return undefined;
 
     try {
-      return unwrap(JSON.parse(text));
+      const parsed = JSON.parse(text);
+      return unwrapRes ? unwrap(parsed) : parsed;
     } catch {
       throw new DonetickError(
         `${this.baseUrl}${path} returned a 200 that is not JSON. DONETICK_URL may be pointing at the wrong service.`,

@@ -6,21 +6,20 @@ const tz = "America/New_York";
 
 describe("FREQUENCY_TYPES", () => {
   test("covers all eleven values Donetick accepts", () => {
-    expect([...FREQUENCY_TYPES].sort()).toEqual(
-      [
-        "adaptive",
-        "daily",
-        "day_of_the_month",
-        "days_of_the_week",
-        "interval",
-        "monthly",
-        "no_repeat",
-        "once",
-        "trigger",
-        "weekly",
-        "yearly",
-      ].sort(),
-    );
+    const expected: FrequencyType[] = [
+      "adaptive",
+      "daily",
+      "day_of_the_month",
+      "days_of_the_week",
+      "interval",
+      "monthly",
+      "no_repeat",
+      "once",
+      "trigger",
+      "weekly",
+      "yearly",
+    ];
+    expect([...FREQUENCY_TYPES].sort()).toEqual(expected.sort());
   });
 });
 
