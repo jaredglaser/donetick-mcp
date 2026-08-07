@@ -27,8 +27,26 @@ async function loadFrom(
   return found;
 }
 
-export function loadChoreById(chore_id: number | undefined, ctx: WriteContext): Promise<RawChore> {
-  return loadFrom(chore_id, () => ctx.service.chores(), "the active chore list");
+/**
+ * Falls back to the unfiltered list on a miss. A chore can be absent from the cached
+ * active one without being archived, which is any chore created or edited elsewhere
+ * inside the cache TTL. get_chore already resolves those; without this the nine tools
+ * that act on what it returns would report the chore does not exist.
+ */
+export async function loadChoreById(
+  chore_id: number | undefined,
+  ctx: WriteContext,
+): Promise<RawChore> {
+  const id = requireChoreId(chore_id);
+  const cached = (await ctx.service.chores()).find((chore) => chore.id === id);
+  if (cached) return cached;
+
+  const anywhere = (await ctx.service.allChores()).find((chore) => chore.id === id);
+  if (anywhere) return anywhere;
+
+  throw new Error(
+    `No chore with id ${id} exists on this account. Use list_chores to see what is there.`,
+  );
 }
 
 /**

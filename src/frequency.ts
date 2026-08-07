@@ -134,6 +134,13 @@ export function buildFrequency(input: FrequencyInput, timezone: string, now: Dat
         }
         metadata.weekPattern = input.week_pattern;
       }
+      if (input.week_pattern === "every_week" && input.occurrences !== undefined) {
+        throw new Error(
+          'week_pattern "every_week" means every matching weekday, so occurrences has nothing to ' +
+            'pick from and Donetick ignores it. Use week_of_month or week_of_quarter, or drop ' +
+            "occurrences.",
+        );
+      }
       if (input.week_pattern !== undefined && input.week_pattern !== "every_week") {
         // Measured: week_of_month with no occurrences answers 500 on every
         // completion. Donetick's scheduler requires at least one, and the chore is

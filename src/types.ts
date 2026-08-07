@@ -92,7 +92,6 @@ export const CHORE_STATUS: Record<number, string> = {
   3: "pending_approval",
 };
 
-/** Donetick priority is inverted: P1 is the most urgent, 0 means unset. */
 /**
  * Chore history rows, which are not the same scale as CHORE_STATUS. Measured on
  * v0.1.76: completing wrote 1, skipping 2, a completion awaiting sign-off 3, and a

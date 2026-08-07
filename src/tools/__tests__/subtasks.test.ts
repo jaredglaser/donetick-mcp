@@ -21,6 +21,7 @@ function fakeService(opts: FakeOptions = {}) {
       calls.push("GET chores");
       return opts.chores ?? [];
     },
+    allChores: async () => opts.chores ?? [],
     write: async <T>(operation: () => Promise<T>): Promise<T> => {
       try {
         return await operation();

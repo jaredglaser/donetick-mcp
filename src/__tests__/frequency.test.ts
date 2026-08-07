@@ -387,3 +387,33 @@ describe("week_pattern needs occurrences Donetick can match", () => {
     }
   });
 });
+
+describe("every_week takes no occurrences", () => {
+  test("is refused, since Donetick ignores them for that pattern", () => {
+    // every_week means every matching weekday, so there is nothing to pick from. It
+    // also bypassed the range check, letting an occurrence Donetick can never match
+    // through, and the projection then read the pattern as monthly.
+    expect(() =>
+      buildFrequency(
+        {
+          type: "days_of_the_week",
+          days: ["saturday"],
+          week_pattern: "every_week",
+          occurrences: [3],
+        },
+        tz,
+        now,
+      ),
+    ).toThrow(/every_week/);
+  });
+
+  test("every_week on its own is fine", () => {
+    expect(() =>
+      buildFrequency(
+        { type: "days_of_the_week", days: ["saturday"], week_pattern: "every_week" },
+        tz,
+        now,
+      ),
+    ).not.toThrow();
+  });
+});

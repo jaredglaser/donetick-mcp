@@ -33,6 +33,7 @@ function fakeService(opts: FakeOptions = {}) {
       calls.push({ method: "GET", path: "chores" });
       return opts.chores ?? [];
     },
+    allChores: async () => opts.chores ?? [],
     members: async () => opts.members ?? members,
     write: async <T>(operation: () => Promise<T>): Promise<T> => {
       try {

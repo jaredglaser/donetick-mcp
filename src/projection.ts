@@ -28,11 +28,18 @@ export function summarizeFrequency(chore: RawChore): string {
     case "days_of_the_week": {
       const days = meta.days ?? [];
       if (days.length === 0) return "on selected days";
-      // Every pattern Donetick honors, measured against a chore due Thu 2026-09-10:
-      // week_of_month [2] scheduled the 2nd Saturday, [1,3] the next of either, and
-      // week_of_quarter [1] the first of the quarter. Rendering only week_of_month
-      // described the rest as "every saturday", which is a different schedule.
-      if (meta.occurrences && meta.occurrences.length > 0 && meta.weekPattern) {
+      // week_of_month and week_of_quarter pick one occurrence of the weekday, and
+      // every_week does not. Measured against a chore due Thu 2026-09-10: [2]
+      // scheduled the 2nd Saturday, [1,3] the next of either, and week_of_quarter [1]
+      // the first of the quarter. Rendering only week_of_month described those as
+      // "every saturday"; rendering every_week too describes a weekly chore as
+      // monthly, which is the same error inverted.
+      if (
+        meta.occurrences &&
+        meta.occurrences.length > 0 &&
+        meta.weekPattern &&
+        meta.weekPattern !== "every_week"
+      ) {
         const period = meta.weekPattern === "week_of_quarter" ? "quarter" : "month";
         return `the ${meta.occurrences.map(ordinal).join(", ")} ${days.join("/")} of every ${period}`;
       }

@@ -281,7 +281,7 @@ export function requireDueDateFor(
   }
   if (frequencyType === "adaptive") {
     throw new Error(
-      "An adaptive chore needs a due date: Donetick learns its interval by comparing each completion against it and cannot complete a chore that has none.",
+      "An adaptive chore needs a due date: Donetick's skip scheduler reads it without checking whether it is there, so the chore can be created and then never skipped.",
     );
   }
 }
@@ -368,16 +368,6 @@ function assertNoThingTrigger(existing: RawChore): void {
 }
 
 /**
- * GET /chores/:id/details omits assignStrategy, assignees, frequency,
- * frequencyMetadata, isRolling, isPrivate, labelsV2, notification,
- * notificationMetadata, points, and requireApproval, which is every field a write
- * requires. Merging onto it would silently drop recurrence, labels, points,
- * assignees, and the approval flag on every edit. Checking assignStrategy alone
- * would catch it, but three independent list-only fields being simultaneously
- * absent is a stronger signal that this is genuinely the wrong shape, rather than a
- * list row that happens to omit one optional field for a legitimate reason.
- */
-/**
  * A chore whose stored recurrence Donetick cannot schedule. Reachable because this
  * server built "first saturday of every month" as day_of_the_month with days,
  * weekPattern and occurrences until 7d0940a, and the carry-forward branch spreads
@@ -402,6 +392,16 @@ function assertSchedulableFrequency(existing: RawChore): void {
   );
 }
 
+/**
+ * GET /chores/:id/details omits assignStrategy, assignees, frequency,
+ * frequencyMetadata, isRolling, isPrivate, labelsV2, notification,
+ * notificationMetadata, points, and requireApproval, which is every field a write
+ * requires. Merging onto it would silently drop recurrence, labels, points,
+ * assignees, and the approval flag on every edit. Checking assignStrategy alone
+ * would catch it, but three independent list-only fields being simultaneously
+ * absent is a stronger signal that this is genuinely the wrong shape, rather than a
+ * list row that happens to omit one optional field for a legitimate reason.
+ */
 function assertListRowShape(existing: RawChore): void {
   const looksLikeDetailsView =
     existing.assignStrategy === undefined &&
@@ -428,11 +428,15 @@ function assertListRowShape(existing: RawChore): void {
 export function mergeEditRequest(existing: RawChore, input: EditInput, ctx: BuildContext): ChoreRequestBody {
   assertListRowShape(existing);
   assertNoThingTrigger(existing);
-  assertSchedulableFrequency(existing);
 
   if (!existing.id || existing.id <= 0) {
     throw new Error(`Cannot edit a chore with id ${existing.id}. The existing chore's id must be a positive number.`);
   }
+
+  // Guarded only on the carry-forward branch. A caller passing frequency is replacing
+  // the stored recurrence, which is the repair this refusal exists to prompt, so
+  // checking before the merge refused the fix along with the problem.
+  if (input.frequency === undefined) assertSchedulableFrequency(existing);
 
   const frequency =
     input.frequency !== undefined

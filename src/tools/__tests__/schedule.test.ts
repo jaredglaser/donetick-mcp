@@ -30,6 +30,7 @@ function fakeService(opts: FakeOptions = {}) {
       calls.push("GET chores");
       return opts.chores ?? [];
     },
+    allChores: async () => opts.chores ?? [],
     archivedChores: async () => {
       calls.push("GET archivedChores");
       return opts.archivedChores ?? [];

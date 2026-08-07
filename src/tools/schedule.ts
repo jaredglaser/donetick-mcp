@@ -74,7 +74,7 @@ export async function rescheduleChore(input: RescheduleInput, ctx: WriteContext)
   const dueDate = parsed === null ? null : parsed.toISOString();
   // This endpoint writes the due date directly, so it never passes through the
   // builders where the guard normally runs. Clearing the date on a chore with a
-  // completion window or an adaptive frequency leaves it permanently uncompletable.
+  // completion window leaves it uncompletable, and an adaptive frequency unskippable.
   requireDueDateFor(parsed, existing.frequencyType, existing.completionWindow ?? null);
   const updatedAt = concurrencyToken(existing, ctx.now());
 
@@ -98,7 +98,13 @@ export async function reassignChore(input: ReassignInput, ctx: WriteContext): Pr
   const members = await ctx.service.members();
   const target = resolveMember(input.assignee, members);
 
-  if (currentAssigneeIds(existing).includes(target.userId)) {
+  // A chore carrying no_assignee takes the full edit even when the target is already
+  // on it, because only the merge promotes the strategy. Donetick maps no_assignee to
+  // nil when it picks the next assignee and persists that, so the fast path would
+  // land, report success, and be undone by the first completion.
+  const needsStrategyPromotion = existing.assignStrategy === "no_assignee";
+
+  if (!needsStrategyPromotion && currentAssigneeIds(existing).includes(target.userId)) {
     const updatedAt = concurrencyToken(existing, ctx.now());
     await ctx.service.write(() =>
       ctx.service.client.put(endpoints.updateAssignee(existing.id), { assignee: target.userId, updatedAt }),

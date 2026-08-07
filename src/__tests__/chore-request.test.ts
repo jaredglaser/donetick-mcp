@@ -782,3 +782,67 @@ describe("combinations that would crash or silently revert on Donetick's side", 
     expect(body.notificationMetadata).toBeDefined();
   });
 });
+
+describe("a stored recurrence Donetick cannot schedule", () => {
+  // This server built "first saturday of every month" as day_of_the_month with
+  // weekday names until the mapping was corrected, and such a chore answers 500 on
+  // every completion. The carry-forward branch would re-send that shape and report
+  // success, so it is refused, but only there: a caller passing frequency is
+  // replacing the recurrence, which is the repair.
+  const broken = {
+    ...existing,
+    frequencyType: "day_of_the_month",
+    frequencyMetadata: { days: ["saturday"], weekPattern: "week_of_month", occurrences: [1] },
+  } as unknown as RawChore;
+
+  test("an unrelated edit is refused rather than re-sending it", () => {
+    expect(() => mergeEditRequest(broken, { name: "Renamed" }, ctx())).toThrow(/cannot schedule/);
+  });
+
+  test("the repair the message names is allowed through", () => {
+    expect(() =>
+      mergeEditRequest(
+        broken,
+        {
+          frequency: {
+            type: "days_of_the_week",
+            days: ["saturday"],
+            week_pattern: "week_of_month",
+            occurrences: [1],
+          },
+        },
+        ctx(),
+      ),
+    ).not.toThrow();
+  });
+
+  test("the other repair it names is allowed through too", () => {
+    expect(() =>
+      mergeEditRequest(
+        broken,
+        { frequency: { type: "day_of_the_month", day_of_month: 1, months: ["october"] } },
+        ctx(),
+      ),
+    ).not.toThrow();
+  });
+
+  test("day_of_the_month with no months is refused the same way", () => {
+    const noMonths = {
+      ...existing,
+      frequencyType: "day_of_the_month",
+      frequency: 15,
+      frequencyMetadata: { timezone: tz },
+    } as unknown as RawChore;
+    expect(() => mergeEditRequest(noMonths, { name: "Renamed" }, ctx())).toThrow(/cannot schedule/);
+  });
+
+  test("a well-formed day_of_the_month is untouched", () => {
+    const fine = {
+      ...existing,
+      frequencyType: "day_of_the_month",
+      frequency: 15,
+      frequencyMetadata: { months: ["october"], timezone: tz },
+    } as unknown as RawChore;
+    expect(() => mergeEditRequest(fine, { name: "Renamed" }, ctx())).not.toThrow();
+  });
+});
