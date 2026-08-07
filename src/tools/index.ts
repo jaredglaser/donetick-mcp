@@ -179,6 +179,11 @@ const frequencySchema = z.object({
         'days: ["saturday"], week_pattern: "week_of_month", occurrences: [1], and -1 means the last. ' +
         "day_of_the_month is a calendar day number instead, and needs day_of_month plus months. " +
         "trigger recurrence is not supported here; use the Donetick web UI for it. " +
+        "One caveat that applies to all of them except days_of_the_week and yearly: Donetick " +
+        "reschedules by adding elapsed time rather than by calendar, so a recurring chore drifts an " +
+        "hour at each daylight-saving transition. A 9am daily chore becomes an 8am one from the " +
+        "first completion after the autumn change. days_of_the_week holds its time of day across " +
+        "the transition, so prefer it for anything that should stay at a particular hour. " +
         "The remaining three: once and no_repeat both mean a one-off that never recurs, and once " +
         "is the default, so prefer it. adaptive learns the interval from how the chore is actually " +
         "completed and requires a due date; do not use it unless the user asks for it by name, " +
@@ -218,7 +223,9 @@ const frequencySchema = z.object({
   time: z.string().optional().describe(
       "Time of day in HH:MM 24-hour format. Donetick reads it only for interval, " +
         "days_of_the_week and day_of_the_month, and not for an hourly interval, where it freezes " +
-        "the chore. For every other type set the hour through due_date.",
+        "the chore. For every other type set the hour through due_date. The stored time is a fixed " +
+        "offset rather than a wall clock, so outside days_of_the_week it shifts by an hour at each " +
+        "daylight-saving transition: 18:30 set in summer fires at 17:30 through the winter.",
     ),
 });
 
@@ -463,7 +470,11 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
           .positive()
           .max(MAX_HISTORY_DAYS)
           .optional()
-          .describe("How many days back to look. Defaults to 7, capped at 90."),
+          .describe(
+            "How many days back to look, counted from each action's recorded time. Defaults to 7, " +
+              "capped at 90. Applied by this server: Donetick returns its whole history whatever it " +
+              "is asked for.",
+          ),
         include_all_actions: z
           .boolean()
           .optional()
@@ -480,7 +491,21 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
           service.chores(),
           service.members(),
         ]);
-        const rows = Array.isArray(raw) ? (raw as RawHistoryRow[]) : [];
+        const all = Array.isArray(raw) ? (raw as RawHistoryRow[]) : [];
+
+        // Filtered here because Donetick does not filter. Measured on v0.1.76: the
+        // history endpoint ignores every query parameter it is given. limit=1,
+        // days=1, since=, offset= and page= all return the identical full set, so
+        // the days this tool documents was a promise nothing kept, and a household
+        // with a year of use got that year back on every call.
+        //
+        // Rows with no performedAt are kept: a timer start carries none, and it is
+        // an action the caller asked about rather than an old one.
+        const cutoff = now().getTime() - days * 86_400_000;
+        const rows = all.filter((row) => {
+          const at = dueDateOf(row.performedAt);
+          return at === null || at.getTime() >= cutoff;
+        });
 
         // History outlives archiving, so a row whose chore is not in the active
         // list is usually archived rather than deleted. The archived list is an

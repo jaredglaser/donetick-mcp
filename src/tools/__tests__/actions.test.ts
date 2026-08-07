@@ -383,6 +383,38 @@ describe("point totals after a write that moves them", () => {
   });
 });
 
+describe("acting on an archived chore", () => {
+  // Donetick allows every one of these and says nothing. The chore is in no active
+  // list, so the advanced due date is one nobody will see.
+  const archived = { ...listRow, isActive: false } as RawChore;
+
+  test("completing one succeeds but says it is archived", async () => {
+    const fake = fakeService({ chores: [archived] });
+
+    const result = await completeChore({ chore_id: 7 }, ctxFor(fake.service));
+
+    expect(result.completed).toBe(true);
+    expect(result.message).toMatch(/archived/);
+    expect(result.message).toMatch(/unarchive_chore/);
+  });
+
+  test("skipping one says the same", async () => {
+    const fake = fakeService({ chores: [{ ...archived, status: 0 }] });
+
+    const result = await skipChore({ chore_id: 7 }, ctxFor(fake.service));
+
+    expect(result.message).toMatch(/archived/);
+  });
+
+  test("an active chore says nothing about archiving", async () => {
+    const fake = fakeService({ chores: [listRow] });
+
+    const result = await completeChore({ chore_id: 7 }, ctxFor(fake.service));
+
+    expect(result.message).not.toMatch(/archived/);
+  });
+});
+
 describe("skipChore against a timer", () => {
   // Confirmed against a live v0.1.76 instance: with a timer running, skip returned
   // 200, the due date did not move, the chore stayed at status 1, and the only

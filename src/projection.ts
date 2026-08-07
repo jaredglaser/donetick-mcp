@@ -26,6 +26,14 @@ export function summarizeFrequency(chore: RawChore): string {
       // the read side saying the chore was fine while every edit refused it.
       const count = chore.frequency;
       if (typeof meta.unit !== "string") return "broken: an interval with no unit";
+      // The last of the three shapes assertSchedulableFrequency refuses. Measured
+      // live: an hourly interval carrying a time answers 200 to every completion and
+      // never moves the due date, so five completions in a row each reported success
+      // against the identical next date. edit_chore already refuses it; the read side
+      // called it "every 4 hours".
+      if (meta.unit === "hours" && typeof meta.time === "string" && meta.time.length > 0) {
+        return "broken: an hourly interval carrying a time of day";
+      }
       if (typeof count !== "number" || count <= 0) {
         return `broken: an interval of ${String(count)} ${meta.unit}`;
       }
@@ -99,6 +107,28 @@ function ordinal(n: number): string {
   return `${n}${suffix}`;
 }
 
+/**
+ * Reminder offsets are carried on the wire as negative values, because Donetick adds
+ * them to the due date. Rendered back the way a caller states them, as time before,
+ * so what get_chore reports and what create_chore accepts are the same vocabulary.
+ */
+function summarizeNotifications(chore: RawChore): { enabled: boolean; reminders: string[] } {
+  const raw = chore.notificationMetadata?.templates;
+  const templates: Array<{ value: number; unit: string }> = Array.isArray(raw)
+    ? raw.filter(
+        (t): t is { value: number; unit: string } =>
+          typeof t === "object" &&
+          t !== null &&
+          typeof (t as { value?: unknown }).value === "number" &&
+          typeof (t as { unit?: unknown }).unit === "string",
+      )
+    : [];
+  return {
+    enabled: chore.notification === true,
+    reminders: templates.map((t) => `${Math.abs(t.value)}${t.unit}`),
+  };
+}
+
 export function projectChore(
   chore: RawChore,
   members: Member[],
@@ -141,6 +171,7 @@ export function projectChore(
       name: sub.name,
       done: Boolean(sub.completedAt),
     })),
+    notifications: summarizeNotifications(chore),
     last_completed_at: chore.lastCompletedDate ?? null,
     last_completed_by:
       chore.lastCompletedBy === null || chore.lastCompletedBy === undefined

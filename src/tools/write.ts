@@ -22,7 +22,7 @@ export type CreateOutcome =
   | { kind: "created_detail_unavailable"; id: number; message: string };
 
 export type EditOutcome =
-  | { kind: "edited"; chore: ProjectedChore }
+  | { kind: "edited"; chore: ProjectedChore; warning?: string }
   | { kind: "edited_detail_unavailable"; id: number; message: string };
 
 export type DeleteOutcome =
@@ -206,7 +206,22 @@ export async function editChore(
     ...(detail as Partial<RawChore>),
     labelsV2: existing.labelsV2 ?? null,
   } as RawChore;
-  return { kind: "edited", chore: projectChore(merged, buildCtx.members, buildCtx.projects, buildCtx.now) };
+  // The one field an unrelated edit can change on its own. mergeNotification turns
+  // notifications off when the stored row has them on with no metadata, because the
+  // alternative reaches a nil deref in a Donetick goroutine and takes the process
+  // down. That tradeoff is argued in chore-request.ts and stated in edit_chore's
+  // description, but the description is not what the caller reads after the write.
+  const notificationsSwitchedOff = existing.notification === true && body!.notification === false;
+
+  return {
+    kind: "edited",
+    chore: projectChore(merged, buildCtx.members, buildCtx.projects, buildCtx.now),
+    ...(notificationsSwitchedOff
+      ? {
+          warning: `Notifications on "${existing.name}" were switched off by this edit. Donetick had them enabled with no reminder settings stored, a combination it crashes on when written back. Pass notify with the reminders you want to turn them on again.`,
+        }
+      : {}),
+  };
 }
 
 /**

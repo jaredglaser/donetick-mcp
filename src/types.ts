@@ -154,6 +154,16 @@ export interface ProjectedChore {
   requires_approval: boolean;
   completion_window: number | null;
   subtasks: Array<{ name: string; done: boolean }>;
+  /**
+   * Notifications were write-only: they could be set through create_chore and
+   * edit_chore and read back nowhere, so "does the trash chore have a reminder on
+   * it" had no answer. That also hid the one documented data loss in this server,
+   * since an edit that switches notifications off is invisible in the result.
+   *
+   * Offsets are rendered the way a caller states them, as time before the due date,
+   * rather than as the negative values the wire carries.
+   */
+  notifications: { enabled: boolean; reminders: string[] };
   last_completed_at: string | null;
   last_completed_by: string | null;
 }

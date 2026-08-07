@@ -164,6 +164,13 @@ export async function setPriority(input: SetPriorityInput, ctx: ToolContext): Pr
 export async function archiveChore(input: ArchiveInput, ctx: ToolContext): Promise<ArchiveOutcome> {
   const existing = await loadActiveChore(input.chore_id, ctx);
 
+  // loadChoreById falls back to the unfiltered list, which includes archived rows,
+  // so this reported a second successful archive on a chore already archived.
+  // unarchive_chore has always scoped itself; the asymmetry was not deliberate.
+  if (existing.isActive === false) {
+    throw new Error(`"${existing.name}" is already archived. Use unarchive_chore to bring it back.`);
+  }
+
   await ctx.service.write(() => ctx.service.client.put(endpoints.archiveChore(existing.id), {}));
 
   return { kind: "archived", chore_id: existing.id, name: existing.name };

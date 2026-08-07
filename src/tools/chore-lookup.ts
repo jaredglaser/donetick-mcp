@@ -53,10 +53,21 @@ export async function loadChoreById(
  * An archived chore is by definition absent from the active list, so unarchiving
  * has to look somewhere the default fetch does not reach.
  */
-export function loadArchivedChoreById(
+export async function loadArchivedChoreById(
   chore_id: number | undefined,
   ctx: ToolContext,
 ): Promise<RawChore> {
-  return loadFrom(chore_id, () => ctx.service.archivedChores(), "the archived chore list");
+  try {
+    return await loadFrom(chore_id, () => ctx.service.archivedChores(), "the archived chore list");
+  } catch (error) {
+    // The overwhelmingly likely case is that the chore is simply not archived, and
+    // the shared message blamed deletion for a chore sitting in the active list.
+    const id = requireChoreId(chore_id);
+    const active = (await ctx.service.chores()).some((chore) => chore.id === id);
+    if (!active) throw error;
+    throw new Error(
+      `Chore ${id} is not archived, so there is nothing to unarchive. Use archive_chore to archive it.`,
+    );
+  }
 }
 

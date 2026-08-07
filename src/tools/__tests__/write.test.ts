@@ -658,3 +658,33 @@ describe("the due-date clear's concurrency token", () => {
     expect((clear!.body as Record<string, unknown>).dueDate).toBeNull();
   });
 });
+
+describe("an edit that switches notifications off says so", () => {
+  // mergeNotification turns them off when the stored row has them on with no
+  // metadata, because writing that shape back reaches a nil deref in a Donetick
+  // goroutine and takes the process down. The tradeoff is right; the silence was
+  // not. The caveat lived in edit_chore's description, which is not what a caller
+  // reads after the write that performed it.
+  test("warns when the stored row had them on with no metadata", async () => {
+    const fake = fakeService({
+      chores: [{ ...listRow, notification: true, notificationMetadata: null }],
+      choreDetails: () => ({}) as unknown as RawChore,
+    });
+
+    const outcome = await editChore({ chore_id: 5, description: "poke" }, ctxFor(fake.service));
+
+    expect(outcome.kind).toBe("edited");
+    expect((outcome as { warning?: string }).warning).toMatch(/switched off/i);
+  });
+
+  test("stays quiet on a chore whose notifications were already off", async () => {
+    const fake = fakeService({
+      chores: [{ ...listRow, notification: false, notificationMetadata: null }],
+      choreDetails: () => ({}) as unknown as RawChore,
+    });
+
+    const outcome = await editChore({ chore_id: 5, description: "poke" }, ctxFor(fake.service));
+
+    expect((outcome as { warning?: string }).warning).toBeUndefined();
+  });
+});

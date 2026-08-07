@@ -161,6 +161,39 @@ describe("summarizeFrequency", () => {
   });
 });
 
+describe("notification settings, which used to be write-only", () => {
+  // Settable through create_chore and edit_chore and readable nowhere, so "does the
+  // trash chore have a reminder on it" had no answer, and an edit that switched them
+  // off was invisible in the result.
+  test("reports the reminders as time before the due date, not as the negative wire values", () => {
+    const out = projectChore(
+      chore({
+        notification: true,
+        notificationMetadata: { dueDate: true, templates: [{ value: -30, unit: "m" }, { value: -2, unit: "h" }] },
+      }),
+      [],
+      [],
+      new Date("2026-06-15T12:00:00Z"),
+    );
+    expect(out.notifications).toEqual({ enabled: true, reminders: ["30m", "2h"] });
+  });
+
+  test("a chore with notifications off reports no reminders", () => {
+    const out = projectChore(chore({ notification: false }), [], [], new Date("2026-06-15T12:00:00Z"));
+    expect(out.notifications).toEqual({ enabled: false, reminders: [] });
+  });
+
+  test("enabled with no stored metadata is the shape an edit switches off", () => {
+    const out = projectChore(
+      chore({ notification: true, notificationMetadata: null }),
+      [],
+      [],
+      new Date("2026-06-15T12:00:00Z"),
+    );
+    expect(out.notifications).toEqual({ enabled: true, reminders: [] });
+  });
+});
+
 describe("live-observed edge cases", () => {
   // These two used to assert the friendly reading, "every 5 days" and "on selected
   // days". Measured against a live v0.1.76 container: an interval created with the
@@ -182,6 +215,41 @@ describe("live-observed edge cases", () => {
     expect(
       summarizeFrequency(chore({ frequencyType: "days_of_the_week", frequencyMetadata: { days: null } })),
     ).toBe("broken: days_of_the_week with no days");
+  });
+
+  test("an hourly interval carrying a time reads as broken, since it never advances", () => {
+    // Measured live: five consecutive completions each reported success against the
+    // identical next due date. edit_chore already refused this shape; the read side
+    // called it "every 4 hours".
+    expect(
+      summarizeFrequency(
+        chore({
+          frequencyType: "interval",
+          frequency: 4,
+          frequencyMetadata: { unit: "hours", time: "1970-01-01T09:00:00-04:00" },
+        }),
+      ),
+    ).toBe("broken: an hourly interval carrying a time of day");
+  });
+
+  test("an hourly interval with no time is ordinary", () => {
+    expect(
+      summarizeFrequency(
+        chore({ frequencyType: "interval", frequency: 4, frequencyMetadata: { unit: "hours" } }),
+      ),
+    ).toBe("every 4 hours");
+  });
+
+  test("a daily interval carrying a time is ordinary, since only hourly freezes", () => {
+    expect(
+      summarizeFrequency(
+        chore({
+          frequencyType: "interval",
+          frequency: 2,
+          frequencyMetadata: { unit: "days", time: "1970-01-01T09:00:00-04:00" },
+        }),
+      ),
+    ).toBe("every 2 days");
   });
 
   test("a week pattern with no occurrences reads as broken, matching what the write side refuses", () => {

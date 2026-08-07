@@ -128,16 +128,22 @@ export function listChores(args: ListArgs, ctx: ListContext): ListResult {
   }
 
   const sort = args.sort ?? "due_date";
+  const byDueDate = (a: RawChore, b: RawChore): number => {
+    const at = dueDateOf(a.nextDueDate)?.getTime() ?? Number.MAX_SAFE_INTEGER;
+    const bt = dueDateOf(b.nextDueDate)?.getTime() ?? Number.MAX_SAFE_INTEGER;
+    return at - bt;
+  };
   rows = [...rows].sort((a, b) => {
     if (sort === "name") return a.name.localeCompare(b.name);
     if (sort === "priority") {
       // Donetick priority is inverted and 0 means unset, so 0 sorts last.
       const rank = (p: number) => (p === 0 ? Number.MAX_SAFE_INTEGER : p);
-      return rank(a.priority) - rank(b.priority);
+      const byRank = rank(a.priority) - rank(b.priority);
+      // Chained, because equal priorities left Donetick's own row order showing
+      // through: an undated "someday" chore sorted above one due tomorrow.
+      return byRank !== 0 ? byRank : byDueDate(a, b);
     }
-    const at = a.nextDueDate === null ? Number.MAX_SAFE_INTEGER : new Date(a.nextDueDate).getTime();
-    const bt = b.nextDueDate === null ? Number.MAX_SAFE_INTEGER : new Date(b.nextDueDate).getTime();
-    return at - bt;
+    return byDueDate(a, b);
   });
 
   const total = rows.length;

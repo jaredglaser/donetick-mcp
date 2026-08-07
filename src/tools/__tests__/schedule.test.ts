@@ -412,3 +412,25 @@ describe("reassignChore's path choice", () => {
     expect(sent.assignStrategy).not.toBe("no_assignee");
   });
 });
+
+describe("archiving a chore that is already archived", () => {
+  // loadChoreById falls back to the unfiltered list, which includes archived rows,
+  // so this reported a second successful archive. unarchive_chore has always scoped
+  // itself, and the asymmetry was not deliberate.
+  test("is refused rather than reported as archived a second time", async () => {
+    const fake = fakeService({ chores: [{ ...listRow, isActive: false }] });
+
+    await expect(archiveChore({ chore_id: 5 }, ctxFor(fake.service))).rejects.toThrow(
+      /already archived/,
+    );
+    expect(fake.calls.some((c) => c.startsWith("PUT"))).toBe(false);
+  });
+
+  test("an active chore still archives", async () => {
+    const fake = fakeService({ chores: [{ ...listRow, isActive: true }] });
+
+    await expect(archiveChore({ chore_id: 5 }, ctxFor(fake.service))).resolves.toMatchObject({
+      kind: "archived",
+    });
+  });
+});

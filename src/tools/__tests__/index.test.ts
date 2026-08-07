@@ -403,6 +403,40 @@ describe("list_activity", () => {
     expect(requestedPath).toMatch(/limit=90/);
   });
 
+  test("filters by days itself, since Donetick returns its whole history regardless", async () => {
+    // Measured on v0.1.76: limit, days, since, offset and page are all ignored by
+    // GET /chores/history, so the window this tool documents has to be applied here
+    // or not at all. Before this, "what did we get done this week" answered with
+    // months-old completions presented as recent.
+    const recent = historyRow({ id: 1, performedAt: "2026-06-14T09:00:00Z" });
+    const old = historyRow({ id: 2, performedAt: "2026-05-16T09:00:00Z" }); // 30 days back
+    const fakeService = { ...service, rawGet: async () => [recent, old] };
+    const tools = buildToolDefinitions({ ...deps, service: fakeService as never });
+    const tool = tools.find((t) => t.name === "list_activity")!;
+
+    const within = jsonOf(await tool.handler({ days: 7 })) as Array<{ performed_at: string }>;
+    expect(within.map((r) => r.performed_at)).toEqual(["2026-06-14T09:00:00Z"]);
+
+    const wider = jsonOf(await tool.handler({ days: 90 })) as Array<{ performed_at: string }>;
+    expect(wider.map((r) => r.performed_at)).toEqual([
+      "2026-06-14T09:00:00Z",
+      "2026-05-16T09:00:00Z",
+    ]);
+  });
+
+  test("keeps a row with no performedAt, which is what a timer start looks like", async () => {
+    const started = historyRow({ id: 3, performedAt: null, status: 0 });
+    const fakeService = { ...service, rawGet: async () => [started] };
+    const tools = buildToolDefinitions({ ...deps, service: fakeService as never });
+    const tool = tools.find((t) => t.name === "list_activity")!;
+
+    const out = jsonOf(await tool.handler({ days: 1, include_all_actions: true })) as Array<{
+      performed_at: string | null;
+    }>;
+    expect(out.length).toBe(1);
+    expect(out[0]!.performed_at).toBeNull();
+  });
+
   test("a fractional day count never floors to a limit of zero", async () => {
     // The lower-bound check ran before the floor, so anything in (0, 1) passed the
     // `<= 0` guard and then floored to 0, asking Donetick for limit=0. The zod cap

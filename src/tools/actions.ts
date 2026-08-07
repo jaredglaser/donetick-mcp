@@ -141,6 +141,29 @@ export async function completeChore(input: CompleteInput, ctx: ToolContext): Pro
   }
 
   const nextDue = nextDueDateOf(response);
+
+  // Measured live on an adaptive chore completed early: Donetick rescheduled it to
+  // the completion instant minus how early it was, so the next occurrence landed
+  // before the completion and the chore was overdue the moment it was done. Later
+  // completions land it a couple of milliseconds before now, permanently. Reporting
+  // a bare success there hands back a date the caller has no reason to question.
+  const nextDueInstant = nextDue.present && nextDue.value !== null ? new Date(nextDue.value) : null;
+  const scheduledIntoThePast =
+    nextDueInstant !== null &&
+    !Number.isNaN(nextDueInstant.getTime()) &&
+    nextDueInstant.getTime() < ctx.now().getTime();
+  const pastNote = scheduledIntoThePast
+    ? ` Donetick set the next occurrence to ${nextDueInstant.toISOString()}, which is already in the past, so the chore is overdue again immediately. An adaptive recurrence does this when a chore is completed earlier than its interval; reschedule_chore sets a real next date.`
+    : "";
+
+  // An archived chore is in no active list, so a completion or skip advances a due
+  // date nobody will see. Donetick allows it and says nothing; every write tool here
+  // reported plain success on one.
+  const archivedNote =
+    chore.isActive === false
+      ? ` "${chore.name}" is archived, so it does not appear in any active list. Use unarchive_chore if that was not intended.`
+      : "";
+
   const rollingNote =
     isPastCompletion && chore.isRolling === true
       ? " This is a rolling chore, which reschedules from its completion date, so backdating the completion also moved the next occurrence earlier."
@@ -152,7 +175,7 @@ export async function completeChore(input: CompleteInput, ctx: ToolContext): Pro
     completed: true,
     pending_approval: false,
     next_due_date: nextDue.present ? nextDue.value : null,
-    message: `Completed "${chore.name}".${rollingNote}${
+    message: `Completed "${chore.name}".${archivedNote}${rollingNote}${pastNote}${
       nextDue.present
         ? ""
         : " Donetick did not report a new due date, so the next occurrence is unknown here; call get_chore to see it."
@@ -197,13 +220,17 @@ export async function skipChore(input: SkipInput, ctx: ToolContext): Promise<Ski
   // occurrence that was just skipped, and reporting it under a field named
   // next_due_date is indistinguishable from a verified answer.
   const nextDue = nextDueDateOf(response);
+  const archivedNote =
+    chore.isActive === false
+      ? ` "${chore.name}" is archived, so it does not appear in any active list. Use unarchive_chore if that was not intended.`
+      : "";
   return {
     id: chore.id,
     name: chore.name,
     next_due_date: nextDue.present ? nextDue.value : null,
     message: nextDue.present
-      ? `Skipped "${chore.name}".`
-      : `Skipped "${chore.name}". Donetick did not report the new due date; call get_chore to see it.`,
+      ? `Skipped "${chore.name}".${archivedNote}`
+      : `Skipped "${chore.name}".${archivedNote} Donetick did not report the new due date; call get_chore to see it.`,
   };
 }
 

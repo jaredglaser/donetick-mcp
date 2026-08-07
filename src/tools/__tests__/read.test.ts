@@ -103,6 +103,28 @@ describe("listChores", () => {
     expect(out.chores.map((c) => c.id)).toEqual([1, 2, 3]);
   });
 
+  test("equal priorities fall back to due date, not Donetick's row order", () => {
+    // Chores 1 and 2 share priority 1 here, and the raw list has the later one
+    // first. Without a tiebreak the caller saw an undated "someday" chore above one
+    // due tomorrow, which is the opposite of what sorting by priority is for.
+    const samePriority: RawChore[] = [
+      { ...chores[2]!, id: 30, name: "Someday maybe", priority: 1, nextDueDate: null },
+      { ...chores[1]!, id: 20, name: "Due later", priority: 1 },
+      { ...chores[0]!, id: 10, name: "Due soonest", priority: 1 },
+    ];
+    const out = listChores({ scope: "all", sort: "priority" }, { ...ctx, chores: samePriority });
+    expect(out.chores.map((c) => c.id)).toEqual([10, 20, 30]);
+  });
+
+  test("priority still wins over due date when they disagree", () => {
+    const mixed: RawChore[] = [
+      { ...chores[0]!, id: 10, name: "Urgent but later", priority: 1, nextDueDate: "2026-07-01T12:00:00Z" },
+      { ...chores[1]!, id: 20, name: "Low but sooner", priority: 4, nextDueDate: "2026-06-16T12:00:00Z" },
+    ];
+    const out = listChores({ scope: "all", sort: "priority" }, { ...ctx, chores: mixed });
+    expect(out.chores.map((c) => c.id)).toEqual([10, 20]);
+  });
+
   test("reports the total when limit truncates", () => {
     const out = listChores({ scope: "all", limit: 2 }, ctx);
     expect(out.chores.length).toBe(2);
