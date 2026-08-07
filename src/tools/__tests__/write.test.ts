@@ -14,6 +14,7 @@ const projects: Project[] = [{ id: 4, name: "Household" }];
 
 interface FakeOptions {
   chores?: RawChore[];
+  archivedChores?: RawChore[];
   members?: Member[];
   projects?: Project[];
   choreDetails?: (id: number) => RawChore | Promise<RawChore>;
@@ -30,6 +31,10 @@ function fakeService(opts: FakeOptions = {}) {
     chores: async () => {
       calls.push("GET chores");
       return opts.chores ?? [];
+    },
+    archivedChores: async () => {
+      calls.push("GET archivedChores");
+      return opts.archivedChores ?? [];
     },
     members: async () => opts.members ?? members,
     projects: async () => opts.projects ?? projects,
@@ -334,6 +339,51 @@ describe("deleteChore", () => {
       /999/,
     );
     expect(fake.calls.some((c) => c.startsWith("DELETE"))).toBe(false);
+  });
+
+  test("an id in neither list reports both were searched, so the message is not read as 'archived ones are safe'", async () => {
+    const fake = fakeService({ chores: [listRow], archivedChores: [] });
+
+    await expect(deleteChore({ chore_id: 999 }, ctxFor(fake.service), undefined)).rejects.toThrow(
+      /active or archived/,
+    );
+  });
+
+  test("deletes an archived chore, which Donetick's DELETE accepts", async () => {
+    // Verified live on 2026-08-06: archiving then deleting the same chore
+    // succeeds and the row is gone. Refusing it here would be this server
+    // inventing a restriction the API does not have.
+    const archivedRow = { ...listRow, id: 7, name: "Old chore", isActive: false };
+    const fake = fakeService({ chores: [], archivedChores: [archivedRow] });
+
+    const outcome = await deleteChore({ chore_id: 7 }, ctxFor(fake.service), { confirm: true });
+
+    expect(fake.calls).toContain("DELETE /api/v1/chores/7");
+    expect(outcome).toEqual({ kind: "deleted", deleted: 7, name: "Old chore" });
+  });
+
+  test("does not offer to archive a chore that is already archived", async () => {
+    const archivedRow = { ...listRow, id: 7, name: "Old chore", isActive: false };
+    const fake = fakeService({ chores: [], archivedChores: [archivedRow] });
+
+    const outcome = await deleteChore({ chore_id: 7 }, ctxFor(fake.service), undefined);
+
+    expect(outcome.kind).toBe("confirm_required");
+    if (outcome.kind === "confirm_required") {
+      expect(outcome.message).toMatch(/already archived/);
+      expect(outcome.message).not.toMatch(/archive it instead/);
+      expect(outcome.message).toMatch(/history/);
+    }
+  });
+
+  test("does not fetch the archived list when the id is in the cached active one", async () => {
+    // The archived list is an uncached request. Deleting an active chore is the
+    // common case and must not pay for it.
+    const fake = fakeService({ chores: [listRow], archivedChores: [] });
+
+    await deleteChore({ chore_id: 5 }, ctxFor(fake.service), { confirm: true });
+
+    expect(fake.calls).not.toContain("GET archivedChores");
   });
 });
 

@@ -427,6 +427,25 @@ async function createScratchChore(body: ChoreCreateBody): Promise<number> {
       };
     });
 
+    await check("DELETE /chores/:id accepts a chore that is archived", async () => {
+      // delete_chore resolves ids against the archived list as well as the active
+      // one because of this. If Donetick ever starts rejecting the archived case,
+      // that lookup is offering something the API will not honor.
+      const id = await createScratchChore(baseChoreBody(scoped("del-archived"), { frequencyType: "daily" }));
+      await client.put(endpoints.archiveChore(id), {});
+      await client.delete(endpoints.deleteChore(id));
+
+      // Deleted here rather than by the cleanup pass, so drop it from that list or
+      // the second delete reports a cleanup failure for a chore already gone.
+      createdChoreIds.splice(createdChoreIds.indexOf(id), 1);
+
+      const union = (await client.get(endpoints.listChoresWithArchived())) as RawChore[];
+      if (union.some((row) => row.id === id)) {
+        throw new Error(`archived chore ${id} survived a DELETE that reported success`);
+      }
+      return { detail: `archived chore ${id} deleted and gone from both lists` };
+    });
+
     // Run after the writes above (do, skip, complete) so there is fresh history to inspect.
     await check(
       "GET /chores/history?limit=7&members=true returns an array whose rows carry choreId but no chore name",
