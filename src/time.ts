@@ -13,12 +13,24 @@ function zoned(instant: Date, tz: string): Temporal.ZonedDateTime {
 }
 
 /**
- * The zone's UTC offset, formatted the way RFC3339 wants it. Read at the epoch
- * rather than at a real instant on purpose: the only caller stamps a placeholder
- * date whose offset must match the one it writes.
+ * The zone's UTC offset at a given instant, formatted the way RFC3339 wants it.
+ *
+ * Must be read at the write instant, not at a fixed date. Donetick converts the
+ * stored timestamp to UTC and takes its hour and minute from there, so the offset
+ * is what decides the wall-clock time the chore fires at. Reading it at the epoch
+ * put Asia/Singapore permanently 30 minutes out (+07:30 in 1970, +08:00 now),
+ * Pacific/Apia a day out, and every DST zone an hour out for half the year.
+ *
+ * No single stored value can be right across a DST boundary, which is Donetick's
+ * own limitation; the offset in force when the caller sets the time is the reading
+ * that matches what they meant.
  */
-export function utcOffsetFor(timezone: string): string {
-  return Temporal.Instant.fromEpochMilliseconds(0).toZonedDateTimeISO(timezone).offset;
+export function utcOffsetFor(timezone: string, at: Date): string {
+  const offset = Temporal.Instant.fromEpochMilliseconds(at.getTime()).toZonedDateTimeISO(timezone).offset;
+  // RFC3339 allows only [+-]HH:MM. Temporal emits seconds for the pre-standard local
+  // mean times some zones carried before the 1900s, so a caller reading the offset at
+  // an old instant can get -00:44:30, which Go's time.Parse refuses.
+  return /^[+-]\d{2}:\d{2}$/.test(offset) ? offset : offset.slice(0, 6);
 }
 
 /** A zone Temporal and Intl both recognize. Anything else throws at use time. */

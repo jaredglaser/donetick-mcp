@@ -1,4 +1,9 @@
-import { concurrencyToken, mergeEditRequest, type BuildContext } from "@/chore-request";
+import {
+  concurrencyToken,
+  mergeEditRequest,
+  requireDueDateFor,
+  type BuildContext,
+} from "@/chore-request";
 import { parseDueDate } from "@/dates";
 import { endpoints } from "@/endpoints";
 import { loadArchivedChoreById, loadChoreById } from "@/tools/chore-lookup";
@@ -67,6 +72,10 @@ export async function rescheduleChore(input: RescheduleInput, ctx: WriteContext)
   const existing = await loadActiveChore(input.chore_id, ctx);
   const parsed = parseDueDate(input.due_date, ctx.now(), ctx.timezone);
   const dueDate = parsed === null ? null : parsed.toISOString();
+  // This endpoint writes the due date directly, so it never passes through the
+  // builders where the guard normally runs. Clearing the date on a chore with a
+  // completion window or an adaptive frequency leaves it permanently uncompletable.
+  requireDueDateFor(parsed, existing.frequencyType, existing.completionWindow ?? null);
   const updatedAt = concurrencyToken(existing, ctx.now());
 
   await ctx.service.write(() =>

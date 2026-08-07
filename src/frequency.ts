@@ -80,10 +80,10 @@ export interface FrequencyOutput {
   frequencyMetadata: FrequencyMetadata;
 }
 
-export function buildFrequency(input: FrequencyInput, timezone: string): FrequencyOutput {
+export function buildFrequency(input: FrequencyInput, timezone: string, now: Date): FrequencyOutput {
   const metadata: FrequencyMetadata = { timezone };
   if (input.time !== undefined) {
-    metadata.time = normalizeTime(input.time, timezone);
+    metadata.time = normalizeTime(input.time, timezone, now);
   }
 
   switch (input.type) {
@@ -194,14 +194,15 @@ function normalizeNames(
  * Donetick refused, which made the option unusable rather than merely wrong.
  *
  * The date is a placeholder: the scheduler reads only hour, minute and second. The
- * offset has to be the chore's own zone, or the wall-clock time shifts.
+ * offset has to be the chore's zone as of now, since Donetick reads the clock parts
+ * after converting to UTC, so the offset is what fixes the local firing time.
  */
-function normalizeTime(time: string, timezone: string): string {
+function normalizeTime(time: string, timezone: string, now: Date): string {
   const match = TIME_RE.exec(time);
   if (!match) {
     throw new Error(`"time" must be in HH:MM 24-hour format, got "${time}"`);
   }
-  const offset = utcOffsetFor(timezone);
+  const offset = utcOffsetFor(timezone, now);
   return `1970-01-01T${match[1]}:${match[2]}:00${offset}`;
 }
 

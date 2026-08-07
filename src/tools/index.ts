@@ -262,10 +262,25 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
       const all = await pool();
       const found = all.find((chore) => chore.id === args.chore_id);
       if (found) return found;
+
+      // An id that misses the active list is usually archived, and the archived list
+      // is a real list row. The /details fallback below is not: it omits every
+      // list-only field, and projectChore has no way to say "unknown", so it reports
+      // "every 1 days" for a three-weekly chore and false for every flag. Reaching
+      // for a real row first is what keeps get_chore from inventing an answer.
+      if (!includeArchived) {
+        const archived = (await service.archivedChores()).find(
+          (chore) => chore.id === args.chore_id,
+        );
+        if (archived) return archived;
+      }
       // Not in the cached list (e.g. archived, or the cache is between refreshes).
       // A failure here means the id does not exist, but the details endpoint answers
       // that with a 500, which errors.ts reads as an instance fault. Say what is
       // actually true instead, or the user goes looking for an outage.
+      // Reached only when the id is in neither list, so this is the not-found probe
+      // rather than a data source. Its return value is a /details view and must not
+      // be projected as though it were a list row.
       try {
         return await service.choreDetails(args.chore_id);
       } catch (error) {

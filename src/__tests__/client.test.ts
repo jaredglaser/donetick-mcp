@@ -152,3 +152,70 @@ describe("falsy payloads survive unwrapping", () => {
   });
 });
 
+
+describe("redirects are refused rather than followed", () => {
+  // fetch strips Authorization, Cookie, Host and Proxy-Authorization across a
+  // cross-origin redirect, but secretkey is none of those. A LAN Donetick reached
+  // over plain http that answers 302 would hand the token to whoever replied.
+  test("asks fetch not to follow", async () => {
+    const stub = stubFetch(() => new Response("[]", { status: 200 }));
+    await new DonetickClient({ baseUrl: "https://x.test", token: "t", timeoutMs: 100, fetchFn: stub.fn }).get("/api/v1/chores/");
+
+    expect(stub.calls[0]!.init.redirect).toBe("manual");
+  });
+
+  test("a 3xx throws, names DONETICK_URL, and issues no second request", async () => {
+    const stub = stubFetch(
+      () => new Response("", { status: 302, headers: { location: "http://elsewhere.test/" } }),
+    );
+    const client = new DonetickClient({ baseUrl: "https://x.test", token: "t", timeoutMs: 100, fetchFn: stub.fn });
+
+    await expect(client.get("/api/v1/chores/")).rejects.toThrow(/redirected/);
+    await expect(client.get("/api/v1/chores/")).rejects.toThrow(/DONETICK_URL/);
+    expect(stub.calls.length).toBe(2);
+  });
+});
+
+describe("indeterminate marks writes whose outcome is unknown", () => {
+  // A timed-out or dropped write says nothing about whether the server acted.
+  // Reporting it as a flat failure invites a retry that duplicates the chore.
+  const failing = (kind: "timeout" | "network") =>
+    stubFetch(() => {
+      if (kind === "timeout") {
+        const error = new Error("The operation timed out.");
+        error.name = "TimeoutError";
+        throw error;
+      }
+      throw new TypeError("Unable to connect");
+    });
+
+  const clientFor = (stub: ReturnType<typeof stubFetch>) =>
+    new DonetickClient({ baseUrl: "https://x.test", token: "t", timeoutMs: 10, fetchFn: stub.fn });
+
+  test("a timed-out POST is indeterminate", async () => {
+    try {
+      await clientFor(failing("timeout")).post("/api/v1/chores/", {});
+      throw new Error("expected a throw");
+    } catch (error) {
+      expect((error as DonetickError).indeterminate).toBe(true);
+    }
+  });
+
+  test("a dropped POST is indeterminate", async () => {
+    try {
+      await clientFor(failing("network")).post("/api/v1/chores/", {});
+      throw new Error("expected a throw");
+    } catch (error) {
+      expect((error as DonetickError).indeterminate).toBe(true);
+    }
+  });
+
+  test("a failed GET is not, since a read that did not arrive changed nothing", async () => {
+    try {
+      await clientFor(failing("timeout")).get("/api/v1/chores/");
+      throw new Error("expected a throw");
+    } catch (error) {
+      expect((error as DonetickError).indeterminate).toBe(false);
+    }
+  });
+});

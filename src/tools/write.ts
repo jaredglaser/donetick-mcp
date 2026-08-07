@@ -2,6 +2,7 @@ import {
   buildCreateRequest,
   concurrencyToken,
   mergeEditRequest,
+  requireDueDateFor,
   type BuildContext,
   type ChoreRequestBody,
   type CreateInput,
@@ -132,6 +133,15 @@ export async function editChore(
     await ctx.service.write(() => ctx.service.client.put(endpoints.editChore(), body));
   };
 
+  // Checked before anything is written, and against the state this call will leave
+  // rather than the state the body describes. Clearing happens on a separate
+  // endpoint after the main write, so the merged body still carries the old date and
+  // the guard inside mergeEditRequest cannot see the combination being created.
+  if (input.due_date === null) {
+    const preview = mergeEditRequest(existing, { ...input, due_date: undefined }, buildCtx);
+    requireDueDateFor(null, preview.frequencyType, preview.completionWindow);
+  }
+
   try {
     await put(existing);
   } catch (error) {
@@ -154,12 +164,30 @@ export async function editChore(
   // a clear has to go there. Without this, edit_chore advertised a capability that
   // silently did nothing and then reported success.
   if (input.due_date === null) {
-    await ctx.service.write(() =>
-      ctx.service.client.put(endpoints.updateDueDate(existing.id), {
-        dueDate: null,
-        updatedAt: concurrencyToken(existing, ctx.now()),
-      }),
-    );
+    // Re-read first. existing predates the write just issued, so its updatedAt is
+    // already behind the row and concurrencyToken would fall through to a bare now,
+    // which is the input it exists to avoid sending. This is the only place two
+    // writes hit one chore in sequence.
+    ctx.service.invalidateChores();
+    const written = await loadChoreById(existing.id, ctx);
+    try {
+      await ctx.service.write(() =>
+        ctx.service.client.put(endpoints.updateDueDate(written.id), {
+          dueDate: null,
+          updatedAt: concurrencyToken(written, ctx.now()),
+        }),
+      );
+    } catch (error) {
+      // The main edit landed. Saying "the edit failed" would invite a retry of a
+      // change that already applied, so this names what did and did not happen.
+      return {
+        kind: "edited_detail_unavailable",
+        id: existing.id,
+        message: `"${existing.name}" was updated, but clearing its due date failed: ${
+          error instanceof Error ? error.message : String(error)
+        }. Everything else in the edit landed. Call reschedule_chore with due_date null to finish clearing it.`,
+      };
+    }
   }
 
   // The edit has already landed. A failure past this point is a reporting failure,

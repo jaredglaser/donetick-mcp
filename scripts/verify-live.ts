@@ -18,6 +18,8 @@
  */
 
 import { DonetickClient } from "@/client";
+import { DonetickService } from "@/service";
+import { editChore } from "@/tools/write";
 import { parseConfig } from "@/config";
 import { endpoints } from "@/endpoints";
 import { DonetickError } from "@/errors";
@@ -487,6 +489,37 @@ async function main(): Promise<void> {
             detail: "the full edit now honours nextDueDate: null, so editChore's separate /dueDate call is redundant",
           }
         : { detail: "full edit kept the date, targeted update cleared it" };
+    });
+
+    await check("edit_chore's real two-write sequence clears a due date and reports it", async () => {
+      // Drives the production path rather than a hand-built one. The earlier check
+      // re-reads the row between the two writes, which is exactly the step the
+      // production code was missing, so it could not have caught the stale token.
+      const service = new DonetickService(client, { cacheTtlMs: 0 });
+      const ctx = { service, timezone: config.timezone, now: () => new Date() };
+      const id = await createScratchChore(
+        baseChoreBody(scoped("edit-clear"), { frequencyType: "daily", priority: 3 }),
+      );
+      service.invalidateChores();
+
+      const outcome = await editChore({ chore_id: id, due_date: null, name: scoped("edit-clear-renamed") }, ctx);
+      if (outcome.kind !== "edited") {
+        throw new Error(`edit_chore reported ${outcome.kind}: ${JSON.stringify(outcome)}`);
+      }
+
+      const after = (await listRowById(id)) as unknown as RawChore;
+      if (after.nextDueDate !== null) {
+        throw new Error(`the due date was not cleared: still ${JSON.stringify(after.nextDueDate)}`);
+      }
+      if (after.name === scoped("edit-clear")) {
+        throw new Error("the rename did not land, so the two writes did not both apply");
+      }
+      if (outcome.chore.due_date !== null) {
+        throw new Error(
+          `the tool reported due_date ${JSON.stringify(outcome.chore.due_date)} after clearing it`,
+        );
+      }
+      return { detail: "both writes landed and the reported state matches the row" };
     });
 
     await check("frequencyMetadata.time is RFC3339, not HH:MM", async () => {

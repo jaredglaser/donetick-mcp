@@ -255,13 +255,13 @@ function carriedSubtasks(existing: RawChore): ChoreRequestBody["subTasks"] {
  * combination with no due date panics the handler, so the chore can be created and
  * then never completed: a 502 on every attempt, permanently. Verified live.
  */
-function requireDueDateFor(
+export function requireDueDateFor(
   dueDate: Date | null,
   frequencyType: string,
   completionWindow: number | null,
 ): void {
   if (dueDate !== null) return;
-  if (completionWindow !== null && completionWindow !== undefined) {
+  if (completionWindow !== null && completionWindow !== undefined && completionWindow > 0) {
     throw new Error(
       "A chore with a completion window needs a due date: Donetick measures the window against it and cannot complete a chore that has none.",
     );
@@ -286,7 +286,7 @@ function ensureDueDateForRolling(dueDate: Date | null, isRolling: boolean, ctx: 
 }
 
 export function buildCreateRequest(input: CreateInput, ctx: BuildContext): ChoreRequestBody {
-  const frequency = buildFrequency(input.frequency ?? { type: "once" }, ctx.timezone);
+  const frequency = buildFrequency(input.frequency ?? { type: "once" }, ctx.timezone, ctx.now);
   const assigneeIds = resolveMemberIds(input.assignees, ctx.members);
   const isRolling = input.reschedule_from === "completion_date";
 
@@ -337,7 +337,13 @@ export function buildCreateRequest(input: CreateInput, ctx: BuildContext): Chore
  * again, with a 200 and nothing in the read-back to show for it.
  */
 function assertNoThingTrigger(existing: RawChore): void {
-  if (existing.thingChore === undefined || existing.thingChore === null) return;
+  // frequencyType is the load-bearing half. Donetick's list query preloads
+  // assignees, labels and subtasks but not thingChore, so the field is null on
+  // every row this server merges from and a check on it alone never fires.
+  // frequencyType is on the row and is "trigger" for exactly these chores.
+  const isTrigger = existing.frequencyType === "trigger";
+  const hasThing = existing.thingChore !== undefined && existing.thingChore !== null;
+  if (!isTrigger && !hasThing) return;
   throw new Error(
     `"${existing.name}" is driven by a Donetick Thing. Editing it through this server would sever that link permanently, because Donetick drops the association on every edit and only restores it for a request that names the Thing. Edit this chore in the Donetick web UI.`,
   );
@@ -386,7 +392,7 @@ export function mergeEditRequest(existing: RawChore, input: EditInput, ctx: Buil
 
   const frequency =
     input.frequency !== undefined
-      ? buildFrequency(input.frequency, ctx.timezone)
+      ? buildFrequency(input.frequency, ctx.timezone, ctx.now)
       : {
           frequencyType: existing.frequencyType,
           frequency: existing.frequency ?? 1,
