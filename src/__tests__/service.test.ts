@@ -264,6 +264,20 @@ describe("a response that is not the array every consumer assumes", () => {
     await expect(service.chores()).rejects.toThrow(/did not return an array/);
   });
 
+  test("a non-array archived list is explained, not a TypeError quoting a filter", async () => {
+    // archivedChores() filters this, so a non-array reached the model as
+    // "(await this.allChores()).filter is not a function" with the whole arrow
+    // function in the message. It was the fourth loader and the one the guard was
+    // written for.
+    const service = new DonetickService(
+      fakeClient({ "/api/v1/chores/?includeSubtasks=true&includeArchived=true": "nope" }).client as never,
+      { cacheTtlMs: 0 },
+    );
+
+    await expect(service.allChores()).rejects.toThrow(/did not return an array/);
+    await expect(service.archivedChores()).rejects.toThrow(/did not return an array/);
+  });
+
   test("an empty projects body is still a real answer, not an error", async () => {
     const service = new DonetickService(
       fakeClient({ "/api/v1/projects": undefined }).client as never,

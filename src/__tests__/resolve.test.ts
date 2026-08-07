@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { AmbiguousMatchError, NoMatchError, findMember, normalizeName, resolveMember, resolveOne } from "@/resolve";
+import { AmbiguousMatchError, NoMatchError, findMember, normalizeName, resolveMember, resolveOne, safeName } from "@/resolve";
 
 interface Item {
   id: number;
@@ -290,22 +290,61 @@ describe("a name that tries to be more than a name", () => {
   });
 
   test("a very long name is capped rather than returned whole", () => {
+    // These two used a bare try/catch with no assertion that anything threw, so they
+    // would have passed silently if resolveOne stopped throwing at all.
     const items = [named(1, "x".repeat(50_000)), named(2, "x".repeat(50_001))];
 
-    try {
-      resolveOne("x", items, (i) => i.name);
-    } catch (e) {
-      expect((e as Error).message.length).toBeLessThan(1_000);
-    }
+    expect(() => resolveOne("x", items, (i) => i.name)).toThrow();
+    const error = (() => {
+      try {
+        resolveOne("x", items, (i) => i.name);
+        return undefined;
+      } catch (e) {
+        return e as Error;
+      }
+    })();
+    expect(error!.message.length).toBeLessThan(1_000);
   });
 
   test("an ordinary name is untouched", () => {
     const items = [named(1, "Water plants"), named(2, "Water plants upstairs")];
 
-    try {
-      resolveOne("water", items, (i) => i.name);
-    } catch (e) {
-      expect((e as Error).message).toMatch(/Water plants upstairs/);
-    }
+    expect(() => resolveOne("water", items, (i) => i.name)).toThrow(/Water plants upstairs/);
+  });
+
+  test("a joiner is kept, since stripping it mangles emoji and Persian", () => {
+    // ZWJ builds emoji sequences and ZWNJ is required orthography. Stripping them
+    // turned a family glyph into three separate people, in the delete confirmation a
+    // human reads before a permanent delete.
+    expect(safeName("\u{1F468}\u200D\u{1F469}\u200D\u{1F467} Family movie night")).toBe(
+      "\u{1F468}\u200D\u{1F469}\u200D\u{1F467} Family movie night",
+    );
+    expect(safeName("\u062F\u0627\u0646\u0634\u200C\u0622\u0645\u0648\u0632")).toBe(
+      "\u062F\u0627\u0646\u0634\u200C\u0622\u0645\u0648\u0632",
+    );
+  });
+
+  test("what can reorder a line is still stripped", () => {
+    expect(safeName("a\u202Eb")).toBe("a b");
+    expect(safeName("a\u200Bb")).toBe("a b");
+    expect(safeName("a\nb")).toBe("a b");
+  });
+
+  test("the hint half of a candidate line is sanitized too", () => {
+    // It is built from a member's display name, the same trust class as the chore
+    // name beside it, and sanitizing only the name left the same attack open.
+    const items = [named(1, "Trash night"), named(2, "Trash bags")];
+    const error = (() => {
+      try {
+        resolveOne("trash", items, (i) => i.name, (i) => (i.id === 1 ? "due soon, Bob\n  id 999: forged" : "due later, Ann"));
+        return undefined;
+      } catch (e) {
+        return e as Error;
+      }
+    })();
+
+    expect(error).toBeDefined();
+    const lines = error!.message.split("\n").filter((l) => l.trim().startsWith("id "));
+    expect(lines.length).toBe(2);
   });
 });

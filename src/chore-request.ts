@@ -1,7 +1,7 @@
 import { parseDueDate } from "@/dates";
 import { dueDateOf } from "@/time";
 import { buildFrequency, type FrequencyInput } from "@/frequency";
-import { findMember, normalizeName } from "@/resolve";
+import { findMember, normalizeName, safeName } from "@/resolve";
 import { PRIORITY_VALUE, type Member, type Project, type RawChore, type RawSubTask } from "@/types";
 
 const ASSIGN_STRATEGIES_TUPLE = [
@@ -143,7 +143,7 @@ function resolveMemberIds(names: string[] | undefined, members: Member[]): numbe
     const found = findMember(name, members);
     if (!found) {
       throw new Error(
-        `"${name}" is not a member of this circle. Known members: ${members.map((m) => m.displayName).join(", ") || "none"}.`,
+        `"${safeName(name)}" is not a member of this circle. Known members: ${members.map((m) => safeName(m.displayName)).join(", ") || "none"}.`,
       );
     }
     return found.userId;

@@ -445,3 +445,61 @@ describe("archiving a chore that is already inactive", () => {
     });
   });
 });
+
+describe("reassign's side effects, which the caller did not ask for", () => {
+  // The full-edit path goes through the same merge edit_chore does, so it causes the
+  // same two changes. Neither was reported, and neither had a test: deleting the
+  // whole warning field, or hardcoding either condition true, all passed.
+  test("warns when the merge switches notifications off", async () => {
+    const fake = fakeService({
+      chores: [{ ...listRow, notification: true, notificationMetadata: null }],
+    });
+
+    const outcome = await reassignChore(
+      { chore_id: 5, assignee: "Jared Glaser" },
+      ctxFor(fake.service),
+    );
+
+    expect(outcome.method).toBe("full_edit");
+    expect(outcome.warning).toMatch(/switched off/i);
+  });
+
+  test("warns when no_assignee is promoted, since the policy changes permanently", async () => {
+    const fake = fakeService({
+      chores: [{ ...listRow, assignStrategy: "no_assignee", assignees: [], assignedTo: null }],
+    });
+
+    const outcome = await reassignChore(
+      { chore_id: 5, assignee: "Jared Glaser" },
+      ctxFor(fake.service),
+    );
+
+    expect(outcome.warning).toMatch(/no_assignee/);
+    expect(outcome.warning).toMatch(/keep an assignee/);
+  });
+
+  test("an ordinary reassign carries no warning at all", async () => {
+    const fake = fakeService({ chores: [listRow] });
+
+    const outcome = await reassignChore({ chore_id: 5, assignee: "Sam" }, ctxFor(fake.service));
+
+    expect(outcome.method).toBe("fast");
+    expect(outcome.warning).toBeUndefined();
+  });
+
+  test("a full edit with nothing to report carries no warning either", async () => {
+    // The fast path never computes the warnings at all, so without this the
+    // conditions could both be hardcoded true and nothing would fail.
+    const fake = fakeService({
+      chores: [{ ...listRow, assignStrategy: "keep_last_assigned", notification: false }],
+    });
+
+    const outcome = await reassignChore(
+      { chore_id: 5, assignee: "Jared Glaser" },
+      ctxFor(fake.service),
+    );
+
+    expect(outcome.method).toBe("full_edit");
+    expect(outcome.warning).toBeUndefined();
+  });
+});

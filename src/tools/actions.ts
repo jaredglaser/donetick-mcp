@@ -169,7 +169,14 @@ export async function completeChore(input: CompleteInput, ctx: ToolContext): Pro
   // enough. Adaptive is the case where it happens on an early completion instead.
   const pastNote = !scheduledIntoThePast
     ? ""
-    : chore.frequencyType === "adaptive"
+    : chore.isRolling === true
+      // rollingNote above already explains that a rolling chore steps from the
+      // completion date. Adding "it steps from the previous due date" after it put
+      // two contradictory mechanisms in one message, and the second one is false
+      // here: measured, a rolling daily chore backdated five days landed at the
+      // completion plus one day.
+      ? ` Donetick set the next occurrence to ${nextDueInstant.toISOString()}, which is already in the past, so the chore is overdue again immediately. That follows from the completion date you gave it. reschedule_chore sets a date directly.`
+      : chore.frequencyType === "adaptive"
       ? ` Donetick set the next occurrence to ${nextDueInstant.toISOString()}, which is already in the past. An adaptive recurrence does this when a chore is completed earlier than its learned interval, and it does not recover on its own; reschedule_chore sets a real next date.`
       : ` Donetick set the next occurrence to ${nextDueInstant.toISOString()}, which is already in the past, so the chore is overdue again immediately. It steps from the previous due date rather than from the completion, so a chore finished more than one period late lands behind. Completing it again walks it forward, or reschedule_chore sets a date directly.`;
 

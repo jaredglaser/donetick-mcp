@@ -26,7 +26,13 @@ export class NoMatchError extends Error {
  * are stripped rather than escaped, and the result is capped, because these lines are
  * read rather than parsed.
  */
-const CONTROL_CHARS = /[\u0000-\u001F\u007F\u200B-\u200F\u2028\u2029\u202A-\u202E\u2066-\u2069]/gu;
+// U+200C and U+200D are deliberately absent from this range. They are joiners, not
+// controls: ZWJ builds emoji sequences and ZWNJ is required orthography in Persian,
+// Hindi and others, so stripping them turned "👨‍👩‍👧 Family movie night" into three
+// separate people and broke Persian words. Nothing they can do reorders a line. What
+// is stripped is the set that can: C0 and DEL, the zero-width space, the bidi marks
+// and overrides, and the line and paragraph separators.
+const CONTROL_CHARS = /[\u0000-\u001F\u007F\u200B\u200E\u200F\u2028\u2029\u202A-\u202E\u2066-\u2069]/gu;
 const MAX_NAME_IN_MESSAGE = 120;
 
 export function safeName(value: string): string {
@@ -104,7 +110,10 @@ export function resolveOne<T>(
           const rawId = (item as { id?: unknown }).id;
           const id = typeof rawId === "number" || typeof rawId === "string" ? rawId : undefined;
           const label = id !== undefined ? `id ${id}` : `#${index + 1}`;
-          const suffix = hint && hint.length > 0 ? ` (${hint})` : "";
+          // The hint is built from a member's display name, which is user-written
+          // text of the same trust class as the chore name beside it. Sanitizing only
+          // the name half left the identical forged-line attack open through it.
+          const suffix = hint && hint.length > 0 ? ` (${safeName(hint)})` : "";
           return `  ${label}: ${safeName(nameOf(item))}${suffix}`;
         }),
       );
@@ -143,8 +152,8 @@ export function resolveMember<T extends { displayName: string; username: string 
   const found = findMember(name, members);
   if (!found) {
     throw new Error(
-      `"${name}" is not a member of this circle. Known members: ${
-        members.map((m) => m.displayName).join(", ") || "none"
+      `"${safeName(name)}" is not a member of this circle. Known members: ${
+        members.map((m) => safeName(m.displayName)).join(", ") || "none"
       }.`,
     );
   }

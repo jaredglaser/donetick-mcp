@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { loadChoreById } from "../chore-lookup";
+import { loadArchivedChoreById, loadChoreById } from "../chore-lookup";
+import { DonetickError } from "@/errors";
 import type { ToolContext } from "@/tools/context";
 import type { RawChore } from "@/types";
 
@@ -65,5 +66,50 @@ describe("loadChoreById", () => {
 
     await expect(loadChoreById(undefined, ctx)).rejects.toThrow();
     expect(allChoresCalls()).toBe(0);
+  });
+});
+
+describe("loadArchivedChoreById", () => {
+  // Its whole catch branch had no coverage: removing the DonetickError rethrow, or
+  // the branch entirely, failed nothing.
+  function archivedCtx(archived: RawChore[], active: RawChore[], archivedError?: Error) {
+    const service = {
+      chores: async () => active,
+      allChores: async () => [...active, ...archived],
+      archivedChores: async () => {
+        if (archivedError) throw archivedError;
+        return archived;
+      },
+    };
+    return { service: service as never, now: () => now, timezone: "America/New_York" } as ToolContext;
+  }
+
+  test("returns an archived chore", async () => {
+    const ctx = archivedCtx([row(11, "Archived")], []);
+    expect((await loadArchivedChoreById(11, ctx)).name).toBe("Archived");
+  });
+
+  test("a chore that is merely active is told it is not archived, not that it was deleted", async () => {
+    const ctx = archivedCtx([], [row(7, "Still active")]);
+
+    await expect(loadArchivedChoreById(7, ctx)).rejects.toThrow(/not archived/);
+  });
+
+  test("an id that exists nowhere keeps the original not-found message", async () => {
+    const ctx = archivedCtx([], [row(7, "Something else")]);
+
+    await expect(loadArchivedChoreById(404, ctx)).rejects.toThrow(/archived chore list/);
+  });
+
+  test("a failure fetching the archived list keeps its DonetickError class", async () => {
+    // Rewriting it to a plain Error drops invalidatesCache and indeterminate, which
+    // guardWith and fail() read, turning a transport problem into a confident claim
+    // about the chore's state.
+    const boom = new DonetickError("instance is down", { status: 500, invalidatesCache: true });
+    const ctx = archivedCtx([], [row(7, "In the active list")], boom);
+
+    const error = await loadArchivedChoreById(7, ctx).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(DonetickError);
+    expect((error as DonetickError).invalidatesCache).toBe(true);
   });
 });

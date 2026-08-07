@@ -93,8 +93,16 @@ export class DonetickService {
    * falling through to GET /:id/details for one produces a row with none of the
    * fields a projection reads.
    */
-  allChores(): Promise<RawChore[]> {
-    return this.client.get(endpoints.listChoresWithArchived()) as Promise<RawChore[]>;
+  async allChores(): Promise<RawChore[]> {
+    // The fourth loader, and the one whose failure produced the message the guard was
+    // written for: archivedChores() filters this result, so a non-array here reached
+    // the model as "(await this.allChores()).filter is not a function", quoting the
+    // whole arrow function. Reached by unarchive_chore, delete_chore's resolve,
+    // list_chores scope=archived, and every id fallback in loadChoreById.
+    return expectArray<RawChore>(
+      await this.client.get(endpoints.listChoresWithArchived()),
+      "archived chore list",
+    );
   }
 
   /**
