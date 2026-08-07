@@ -441,3 +441,37 @@ describe("mergeEditRequest", () => {
     });
   });
 });
+
+describe("description is never null on the wire", () => {
+  // Verified on Donetick v0.1.76: PUT /api/v1/chores/ with description null, or
+  // with the key missing, kills the connection and the proxy answers 502. An empty
+  // string is accepted. A chore created without a description stores null, so
+  // carrying its own value forward unchanged is what triggered this, and it made
+  // edit_chore fail on precisely the chores most likely to exist. The type says
+  // string, so these guard the two ?? chains that produce it rather than the type.
+
+  test("a create with no description sends an empty string, not null", () => {
+    const body = buildCreateRequest({ name: "Water plants" }, ctx());
+    expect(body.description).toBe("");
+  });
+
+  test("an edit of a chore with a null description sends an empty string", () => {
+    const noDescription = { ...existing, description: null } as unknown as RawChore;
+    expect(mergeEditRequest(noDescription, {}, ctx()).description).toBe("");
+  });
+
+  test("an edit of a chore whose description field is absent sends an empty string", () => {
+    const { description: _omitted, ...withoutDescription } = existing;
+    expect(mergeEditRequest(withoutDescription as RawChore, {}, ctx()).description).toBe("");
+  });
+
+  test("an existing description still survives an unrelated edit", () => {
+    expect(mergeEditRequest(existing, { name: "Renamed" }, ctx()).description).toBe("curb by 7am");
+  });
+
+  test("a caller can still replace the description", () => {
+    expect(mergeEditRequest(existing, { description: "new text" }, ctx()).description).toBe(
+      "new text",
+    );
+  });
+});

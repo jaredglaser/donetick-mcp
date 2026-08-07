@@ -21,7 +21,8 @@ import { DonetickClient } from "@/client";
 import { parseConfig } from "@/config";
 import { endpoints } from "@/endpoints";
 import { DonetickError } from "@/errors";
-import type { RawChore } from "@/types";
+import { mergeEditRequest } from "@/chore-request";
+import type { Member, Project, RawChore } from "@/types";
 
 type Status = "pass" | "warn" | "fail";
 
@@ -270,6 +271,125 @@ async function createScratchChore(body: ChoreCreateBody): Promise<number> {
     );
 
     // Writes.
+
+    await check(
+      "PUT /chores/ with only the name changed preserves every other field",
+      async () => {
+        // The endpoint this server can do the most damage with, and the one the
+        // rest of the suite did not touch. Donetick has no partial update: the PUT
+        // replaces the chore, so a field the merge fails to carry is not left alone,
+        // it is erased. A rename is the smallest possible edit, which makes it the
+        // sharpest probe: everything that changes here changed for no reason.
+        //
+        // The body goes through the real mergeEditRequest rather than a hand-built
+        // one, so a regression in Donetick's binding and a regression in the merge
+        // are both in scope.
+        const id = await createScratchChore(
+          baseChoreBody(scoped("edit-preserve"), {
+            frequencyType: "interval",
+            frequency: 3,
+            frequencyMetadata: { unit: "days", time: "", timezone: config.timezone },
+            // Deliberately left without a description, which is both the default and
+            // the case that used to 502. Giving this chore one is what let the crash
+            // hide behind a passing check.
+            priority: 2,
+            points: 5,
+            requireApproval: true,
+            isRolling: true,
+            completionWindow: 4,
+          }),
+        );
+
+        const before = (await listRowById(id)) as unknown as RawChore;
+        const [members, projects] = (await Promise.all([
+          client.get(endpoints.circleMembers()),
+          client.get(endpoints.projects()).then((p) => p ?? []),
+        ])) as [Member[], Project[]];
+
+        const body = mergeEditRequest(
+          before,
+          { name: `${scoped("edit-preserve")}-renamed` },
+          { members, projects, now: new Date(), timezone: config.timezone },
+        );
+        await client.put(endpoints.editChore(), body);
+
+        const after = (await listRowById(id)) as unknown as RawChore;
+
+        if (after.name === before.name) {
+          throw new Error("the rename did not land, so this check proves nothing about the rest");
+        }
+
+        const preserved = [
+          "frequencyType",
+          "frequency",
+          "priority",
+          "points",
+          "requireApproval",
+          "isRolling",
+          "completionWindow",
+          "assignStrategy",
+          "isPrivate",
+          "notification",
+          "projectId",
+        ] as const;
+
+        const destroyed = preserved.filter(
+          (field) => JSON.stringify(before[field]) !== JSON.stringify(after[field]),
+        );
+        if (destroyed.length > 0) {
+          throw new Error(
+            `a rename changed ${destroyed.length} unrelated field(s): ${destroyed
+              .map((f) => `${f} ${JSON.stringify(before[f])} -> ${JSON.stringify(after[f])}`)
+              .join("; ")}`,
+          );
+        }
+
+        if (JSON.stringify(before.frequencyMetadata) !== JSON.stringify(after.frequencyMetadata)) {
+          throw new Error(
+            `a rename changed frequencyMetadata: ${JSON.stringify(before.frequencyMetadata)} -> ${JSON.stringify(after.frequencyMetadata)}`,
+          );
+        }
+
+        return { detail: `chore ${id}: renamed, and all ${preserved.length + 1} other fields intact` };
+      },
+    );
+
+    await check("PUT /chores/ rejects a null description by dropping the connection", async () => {
+      // The reason ChoreRequestBody.description is typed string and both builders
+      // coerce to "". If this ever starts succeeding, that coercion can go, and if
+      // it starts failing for "" as well, every edit in this server is broken and
+      // this check is where that becomes visible.
+      const id = await createScratchChore(baseChoreBody(scoped("null-desc"), { frequencyType: "daily" }));
+      const row = (await listRowById(id)) as unknown as RawChore;
+      const body = mergeEditRequest(
+        row,
+        { name: scoped("null-desc-renamed") },
+        { members: [], projects: [], now: new Date(), timezone: config.timezone },
+      ) as unknown as Record<string, unknown>;
+
+      body.description = null;
+      let nullRejected = false;
+      try {
+        await client.put(endpoints.editChore(), body);
+      } catch {
+        nullRejected = true;
+      }
+
+      body.description = "";
+      await client.put(endpoints.editChore(), body);
+      const after = (await listRowById(id)) as unknown as RawChore;
+      if (after.name === row.name) {
+        throw new Error('the edit with description "" did not land, so every edit in this server is broken');
+      }
+
+      return nullRejected
+        ? { detail: 'null rejected as expected, "" accepted and the edit landed' }
+        : {
+            status: "warn",
+            detail:
+              'Donetick now accepts a null description on PUT /chores/. Nothing breaks, since both builders send "" regardless, but the coercion in chore-request.ts is no longer load-bearing.',
+          };
+    });
 
     await check("PUT /:id/dueDate rejects a body that omits updatedAt", async () => {
       const id = await createScratchChore(baseChoreBody(scoped("duedate-missing"), { frequencyType: "daily" }));
