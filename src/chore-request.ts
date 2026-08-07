@@ -1,5 +1,6 @@
 import { parseDueDate } from "@/dates";
 import { dueDateOf } from "@/time";
+import { frequencyHealth } from "@/frequency-health";
 import { buildFrequency, type FrequencyInput } from "@/frequency";
 import { findMember, normalizeName, safeName } from "@/resolve";
 import { PRIORITY_VALUE, type Member, type Project, type RawChore, type RawSubTask } from "@/types";
@@ -370,119 +371,25 @@ function assertNoThingTrigger(existing: RawChore): void {
 }
 
 /**
- * A chore whose stored recurrence Donetick cannot schedule. Reachable because this
- * server built "first saturday of every month" as day_of_the_month with days,
- * weekPattern and occurrences until 7d0940a, and the carry-forward branch spreads
- * frequencyMetadata wholesale, so an unrelated edit would re-send the broken shape
- * and report success. Measured: such a chore answers 500 on every completion, and
- * get_chore renders it as an ordinary monthly chore, so nothing else points at it.
+ * Refuses to carry forward a stored recurrence Donetick's scheduler cannot advance.
+ *
+ * The carry-forward branch spreads frequencyMetadata wholesale, so an unrelated edit
+ * would re-send a broken shape and report success, and get_chore would render it as
+ * an ordinary recurrence. Called only when the caller passes no frequency of their
+ * own, since passing one is the repair.
+ *
+ * The predicate itself lives in frequency-health.ts, shared with summarizeFrequency,
+ * because the two used to enumerate these shapes independently and disagreed three
+ * times.
  */
 function assertSchedulableFrequency(existing: RawChore): void {
-  const meta0 = (existing.frequencyMetadata ?? {}) as Record<string, unknown>;
+  const health = frequencyHealth(existing);
+  if (health.ok) return;
 
-  // An hourly interval carrying a time reschedules to the instant it is already at
-  // from its second completion, so the chore sits permanently overdue while every
-  // completion answers 200. Carrying that forward keeps it stuck.
-  if (
-    existing.frequencyType === "interval" &&
-    meta0.unit === "hours" &&
-    typeof meta0.time === "string" &&
-    meta0.time.length > 0 &&
-    // Only counts that are not a whole number of days. Measured on v0.1.76: every 24
-    // and every 48 hours advance correctly and hold the stored time, and only the
-    // other counts freeze. Refusing all of them blocked every edit and reassign on a
-    // chore working exactly as configured.
-    (typeof existing.frequency !== "number" || existing.frequency % 24 !== 0)
-  ) {
-    throw new Error(
-      `"${existing.name}" is an hourly chore carrying a time of day, which Donetick cannot advance: ` +
-        "it resets the clock to that time before adding the hours, so the chore freezes on its " +
-        'second completion. Pass frequency: {type: "interval", every: N, unit: "hours"} with no ' +
-        "time to repair it, through edit_chore. Every tool that rewrites the whole chore is blocked until then, reassign_chore included.",
-    );
-  }
-
-  const meta = (existing.frequencyMetadata ?? {}) as Record<string, unknown>;
-  const nonEmptyArray = (value: unknown): boolean => Array.isArray(value) && value.length > 0;
-  const blocked = (detail: string, repair: string): never => {
-    throw new Error(
-      `"${existing.name}" has a recurrence Donetick cannot schedule: ${detail}, so every completion fails. ` +
-        `${repair} Every tool that rewrites the whole chore is blocked until then, reassign_chore included.`,
-    );
-  };
-
-  // Donetick's own validateFrequencyLogic is the authoritative list of these, and it
-  // is dead code: its registration is commented out, so the binding accepts every
-  // shape below and the failure surfaces later, from the scheduler, on completion.
-  if (existing.frequencyType === "interval" && typeof existing.frequency === "number" && existing.frequency <= 0) {
-    // Accepted by Donetick and not schedulable in any useful sense: measured live, a
-    // count of 0 completes without moving the due date, so the chore is frozen, and a
-    // negative count moves it backwards. summarizeFrequency calls both broken, so
-    // refusing the carry-forward is what makes the two sides agree.
-    blocked(
-      `it is an interval of ${existing.frequency} ${String(meta.unit ?? "days")}`,
-      'Pass frequency: {type: "interval", every: N, unit: "days"} with a positive count through ' +
-        "edit_chore to repair it.",
-    );
-  }
-
-  if (existing.frequencyType === "interval" && typeof meta.unit !== "string") {
-    // Not a 500 like the others. scheduleNextDueDate dereferences Unit without a nil
-    // check, and the router is built with gin.New() and no Recovery, so the panic
-    // drops the connection and this arrives as a 502.
-    blocked(
-      "it is an interval with no unit, which crashes the request rather than failing it",
-      'Pass frequency: {type: "interval", every: N, unit: "days"} through edit_chore to repair it.',
-    );
-  }
-
-  if (existing.frequencyType === "days_of_the_week") {
-    if (!nonEmptyArray(meta.days)) {
-      blocked(
-        "it is days_of_the_week with no days",
-        'Pass frequency: {type: "days_of_the_week", days: ["monday"]} through edit_chore to repair it.',
-      );
-    }
-    const pattern = meta.weekPattern;
-    if (pattern === "week_of_month" || pattern === "week_of_quarter") {
-      // getOccurrences reads either field, so either one being present is enough.
-      if (!nonEmptyArray(meta.occurrences) && !nonEmptyArray(meta.weekNumbers)) {
-        blocked(
-          `it is a ${pattern} pattern with no occurrences`,
-          `Pass frequency: {type: "days_of_the_week", days: ["saturday"], week_pattern: "${pattern}", occurrences: [1]} through edit_chore to repair it.`,
-        );
-      }
-    }
-  }
-
-  if (existing.frequencyType !== "day_of_the_month") return;
-
-  // Months only. This used to refuse a stored `days` as well, on the belief that a
-  // day_of_the_month row carrying weekday names is the never-completable shape this
-  // server built before 7d0940a. Measured against a live v0.1.76 container: the
-  // scheduler ignores `days` for this type entirely, and such a chore completes and
-  // reschedules correctly as long as months is present. The refusal blocked every
-  // edit and reassign on a working chore, while summarizeFrequency on the same row
-  // described it as fine. The read side was the one that was right.
-  if (!nonEmptyArray(meta.months)) {
-    blocked(
-      "it is day_of_the_month with no months",
-      'Pass frequency: {type: "day_of_the_month", day_of_month: N, months: [...]} through edit_chore ' +
-        'to repair it, or {type: "days_of_the_week", days: ["saturday"], week_pattern: "week_of_month", ' +
-        "occurrences: [1]} if what you meant was the first saturday of every month.",
-    );
-  }
-
-  // The day itself lives in `frequency`, not the metadata. Checked against the
-  // scheduler's own bounds rather than against nullishness: 0 is not nullish, so a
-  // chore stored with frequency 0 is carried forward verbatim and refused there.
-  const day = existing.frequency;
-  if (typeof day !== "number" || day <= 0 || day > 31) {
-    blocked(
-      `it is day_of_the_month with a day of ${String(day)}, outside the 1 to 31 Donetick accepts`,
-      "Pass frequency: {type: \"day_of_the_month\", day_of_month: N, months: [...]} with a day in range through edit_chore to repair it.",
-    );
-  }
+  throw new Error(
+    `"${existing.name}" has a recurrence Donetick cannot schedule: it is ${health.detail}, so every completion fails. ` +
+      `${health.repair} Every tool that rewrites the whole chore is blocked until then, reassign_chore included.`,
+  );
 }
 
 /**

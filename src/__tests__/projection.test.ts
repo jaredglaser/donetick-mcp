@@ -221,7 +221,7 @@ describe("live-observed edge cases", () => {
       summarizeFrequency(
         chore({ frequencyType: "interval", frequency: 5, frequencyMetadata: { unit: null } }),
       ),
-    ).toBe("broken: an interval with no unit");
+    ).toBe("broken: an interval with no unit, which crashes the request rather than failing it");
   });
 
   test("days_of_the_week with null days reads as broken, since the scheduler refuses it", () => {
@@ -242,7 +242,7 @@ describe("live-observed edge cases", () => {
           frequencyMetadata: { unit: "hours", time: "1970-01-01T09:00:00-04:00" },
         }),
       ),
-    ).toBe("broken: an interval of 4 hours carrying a time of day");
+    ).toBe("broken: an interval of 4 hours carrying a time of day, which freezes on its second completion");
   });
 
   test("an hourly interval of a whole number of days is ordinary, even with a time", () => {
@@ -331,7 +331,7 @@ describe("live-observed edge cases", () => {
       summarizeFrequency(
         chore({ frequencyType: "day_of_the_month", frequency: 0, frequencyMetadata: { months: ["october"] } }),
       ),
-    ).toBe("broken: day_of_the_month with a day of 0");
+    ).toBe("broken: day_of_the_month with a day of 0, outside the 1 to 31 Donetick accepts");
   });
 
   test("treats an empty-string completedAt as not done", () => {

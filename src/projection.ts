@@ -1,4 +1,5 @@
 import { dueDateOf, humanizeDueIn } from "@/time";
+import { frequencyHealth } from "@/frequency-health";
 import {
   CHORE_STATUS,
   PRIORITY_LABEL,
@@ -9,6 +10,12 @@ import {
 } from "@/types";
 
 export function summarizeFrequency(chore: RawChore): string {
+  // The same predicate the write side refuses on, so the two cannot describe one
+  // chore differently. They used to enumerate these shapes independently and
+  // disagreed three times, each caught a round apart.
+  const health = frequencyHealth(chore);
+  if (!health.ok) return `broken: ${health.detail}`;
+
   const meta = chore.frequencyMetadata ?? {};
   switch (chore.frequencyType) {
     case "once":
@@ -20,36 +27,10 @@ export function summarizeFrequency(chore: RawChore): string {
     case "monthly":
     case "yearly":
       return chore.frequencyType;
-    case "interval": {
-      // Rendered as broken rather than as ordinary. assertSchedulableFrequency
-      // refuses these shapes on a write, so describing one as "every 0 days" left
-      // the read side saying the chore was fine while every edit refused it.
-      const count = chore.frequency;
-      if (typeof meta.unit !== "string") return "broken: an interval with no unit";
-      // The last of the three shapes assertSchedulableFrequency refuses. Measured
-      // live: an hourly interval carrying a time answers 200 to every completion and
-      // never moves the due date, so five completions in a row each reported success
-      // against the identical next date. edit_chore already refuses it; the read side
-      // called it "every 4 hours".
-      if (
-        meta.unit === "hours" &&
-        typeof meta.time === "string" &&
-        meta.time.length > 0 &&
-        (typeof count !== "number" || count % 24 !== 0)
-      ) {
-        // Only when the count is not a whole number of days: 24 and 48 advance
-        // correctly and hold the stored time, and calling those broken told the
-        // caller a working chore needed repairing.
-        return `broken: an interval of ${String(count)} hours carrying a time of day`;
-      }
-      if (typeof count !== "number" || count <= 0) {
-        return `broken: an interval of ${String(count)} ${meta.unit}`;
-      }
-      return `every ${count} ${meta.unit}`;
-    }
+    case "interval":
+      return `every ${chore.frequency} ${String(meta.unit)}`;
     case "days_of_the_week": {
       const days = meta.days ?? [];
-      if (days.length === 0) return "broken: days_of_the_week with no days";
       // week_of_month and week_of_quarter pick one occurrence of the weekday, and
       // every_week does not. Measured against a chore due Thu 2026-09-10: [2]
       // scheduled the 2nd Saturday, [1,3] the next of either, and week_of_quarter [1]
@@ -58,22 +39,13 @@ export function summarizeFrequency(chore: RawChore): string {
       // monthly, which is the same error inverted.
       const picksAnOccurrence =
         meta.weekPattern === "week_of_month" || meta.weekPattern === "week_of_quarter";
-      // Either field satisfies it, matching both Donetick's getOccurrences and
-      // assertSchedulableFrequency. Reading only `occurrences` described a chore
-      // stored with the deprecated `weekNumbers` as weekly when it is monthly, and
-      // said nothing at all about the shape that carries neither, which the write
-      // side refuses and the scheduler genuinely cannot advance.
+      // Either field, matching Donetick's getOccurrences. Reading only `occurrences`
+      // described a chore stored with the deprecated `weekNumbers` as weekly when it
+      // is monthly.
       const occurrences =
-        meta.occurrences && meta.occurrences.length > 0
-          ? meta.occurrences
-          : meta.weekNumbers && meta.weekNumbers.length > 0
-            ? meta.weekNumbers
-            : undefined;
+        meta.occurrences && meta.occurrences.length > 0 ? meta.occurrences : (meta.weekNumbers ?? undefined);
 
-      if (picksAnOccurrence && occurrences === undefined) {
-        return `broken: a ${meta.weekPattern} pattern with no occurrences`;
-      }
-      if (picksAnOccurrence && occurrences !== undefined) {
+      if (picksAnOccurrence && occurrences !== undefined && occurrences.length > 0) {
         const period = meta.weekPattern === "week_of_quarter" ? "quarter" : "month";
         return `the ${occurrences.map(ordinal).join(", ")} ${days.join("/")} of every ${period}`;
       }
@@ -81,16 +53,8 @@ export function summarizeFrequency(chore: RawChore): string {
     }
     case "day_of_the_month": {
       // Donetick carries the calendar day in frequency, not in the metadata.
-      const day = chore.frequency;
-      const months = meta.months ?? [];
-      if (months.length === 0) return "broken: day_of_the_month with no months";
-      const monthsPart = months.join(", ");
-      // Donetick's scheduler refuses anything outside 1 to 31, so a stored 0 is not
-      // "the 0th of October", it is a chore no completion can advance.
-      if (typeof day !== "number" || day <= 0 || day > 31) {
-        return `broken: day_of_the_month with a day of ${String(day)}`;
-      }
-      return `the ${ordinal(day)} of ${monthsPart}`;
+      // Donetick carries the calendar day in frequency, not in the metadata.
+      return `the ${ordinal(chore.frequency as number)} of ${(meta.months ?? []).join(", ")}`;
     }
     case "adaptive":
       return "adaptive, learned from history";
