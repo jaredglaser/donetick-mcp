@@ -635,6 +635,60 @@ async function main(): Promise<void> {
       };
     });
 
+    await check("PUT /:id/subtask ticks one item and an unrelated edit leaves it ticked", async () => {
+      // The body field names here were chosen rather than read, which rule 5 warns
+      // about, and nothing exercised the endpoint live until now. The second half
+      // matters separately: carriedSubtasks sends only id, name, orderId and
+      // completedAt, so completedBy and parentId survive only if Donetick keeps them.
+      const id = await createScratchChore(
+        baseChoreBody(scoped("subtask"), {
+          frequencyType: "daily",
+          subTasks: [{ name: "tick me", orderId: 0, completedAt: null }],
+        }),
+      );
+      const created = (await listRowById(id)) as unknown as RawChore;
+      const item = created.subTasks?.[0];
+      if (item === undefined) throw new Error("the created chore came back with no subtasks");
+
+      await client.put(endpoints.updateSubtask(id), {
+        id: item.id,
+        choreId: id,
+        completedAt: new Date().toISOString(),
+      });
+      const ticked = (await listRowById(id)) as unknown as RawChore;
+      const tickedItem = ticked.subTasks?.[0];
+      if (!tickedItem?.completedAt) {
+        throw new Error(
+          `the subtask did not tick, so the body field names are wrong: ${JSON.stringify(ticked.subTasks)}`,
+        );
+      }
+
+      await client.put(
+        endpoints.editChore(),
+        mergeEditRequest(ticked, { name: scoped("subtask-renamed") }, {
+          members: [],
+          projects: [],
+          now: new Date(),
+          timezone: config.timezone,
+        }),
+      );
+      const after = (await listRowById(id)) as unknown as RawChore;
+      const afterItem = after.subTasks?.[0];
+
+      if (afterItem?.completedAt !== tickedItem.completedAt) {
+        throw new Error(
+          `a rename changed the subtask's completedAt: ${JSON.stringify(tickedItem.completedAt)} -> ${JSON.stringify(afterItem?.completedAt)}`,
+        );
+      }
+      if (afterItem?.completedBy !== tickedItem.completedBy) {
+        return {
+          status: "warn",
+          detail: `a rename changed completedBy from ${JSON.stringify(tickedItem.completedBy)} to ${JSON.stringify(afterItem?.completedBy)}; carriedSubtasks does not send it, so Donetick must be preserving it`,
+        };
+      }
+      return { detail: "ticked, and the tick and its attribution both survived an unrelated edit" };
+    });
+
     await check("PUT /:id/assignee stores the token it is given, so it must be the row's own", async () => {
       // Every endpoint that takes a token compares it; this one also writes it into
       // the row. A clock reading would stamp the chore with a version the sender's

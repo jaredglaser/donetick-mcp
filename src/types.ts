@@ -51,6 +51,13 @@ export interface RawChore {
   createdBy: number;
   updatedAt?: string;
   /**
+   * Donetick's row version, bumped by every write. Not read here: the concurrency
+   * token for the endpoints this server calls is updatedAt, and syncVersion is only
+   * checked when a request carries actionOptions, which this server never sends.
+   * Modelled so its presence is a fact of record rather than a surprise.
+   */
+  syncVersion?: number;
+  /**
    * Present when a Donetick Thing drives this chore. Read-only here: EditChore
    * dissociates the Thing unconditionally and re-associates only when the request
    * carries a thingTrigger, which this server has no way to build, so an edit would
