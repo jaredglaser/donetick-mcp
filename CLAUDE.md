@@ -8,7 +8,7 @@ Operating rules for an agent working in `donetick-mcp`, a stdio MCP server on Bu
 
 2. **Testing.** Tests live in `__tests__/` co-located with the source they cover, use `bun:test`, and run with `bun test --isolate`. Never sleep in a test. Every module that depends on time takes an injected clock (a `now: () => Date` or `now: () => number`) precisely so a test can pass a fixed instant instead of waiting on a real one.
 
-3. **I/O boundaries.** `src/client.ts` is the only module that touches the network. `src/cache.ts` is the only module that holds state. Domain helpers (`src/time.ts`, `src/projection.ts`, `src/resolve.ts`, `src/tools/read.ts`) take their clock and their data as arguments and hold nothing themselves.
+3. **I/O boundaries.** `src/client.ts` is the only module that touches the network. `src/cache.ts` and `src/probe.ts` are the only modules that hold state, and both hold it in an instance created once at startup, never at module scope. Domain helpers (`src/time.ts`, `src/projection.ts`, `src/resolve.ts`, `src/tools/read.ts`) take their clock and their data as arguments and hold nothing themselves.
 
 4. **MCP boundary.** Only `src/index.ts` may import `@modelcontextprotocol/server`. Tool definitions elsewhere are plain data: a name, a description, a zod raw shape for the input, and a handler function. Anything constructed inside the server factory in `src/index.ts` has per-connection lifetime, so the `DonetickService` and its caches are built once outside the factory and closed over, not rebuilt per connection.
 
@@ -54,6 +54,7 @@ bun run verify:live      # bun scripts/verify-live.ts, live check against a real
 - `src/dates.ts` parses what a caller may write for a date: RFC3339, `YYYY-MM-DD`, and phrases like "tomorrow" or "in 3 days".
 - `src/frequency.ts` maps a recurrence description onto Donetick's eleven `frequencyType` values and their metadata.
 - `src/chore-request.ts` builds the create body and merges the edit body. The merge is the highest-risk code in the repo: Donetick has no partial update, so every field absent from the merge base is destroyed on write.
+- `src/probe.ts` decides whether Donetick is reachable and is actually Donetick. A failure is re-checked on the next tool call, never latched: the server is started at login alongside the containers it talks to, so losing that race is the likeliest way it ever fails.
 - `src/confirm.ts` holds the elicitation key and the pure decision that turns an elicitation response into consent, refusal, or "not asked yet". It is separate from `src/index.ts` only so it can be tested, since the suite cannot import the entry point.
 - `src/tools/read.ts`, `write.ts`, `schedule.ts`, `actions.ts` and `subtasks.ts` implement the twenty tools; `src/tools/chore-lookup.ts` is the single loader they all resolve a chore id through; `src/tools/index.ts` declares them as plain data.
 

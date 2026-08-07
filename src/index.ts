@@ -4,29 +4,10 @@ import { inputRequired, inputResponse, McpServer, type ServerContext } from "@mo
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { DonetickClient } from "@/client";
 import { parseConfig } from "@/config";
-import { endpoints } from "@/endpoints";
 import { DonetickService } from "@/service";
 import { buildToolDefinitions } from "@/tools/index";
 import { CONFIRM_KEY, decideConfirmation } from "@/confirm";
-
-let probeFailure: string | undefined;
-
-async function probe(client: DonetickClient, baseUrl: string): Promise<void> {
-  try {
-    const result = await client.get(endpoints.listChores());
-    if (!Array.isArray(result)) {
-      probeFailure = `${baseUrl} answered but did not return a chore array. DONETICK_URL may be pointing at the wrong service.`;
-      console.error(probeFailure);
-      return;
-    }
-    // console.info writes to stdout under Bun, which would corrupt the JSON-RPC
-    // stream shared with the transport. Every diagnostic here goes to stderr instead.
-    console.error(`donetick-mcp connected to ${baseUrl}, ${result.length} chores visible`);
-  } catch (error) {
-    probeFailure = error instanceof Error ? error.message : String(error);
-    console.error(`donetick-mcp could not reach Donetick: ${probeFailure}`);
-  }
-}
+import { createProbeGate } from "@/probe";
 
 async function main(): Promise<void> {
   const config = parseConfig(process.env);
@@ -41,6 +22,7 @@ async function main(): Promise<void> {
   // protocol 2026-07-28, so anything built inside would have per-connection lifetime.
   const service = new DonetickService(client, { cacheTtlMs: config.cacheTtlMs });
   const tools = buildToolDefinitions({ service, timezone: config.timezone, now: () => new Date() });
+  const gate = createProbeGate(client, config.baseUrl);
 
   const factory = () => {
     const server = new McpServer({ name: "donetick-mcp", version: "0.1.0" });
@@ -50,10 +32,13 @@ async function main(): Promise<void> {
         tool.name,
         { description: tool.description, inputSchema: z.object(tool.inputSchema) },
         async (args: Record<string, unknown>, ctx: ServerContext) => {
-          if (probeFailure !== undefined) {
+          // Re-checked rather than remembered, so a Donetick that came up after this
+          // server did serves the call instead of inheriting the startup verdict.
+          const unreachable = await gate.reason();
+          if (unreachable !== undefined) {
             return {
               content: [
-                { type: "text" as const, text: `donetick-mcp could not reach Donetick at startup: ${probeFailure}` },
+                { type: "text" as const, text: `donetick-mcp cannot reach Donetick: ${unreachable}` },
               ],
               isError: true,
             };
@@ -91,7 +76,7 @@ async function main(): Promise<void> {
   // reach the client as a crash rather than as the real reason.
   serveStdio(factory, { onerror: (error) => console.error(error.message) });
 
-  void probe(client, config.baseUrl);
+  void gate.run();
 }
 
 main().catch((error: unknown) => {

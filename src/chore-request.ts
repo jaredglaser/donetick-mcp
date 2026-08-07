@@ -73,7 +73,15 @@ export interface BuildContext {
 export interface ChoreRequestBody {
   id?: number;
   name: string;
-  description: string | null;
+  /**
+   * Never null, and never absent. Verified on v0.1.76: PUT /api/v1/chores/ with
+   * description null, or with the key omitted, kills the connection and the proxy
+   * answers 502. An empty string is accepted and reads back as empty. Since a
+   * chore created without a description stores null, sending its own value back
+   * unchanged is what triggers this, which made edit_chore fail on exactly the
+   * chores most likely to exist.
+   */
+  description: string;
   nextDueDate: string | null;
   frequencyType: string;
   frequency: number;
@@ -238,7 +246,7 @@ export function buildCreateRequest(input: CreateInput, ctx: BuildContext): Chore
 
   return {
     name: input.name,
-    description: input.description ?? null,
+    description: input.description ?? "",
     nextDueDate: dueDate === null ? null : dueDate.toISOString(),
     frequencyType: frequency.frequencyType,
     frequency: frequency.frequency,
@@ -353,7 +361,7 @@ export function mergeEditRequest(existing: RawChore, input: EditInput, ctx: Buil
   return {
     id: existing.id,
     name: input.name ?? existing.name,
-    description: input.description ?? existing.description ?? null,
+    description: input.description ?? existing.description ?? "",
     nextDueDate: dueDate === null ? null : dueDate.toISOString(),
     frequencyType: frequency.frequencyType,
     frequency: frequency.frequency,
