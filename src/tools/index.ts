@@ -200,10 +200,9 @@ const MAX_HISTORY_DAYS = 90;
 const DEFAULT_HISTORY_DAYS = 7;
 
 /**
- * Task 13's zod schema also caps this, but that boundary is the MCP transport, not this
- * function's caller. Clamping here (rather than throwing) keeps a slightly-too-wide ask
- * useful instead of failing it outright, since the caller almost always just wants "as
- * much history as is reasonable to return."
+ * The zod schema caps this too, but that boundary is the MCP transport rather than
+ * this function's caller. Clamped rather than thrown so a slightly-too-wide ask
+ * still returns as much history as is reasonable.
  */
 function clampHistoryDays(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
@@ -612,14 +611,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
         "completing it. Takes chore_id only, never a name: a just-completed one-off chore drops out of " +
         "the active list this server searches by name. Use the id complete_chore returned.",
       inputSchema: {
-        chore_id: z
-          .number()
-          .int()
-          .describe(
-            "The id complete_chore returned. Names are not taken here: a just-completed one-off " +
-              "chore leaves the active list this server searches by name, so a name could never " +
-              "find it.",
-          ),
+        chore_id: z.number().int().describe("The id complete_chore returned."),
       },
       handler: guard(async (args) => ok(await undoChore(args as unknown as UndoInput, writeCtx))),
     },

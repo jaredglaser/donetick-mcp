@@ -68,8 +68,8 @@ function extractCreatedId(response: unknown): { id: number; warnings?: unknown }
  * (frequency, labels-for-write, assign strategy, and so on), so it is a better
  * source for the just-written state than a fresh GET, which is missing exactly
  * the fields a write requires (see loadChoreById). The cast goes through unknown
- * because ChoreRequestBody's write-shaped fields (labelsV2 as {labelId}, for
- * example) are not structurally RawChore's read-shaped fields; callers layer a
+ * because ChoreRequestBody's write-shaped fields (labelsV2 carries no name on
+ * write, for example) are not structurally RawChore's read-shaped fields; callers layer a
  * read-shaped source over this to correct the fields that differ.
  */
 function bodyAsRawFields(body: ChoreRequestBody): Partial<RawChore> {
@@ -178,7 +178,7 @@ export async function editChore(
     };
   }
   // labelsV2 is forced back to the pre-edit row rather than taken from body or
-  // detail: body's labelsV2 is the write shape ({labelId}, no name) and edit input
+  // detail: body's labelsV2 is the write shape ({id}, no name) and edit input
   // has no way to change labels, while detail omits labelsV2 entirely. existing is
   // the only source with the read-shaped labels this edit actually left in place.
   const merged = {

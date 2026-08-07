@@ -250,11 +250,6 @@ function carriedSubtasks(existing: RawChore): ChoreRequestBody["subTasks"] {
 }
 
 /**
- * A due date is required whenever isRolling is set; Donetick binds them together.
- * Applied identically on create and merge so a rolling chore never ends up with a
- * null nextDueDate regardless of which path produced isRolling: true.
- */
-/**
  * Donetick's completion handler dereferences NextDueDate without a nil check when
  * a chore has a completionWindow, and its adaptive scheduler does the same. Either
  * combination with no due date panics the handler, so the chore can be created and
@@ -278,6 +273,11 @@ function requireDueDateFor(
   }
 }
 
+/**
+ * A due date is required whenever isRolling is set; Donetick binds them together.
+ * Applied identically on create and merge so a rolling chore never ends up with a
+ * null nextDueDate regardless of which path produced isRolling: true.
+ */
 function ensureDueDateForRolling(dueDate: Date | null, isRolling: boolean, ctx: BuildContext): Date | null {
   if (isRolling && dueDate === null) {
     return parseDueDate("today", ctx.now, ctx.timezone);
@@ -330,6 +330,20 @@ export function buildCreateRequest(input: CreateInput, ctx: BuildContext): Chore
 }
 
 /**
+ * Donetick's EditChore dissociates a chore's Thing on every edit and only puts it
+ * back when the request carries a thingTrigger. This server never sends one, and
+ * cannot: it refuses trigger recurrence at the frequency layer and has no endpoint
+ * to read a Thing's id from. So an edit would leave a trigger chore that never fires
+ * again, with a 200 and nothing in the read-back to show for it.
+ */
+function assertNoThingTrigger(existing: RawChore): void {
+  if (existing.thingChore === undefined || existing.thingChore === null) return;
+  throw new Error(
+    `"${existing.name}" is driven by a Donetick Thing. Editing it through this server would sever that link permanently, because Donetick drops the association on every edit and only restores it for a request that names the Thing. Edit this chore in the Donetick web UI.`,
+  );
+}
+
+/**
  * GET /chores/:id/details omits assignStrategy, assignees, frequency,
  * frequencyMetadata, isRolling, isPrivate, labelsV2, notification,
  * notificationMetadata, points, and requireApproval, which is every field a write
@@ -339,21 +353,6 @@ export function buildCreateRequest(input: CreateInput, ctx: BuildContext): Chore
  * absent is a stronger signal that this is genuinely the wrong shape, rather than a
  * list row that happens to omit one optional field for a legitimate reason.
  */
-/**
- * Donetick's EditChore dissociates a chore's Thing on every edit and only puts it
- * back when the request carries a thingTrigger. This server never sends one, and
- * cannot: it refuses trigger recurrence at the frequency layer and has no endpoint
- * to read a Thing's id from. So an edit would leave a trigger chore that never fires
- * again, with a 200 and nothing in the read-back to show for it. Refusing is the
- * only honest option until thingTrigger can be round-tripped.
- */
-function assertNoThingTrigger(existing: RawChore): void {
-  if (existing.thingChore === undefined || existing.thingChore === null) return;
-  throw new Error(
-    `"${existing.name}" is driven by a Donetick Thing. Editing it through this server would sever that link permanently, because Donetick drops the association on every edit and only restores it for a request that names the Thing. Edit this chore in the Donetick web UI.`,
-  );
-}
-
 function assertListRowShape(existing: RawChore): void {
   const looksLikeDetailsView =
     existing.assignStrategy === undefined &&

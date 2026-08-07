@@ -59,7 +59,7 @@ interface ChoreCreateBody {
   assignStrategy: string;
   assignedTo: number | null;
   assignees: Array<{ userId: number }>;
-  labelsV2: Array<{ labelId: number }>;
+  labelsV2: Array<{ id: number }>;
   priority: number;
   points: number | null;
   projectId: number | null;

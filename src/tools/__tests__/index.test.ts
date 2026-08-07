@@ -419,9 +419,6 @@ describe("failure isolation", () => {
       set_subtask_completed: { chore_id: 1, subtask: "wipe counters", completed: true },
     };
 
-    // Plan 2 Task 6 registered the eight write tools alongside the five read tools
-    // from Plan 1, growing this count from 5 to 13. Plan 3 Task 3 registers the
-    // seven action tools on top of that, growing it again to 20.
     expect(tools).toHaveLength(20);
     for (const tool of tools) {
       const result = await tool.handler(argsByName[tool.name] ?? {});
@@ -436,9 +433,6 @@ describe("failure isolation", () => {
   });
 });
 
-// Plan 2 Task 6 coverage below: the eight write tools, delete_chore's multi-round-trip
-// confirmation, and the two drift guards tying the local zod option lists back to their
-// domain source of truth.
 
 const writeMember1 = {
   userId: 1,
@@ -638,9 +632,6 @@ describe("a chore id that does not exist", () => {
   });
 });
 
-// Plan 3 Task 3 coverage below: registration of the seven action tools
-// (complete_chore, skip_chore, undo_chore, approve_chore, reject_chore, nudge_chore,
-// set_subtask_completed) that bring the surface from 13 tools to 20.
 
 const actionChoreRow = {
   id: 7,
@@ -877,9 +868,9 @@ describe("error reporting", () => {
   }
 
   test("drops the cached list when the error says the cache disagrees with the server", async () => {
-    // guardWith reads invalidatesCache. Deleting that branch left all 486 tests
-    // green, because every fake in this file threw a plain Error and the
-    // instanceof check was false in every one of them.
+    // Deleting the invalidatesCache branch used to leave the whole suite green,
+    // because every fake here threw a plain Error and the instanceof check was
+    // false in all of them.
     let invalidated = 0;
     const tools = buildToolDefinitions({
       ...deps,

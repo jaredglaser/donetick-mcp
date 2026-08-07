@@ -266,11 +266,7 @@ describe("mergeEditRequest", () => {
   test("preserves labels keyed id, which is what Donetick's LabelReq binds", () => {
     // /api/v1/labels is JWT-only, so a label lost on a write cannot be restored here.
     const body = mergeEditRequest(existing, {}, ctx());
-// labelId is the join row's key (ChoreLabels.LabelID), not the request's.
-    // Donetick's LabelReq binds id with required,gt=0, so the wrong key made every
-    // edit of a labeled chore fail. No fixture here had a label and no scratch
-    // chore in verify-live has one, so nothing caught it.
-    expect(body.labelsV2).toEqual([{ id: 3 }]);
+expect(body.labelsV2).toEqual([{ id: 3 }]);
   });
 
   test("applies a name change and nothing else", () => {
@@ -415,10 +411,7 @@ describe("mergeEditRequest", () => {
     });
 
     test("due_date: null does not put a null in the full-edit body, because the server ignores one", () => {
-      // Verified live on v0.1.76: PUT /chores/ assigns nextDueDate only when it is
-      // non-nil and otherwise keeps the stored value, so a null here describes an
-      // edit that never happens. editChore issues the clear against PUT /:id/dueDate,
-      // which does honour null.
+      // null means "keep" here; editChore clears via PUT /:id/dueDate.
       const body = mergeEditRequest(existing, { due_date: null, reschedule_from: "due_date" }, ctx());
       expect(body.nextDueDate).toBe("2026-06-18T13:00:00.000Z");
     });
@@ -458,8 +451,7 @@ describe("mergeEditRequest", () => {
 
 describe("the due date survives an unrelated edit", () => {
   // The one merge field with no preservation coverage anywhere, unit or live.
-  // Deleting the carry-forward in mergeEditRequest left all 480 tests and all 21
-  // live checks green: because the fixture is rolling, ensureDueDateForRolling
+  // Deleting the carry-forward left the whole suite and every live check green: because the fixture is rolling, ensureDueDateForRolling
   // rewrote the resulting null to today, so a rename silently rescheduled the
   // chore rather than producing anything that looked like a failure.
 
@@ -483,9 +475,7 @@ describe("the due date survives an unrelated edit", () => {
   });
 
   test("due_date null leaves the body carrying the current date, since the server ignores a null here", () => {
-    // PUT /chores/ reads nextDueDate: null as "keep". editChore performs the clear
-    // against PUT /:id/dueDate, which honours it; a null in this body would describe
-    // an edit that does not happen.
+    // null means "keep" here; editChore clears via PUT /:id/dueDate.
     const notRolling = { ...existing, isRolling: false } as RawChore;
     expect(mergeEditRequest(notRolling, { due_date: null }, ctx()).nextDueDate).toBe(
       "2026-06-18T13:00:00.000Z",

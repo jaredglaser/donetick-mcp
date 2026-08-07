@@ -187,7 +187,7 @@ describe("mapHttpError", () => {
     expect(err.message.endsWith("...")).toBe(true);
   });
 
-  describe("bodyError robustness", () => {
+  describe("bodyError parsing", () => {
     const cases: Array<[string, string]> = [
       ["a nested object error field", JSON.stringify({ error: { nested: "x" } })],
       ["a numeric error field", JSON.stringify({ error: 42 })],

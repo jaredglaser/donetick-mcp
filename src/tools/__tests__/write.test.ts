@@ -573,9 +573,8 @@ describe("editChore when the read-back fails", () => {
 
 describe("editChore clearing the due date", () => {
   test("issues the clear against /:id/dueDate, which is the endpoint that honours a null", async () => {
-    // Verified live on v0.1.76: PUT /chores/ with nextDueDate null keeps the stored
-    // date and answers 200, so edit_chore advertised a clear that silently did
-    // nothing and then reported success.
+    // The full edit reads a null as "keep", so a clear that went there would be a
+    // 200 that changed nothing and still reported success.
     const fake = fakeService({
       chores: [listRow],
       put: () => undefined,

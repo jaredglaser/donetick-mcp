@@ -37,10 +37,9 @@ export interface ListResult {
  */
 function zoneFor(chore: RawChore, fallback: string): string {
   const zone = chore.frequencyMetadata?.timezone;
-  // Validated, unlike DONETICK_TZ, because this one is client-supplied: any circle
-  // member can set it on create, and Temporal throws on an unrecognized zone. One
-  // bad row would otherwise fail every scope-filtered listing with a message about
-  // Temporal rather than about the chore.
+  // Client-supplied: any circle member sets this on create, and Temporal throws on
+  // an unrecognized zone, so one bad row would otherwise fail every scope-filtered
+  // listing with a message about Temporal rather than about the chore.
   return zone && zone.length > 0 && isValidTimezone(zone) ? zone : fallback;
 }
 
