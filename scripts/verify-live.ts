@@ -957,6 +957,50 @@ async function main(): Promise<void> {
       return { detail: `archived chore ${id} deleted and gone from both lists` };
     });
 
+    await check("approve flips the pending history row to completed, and reject writes its own", async () => {
+      // Neither endpoint had ever been called live. This also settles what
+      // list_activity's completions-only default does with an approval-gated chore:
+      // approving rewrites the row rather than adding one, so an approved completion
+      // shows up and a still-pending one correctly does not.
+      const statusesFor = async (id: number): Promise<number[]> => {
+        const rows = (await client.get(endpoints.choreHistory(7, true))) as Array<{
+          choreId: number;
+          status: number;
+        }>;
+        return rows.filter((r) => r.choreId === id).map((r) => r.status);
+      };
+      const pending = async (label: string): Promise<number> => {
+        const id = await createScratchChore(
+          baseChoreBody(scoped(label), { frequencyType: "daily", requireApproval: true }),
+        );
+        await client.post(endpoints.completeChore(id), {});
+        return id;
+      };
+
+      const approved = await pending("approve");
+      if (!(await statusesFor(approved)).includes(3)) {
+        throw new Error("completing a requireApproval chore did not leave a pending history row");
+      }
+      await client.post(endpoints.approveChore(approved), {});
+      const afterApprove = await statusesFor(approved);
+      if (!afterApprove.includes(1)) {
+        throw new Error(
+          `approving left history at ${JSON.stringify(afterApprove)} rather than completed. list_activity filters to completed, so approved completions would vanish from it.`,
+        );
+      }
+
+      const rejected = await pending("reject");
+      await client.post(endpoints.rejectChore(rejected), {});
+      const afterReject = await statusesFor(rejected);
+      if (!afterReject.includes(4)) {
+        return {
+          status: "warn",
+          detail: `rejecting left history at ${JSON.stringify(afterReject)}, not 4; CHORE_HISTORY_STATUS maps 4 to rejected`,
+        };
+      }
+      return { detail: "approve rewrote 3 to 1, reject wrote 4" };
+    });
+
     await check("POST /:id/nudge answers a bare {message} with no res envelope", async () => {
       // nudgeChore reads message off the top level. unwrap() discards every sibling
       // of res, so if this endpoint ever starts answering {res, message} like
