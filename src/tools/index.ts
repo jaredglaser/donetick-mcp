@@ -617,7 +617,7 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
         "exception: a chore whose notifications were switched on but whose notification settings row " +
         "is empty has them switched off by any edit, because the alternative crashes Donetick. Only the " +
         "fields you pass are changed. Pass due_date: null to clear the due date. assignees replaces the " +
-        "full assignee list, while add_assignees adds to it without dropping anyone already assigned." +
+        "full assignee list, while add_assignees adds to it without dropping anyone already assigned. " +
         "Labels cannot be changed here: Donetick's label API needs session auth an API token cannot " +
         "provide, so a labels field is ignored and the edit still reports success. Add or remove a label " +
         "in the Donetick web UI.",

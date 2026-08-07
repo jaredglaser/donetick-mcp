@@ -387,7 +387,12 @@ function assertSchedulableFrequency(existing: RawChore): void {
     existing.frequencyType === "interval" &&
     meta0.unit === "hours" &&
     typeof meta0.time === "string" &&
-    meta0.time.length > 0
+    meta0.time.length > 0 &&
+    // Only counts that are not a whole number of days. Measured on v0.1.76: every 24
+    // and every 48 hours advance correctly and hold the stored time, and only the
+    // other counts freeze. Refusing all of them blocked every edit and reassign on a
+    // chore working exactly as configured.
+    (typeof existing.frequency !== "number" || existing.frequency % 24 !== 0)
   ) {
     throw new Error(
       `"${existing.name}" is an hourly chore carrying a time of day, which Donetick cannot advance: ` +

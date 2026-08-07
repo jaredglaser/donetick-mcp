@@ -352,10 +352,43 @@ describe("a 5xx on a write says nothing about whether it applied", () => {
     const err = mapHttpError({
       status: 500,
       body: "",
+      path: "/api/v1/chores/",
+      method: "PUT",
+    });
+    expect(err.indeterminate).toBe(true);
+    expect(err.message).toMatch(/instance returned an error/i);
+  });
+
+  test("the id-scoped writes are not indeterminate, because they wrote nothing", () => {
+    // Measured on v0.1.76. Archive and unarchive are a single UPDATE that matched no
+    // rows; DELETE the same; the scheduling writes compute the next due date before
+    // persisting, so a 500 there leaves the due date, status, history and points
+    // untouched. Telling someone a delete they just confirmed "may have been applied"
+    // is a false alarm about data loss, and it contradicted the branch message it was
+    // appended to.
+    const paths: Array<[string, string]> = [
+      ["/api/v1/chores/7/archive", "PUT"],
+      ["/api/v1/chores/7/unarchive", "PUT"],
+      ["/api/v1/chores/7", "DELETE"],
+      ["/api/v1/chores/7/do", "POST"],
+      ["/api/v1/chores/7/skip", "POST"],
+      ["/api/v1/chores/7/approve", "POST"],
+      ["/api/v1/chores/7/priority", "PUT"],
+    ];
+    for (const [path, method] of paths) {
+      const err = mapHttpError({ status: 500, body: "", path, method });
+      expect(err.indeterminate).toBe(false);
+    }
+  });
+
+  test("the scheduling branch keeps its own message while staying determinate", () => {
+    const err = mapHttpError({
+      status: 500,
+      body: "",
       path: "/api/v1/chores/7/approve",
       method: "POST",
     });
-    expect(err.indeterminate).toBe(true);
     expect(err.message).toMatch(/recurrence/i);
+    expect(err.indeterminate).toBe(false);
   });
 });

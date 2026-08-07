@@ -31,8 +31,16 @@ export function summarizeFrequency(chore: RawChore): string {
       // never moves the due date, so five completions in a row each reported success
       // against the identical next date. edit_chore already refuses it; the read side
       // called it "every 4 hours".
-      if (meta.unit === "hours" && typeof meta.time === "string" && meta.time.length > 0) {
-        return "broken: an hourly interval carrying a time of day";
+      if (
+        meta.unit === "hours" &&
+        typeof meta.time === "string" &&
+        meta.time.length > 0 &&
+        (typeof count !== "number" || count % 24 !== 0)
+      ) {
+        // Only when the count is not a whole number of days: 24 and 48 advance
+        // correctly and hold the stored time, and calling those broken told the
+        // caller a working chore needed repairing.
+        return `broken: an interval of ${String(count)} hours carrying a time of day`;
       }
       if (typeof count !== "number" || count <= 0) {
         return `broken: an interval of ${String(count)} ${meta.unit}`;

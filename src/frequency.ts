@@ -92,20 +92,27 @@ export interface FrequencyOutput {
 export function buildFrequency(input: FrequencyInput, timezone: string, now: Date): FrequencyOutput {
   const metadata: FrequencyMetadata = { timezone };
   if (input.time !== undefined) {
-    // Donetick's scheduler reads the stored time for three types only, and for an
-    // hourly interval reading it is worse than ignoring it. Measured on v0.1.76: a
-    // 4-hourly chore with a time advanced once and then rescheduled to the instant it
-    // was already at, on every completion after, permanently overdue and answering
-    // 200 each time. The normalisation rewrites the base date's clock back to the
-    // stored time before adding the hours, so the result stops depending on where
-    // the chore actually was.
+    // Donetick rewrites the base date's clock back to the stored time before adding
+    // the hours, so the step becomes idempotent whenever the count is not a whole
+    // number of days. Measured on v0.1.76 with a time of 13:00Z, three completions
+    // each: every 4 hours froze at 17:00Z and stayed there; every 24 and every 48
+    // advanced correctly and held 13:00Z exactly; every 30 advanced 24 hours a step
+    // rather than 30.
+    //
+    // Only the counts that are not multiples of 24. An earlier version refused every
+    // hourly interval carrying a time, which blocked create, and through the matching
+    // arm of assertSchedulableFrequency every edit and reassign, on chores that
+    // behave exactly as configured.
     if (input.type === "interval" && (input.unit ?? "days") === "hours") {
-      throw new Error(
-        "An hourly interval cannot carry a time of day: Donetick resets the clock to that time " +
-          "before adding the hours, so the chore freezes on its second completion and stays " +
-          "overdue. Drop time. To start the cycle at a particular hour, put that hour on due_date " +
-          "as a full timestamp with an offset; the interval then steps from there.",
-      );
+      const every = input.every ?? 1;
+      if (every % 24 !== 0) {
+        throw new Error(
+          `An interval of ${every} hours cannot carry a time of day: Donetick resets the clock to ` +
+            "that time before adding the hours, so the chore freezes on its second completion and " +
+            "stays overdue. Use a count that is a whole number of days (24, 48) if you need the " +
+            "time kept, or drop time and put the starting hour on due_date as a full timestamp.",
+        );
+      }
     }
     if (!TIME_AWARE_TYPES.includes(input.type)) {
       const example = `2026-08-07T${input.time}:00${utcOffsetFor(timezone, now)}`;
@@ -184,7 +191,7 @@ export function buildFrequency(input: FrequencyInput, timezone: string, now: Dat
               "first of each period, or [-1] for the last.",
           );
         }
-        const OCCURRENCE_LIMIT = input.week_pattern === "week_of_quarter" ? 14 : 5;
+        const OCCURRENCE_LIMIT = input.week_pattern === "week_of_quarter" ? 13 : 5;
         const bad = input.occurrences.filter(
           (n) => !Number.isInteger(n) || (n !== -1 && (n < 1 || n > OCCURRENCE_LIMIT)),
         );

@@ -50,18 +50,23 @@ function bodyError(body: string): string | undefined {
 }
 
 /**
- * A 5xx on a write says nothing about whether the write applied.
+ * The create and edit path, and only that one, can fail after writing.
  *
- * Donetick's create inserts the chore row before several later steps that can fail,
- * and its router has no Recovery middleware, so a panic after partial work drops the
- * connection mid-request. Measured on v0.1.76: a create whose label step fails
- * answers 500 with the chore row already committed. Reported as a flat failure, the
- * obvious next move is to retry, which makes a duplicate. That is the whole reason
- * DonetickError carries this flag, and until now only a transport error ever set it,
- * so no HTTP response could.
+ * Donetick's create inserts the chore row before several later steps that can fail:
+ * measured on v0.1.76, a create whose label step fails answers 500 with the row
+ * already committed. Reported as a flat failure, the obvious next move is to retry,
+ * which makes a duplicate.
  *
- * 4xx stays determinate: a rejected body, a bad token or a missing id all mean
- * nothing was written.
+ * The narrow set is the point. An earlier version set this on every 5xx write, and
+ * the other branches were measured not to write anything at all: archive and
+ * unarchive are one UPDATE that matched no rows, DELETE the same, and the scheduling
+ * writes compute the next due date before persisting, so a 500 there leaves the due
+ * date, the status, the history and the points untouched. Saying "this may have been
+ * applied" about a delete the caller has just confirmed is a false alarm about data
+ * loss, and it contradicted the branch message it was appended to.
+ *
+ * 4xx stays determinate everywhere: a rejected body, a bad token or a missing id all
+ * mean nothing was written.
  */
 export function mapHttpError(input: {
   status: number;
@@ -70,7 +75,7 @@ export function mapHttpError(input: {
   method: string;
 }): DonetickError {
   const mapped = classifyHttpError(input);
-  if (input.status >= 500 && input.method !== "GET" && !mapped.indeterminate) {
+  if (input.status >= 500 && input.method !== "GET" && writesBeforeItCanFail(input)) {
     return new DonetickError(mapped.message, {
       status: mapped.status,
       retryable: mapped.retryable,
@@ -79,6 +84,18 @@ export function mapHttpError(input: {
     });
   }
   return mapped;
+}
+
+/**
+ * The whole-chore create and edit endpoint. Everything else this server writes to is
+ * id-scoped and either matched no row or failed before persisting anything.
+ */
+function writesBeforeItCanFail(input: { path: string; method: string }): boolean {
+  return (
+    !isCreatorOnlyWrite(input.path, input.method) &&
+    !isSchedulingWrite(input.path, input.method) &&
+    !isIdScopedWrite(input.path, input.method)
+  );
 }
 
 function classifyHttpError(input: {

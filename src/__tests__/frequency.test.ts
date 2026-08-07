@@ -445,23 +445,38 @@ describe("occurrence bounds, at their edges", () => {
   });
 
   test("a quarter's ceiling is higher than a month's, and still bounded", () => {
+    // 13, not 14. Measured on v0.1.76: a 14th occurrence needs a 92-day quarter that
+    // begins on that weekday, which only Q3 and Q4 give, and the search gives up
+    // after 730 days. [14] answers 500 on every completion for four of the seven
+    // weekdays, which is exactly the never-completable chore this bound exists to
+    // prevent.
     expect(() => dow([13], "week_of_quarter")).not.toThrow();
-    expect(() => dow([14], "week_of_quarter")).not.toThrow();
-    expect(() => dow([15], "week_of_quarter")).toThrow(/1 through 14/);
+    expect(() => dow([14], "week_of_quarter")).toThrow(/1 through 13/);
     expect(() => dow([6], "week_of_month")).toThrow(/1 through 5/);
   });
 });
 
 describe("a time of day only where Donetick reads one", () => {
-  test("an hourly interval refuses it, because carrying one freezes the chore", () => {
-    // Measured on v0.1.76: a 4-hourly chore with a time advanced once and then
-    // rescheduled to the instant it was already at, on every completion after,
-    // permanently overdue and answering 200 each time. The scheduler resets the base
-    // date's clock to the stored time before adding the hours, so the result stops
-    // depending on where the chore actually was.
+  test("an hourly interval whose count is not a whole day refuses a time", () => {
+    // Measured on v0.1.76 with a stored time of 13:00Z, three completions each:
+    // every 4 hours froze at 17:00Z, every 24 and every 48 advanced correctly and
+    // held 13:00Z, and every 30 advanced 24 hours a step. Only the counts that are
+    // not multiples of 24 are refused; refusing all of them blocked create, and
+    // through assertSchedulableFrequency every edit, on working chores.
     expect(() =>
       buildFrequency({ type: "interval", every: 4, unit: "hours", time: "09:00" }, tz, now),
-    ).toThrow(/freezes/);
+    ).toThrow(/4 hours cannot carry a time/);
+    expect(() =>
+      buildFrequency({ type: "interval", every: 30, unit: "hours", time: "09:00" }, tz, now),
+    ).toThrow(/cannot carry a time/);
+  });
+
+  test("an hourly interval of a whole number of days keeps its time", () => {
+    for (const every of [24, 48]) {
+      expect(() =>
+        buildFrequency({ type: "interval", every, unit: "hours", time: "09:00" }, tz, now),
+      ).not.toThrow();
+    }
   });
 
   test("an hourly interval with no time is fine", () => {

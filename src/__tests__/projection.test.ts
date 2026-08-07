@@ -230,7 +230,7 @@ describe("live-observed edge cases", () => {
     ).toBe("broken: days_of_the_week with no days");
   });
 
-  test("an hourly interval carrying a time reads as broken, since it never advances", () => {
+  test("an hourly interval whose count is not a whole day reads as broken", () => {
     // Measured live: five consecutive completions each reported success against the
     // identical next due date. edit_chore already refused this shape; the read side
     // called it "every 4 hours".
@@ -242,7 +242,23 @@ describe("live-observed edge cases", () => {
           frequencyMetadata: { unit: "hours", time: "1970-01-01T09:00:00-04:00" },
         }),
       ),
-    ).toBe("broken: an hourly interval carrying a time of day");
+    ).toBe("broken: an interval of 4 hours carrying a time of day");
+  });
+
+  test("an hourly interval of a whole number of days is ordinary, even with a time", () => {
+    // Measured: every 24 and every 48 advance correctly and hold the stored time.
+    // Calling them broken told the caller a working chore needed repairing.
+    for (const every of [24, 48]) {
+      expect(
+        summarizeFrequency(
+          chore({
+            frequencyType: "interval",
+            frequency: every,
+            frequencyMetadata: { unit: "hours", time: "1970-01-01T09:00:00-04:00" },
+          }),
+        ),
+      ).toBe(`every ${every} hours`);
+    }
   });
 
   test("an hourly interval with no time is ordinary", () => {

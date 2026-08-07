@@ -188,6 +188,16 @@ These were verified against a live Donetick instance, not assumed from its sourc
 - **The concurrency token is the row's own stamp, never a clock reading.** The endpoints that take an `updatedAt` compare it against the stored row and refuse anything older, and `PUT /:id/assignee` writes the value it receives back into the row, so a machine running ahead of the server would stamp a chore with a version its own skew invented. `concurrencyToken` in `src/chore-request.ts` sends the stored string verbatim, because it carries nanosecond precision a `Date` round trip truncates downward.
 - **Recurring chores drift by an hour across a daylight-saving boundary**, because Donetick advances daily and weekly recurrences in UTC rather than in the chore's local calendar day. This server reports that drift accurately; it does not cause it.
 
+## AI Disclosure
+
+Built with Claude Code. I directed and reviewed the architecture and  data flow. I've skimmed the code to confirm that my rules and direction was properly enforced.
+
+Donetick's /api/v1 is undocumented, so the wire contracts were worked out by a fleet of Claude Code agents from the Go source and by measuring a pinned container. `bun run verify:live` is used for verifying the contracts are still accurate.
+
+Expect that there could be edge cases that are handled wrong. There is a chance for data loss. For example, Donetick has no partial update so `edit_chore` rewrites the whole chore. Any field this server gets wrong it overwrites. There are guards and tests for that, but covering every permutation and possibility is not realistic.
+
+Please keep backups. I auto snapshot the LXC my Donetick runs in just in case I need to revert.
+
 ## Development
 
 See `CLAUDE.md` for the operating rules this codebase follows and the full command list.
