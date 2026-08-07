@@ -81,6 +81,34 @@ describe("startOfDay on zones whose day has no midnight", () => {
   });
 });
 
+describe("humanizeDueIn at the minute boundary", () => {
+  const t = new Date("2026-06-15T12:00:00Z");
+
+  test("due at this instant reads as now, not as a minute away", () => {
+    expect(humanizeDueIn(t, t)).toBe("now");
+  });
+
+  test("a few seconds either way is still now", () => {
+    expect(humanizeDueIn(new Date(t.getTime() + 30_000), t)).toBe("now");
+    expect(humanizeDueIn(new Date(t.getTime() - 30_000), t)).toBe("now");
+  });
+
+  test("a full minute is where the count starts, in both directions", () => {
+    expect(humanizeDueIn(new Date(t.getTime() + 60_000), t)).toBe("in 1 minute");
+    expect(humanizeDueIn(new Date(t.getTime() - 60_000), t)).toBe("1 minute overdue");
+  });
+
+  test("the hour boundary is inclusive", () => {
+    expect(humanizeDueIn(new Date(t.getTime() + 3_600_000 - 1), t)).toBe("in 59 minutes");
+    expect(humanizeDueIn(new Date(t.getTime() + 3_600_000), t)).toBe("in 1 hour");
+  });
+
+  test("the day boundary is inclusive", () => {
+    expect(humanizeDueIn(new Date(t.getTime() + 86_400_000 - 1), t)).toBe("in 23 hours");
+    expect(humanizeDueIn(new Date(t.getTime() + 86_400_000), t)).toBe("in 1 day");
+  });
+});
+
 describe("bucket", () => {
   const now = new Date("2026-11-01T16:00:00Z"); // noon local, on the 25-hour day
 

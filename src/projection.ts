@@ -21,13 +21,19 @@ export function summarizeFrequency(chore: RawChore): string {
     case "yearly":
       return chore.frequencyType;
     case "interval": {
-      const unit = meta.unit ?? "days";
-      const count = chore.frequency ?? 1;
-      return `every ${count} ${unit}`;
+      // Rendered as broken rather than as ordinary. assertSchedulableFrequency
+      // refuses these shapes on a write, so describing one as "every 0 days" left
+      // the read side saying the chore was fine while every edit refused it.
+      const count = chore.frequency;
+      if (typeof meta.unit !== "string") return "broken: an interval with no unit";
+      if (typeof count !== "number" || count <= 0) {
+        return `broken: an interval of ${String(count)} ${meta.unit}`;
+      }
+      return `every ${count} ${meta.unit}`;
     }
     case "days_of_the_week": {
       const days = meta.days ?? [];
-      if (days.length === 0) return "on selected days";
+      if (days.length === 0) return "broken: days_of_the_week with no days";
       // week_of_month and week_of_quarter pick one occurrence of the weekday, and
       // every_week does not. Measured against a chore due Thu 2026-09-10: [2]
       // scheduled the 2nd Saturday, [1,3] the next of either, and week_of_quarter [1]
@@ -49,8 +55,14 @@ export function summarizeFrequency(chore: RawChore): string {
       // Donetick carries the calendar day in frequency, not in the metadata.
       const day = chore.frequency;
       const months = meta.months ?? [];
-      const monthsPart = months.length > 0 ? months.join(", ") : "every month";
-      return typeof day === "number" ? `the ${ordinal(day)} of ${monthsPart}` : `monthly in ${monthsPart}`;
+      if (months.length === 0) return "broken: day_of_the_month with no months";
+      const monthsPart = months.join(", ");
+      // Donetick's scheduler refuses anything outside 1 to 31, so a stored 0 is not
+      // "the 0th of October", it is a chore no completion can advance.
+      if (typeof day !== "number" || day <= 0 || day > 31) {
+        return `broken: day_of_the_month with a day of ${String(day)}`;
+      }
+      return `the ${ordinal(day)} of ${monthsPart}`;
     }
     case "adaptive":
       return "adaptive, learned from history";

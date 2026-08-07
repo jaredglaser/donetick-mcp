@@ -47,10 +47,11 @@ export interface ToolResult {
   isError?: boolean;
   /**
    * Present when the tool needs the caller's answer before it can proceed
-   * (protocol revision 2026-07-28's multi-round-trip flow). content still carries a
-   * text fallback of the same message, so a client on an older protocol era, or one
-   * that ignores the sentinel, sees the question rather than a silently completed
-   * action. Read only in src/index.ts.
+   * (protocol revision 2026-07-28's multi-round-trip flow). Read only in
+   * src/index.ts, which turns it into inputRequired and drops content on that path,
+   * so the message here is the only copy the caller sees. An older protocol era is
+   * covered by the SDK's legacy shim rather than by anything on this type: there is
+   * no text fallback, and a comment here used to claim otherwise.
    */
   confirmRequired?: { key: string; message: string };
 }
@@ -59,10 +60,37 @@ export interface ToolDefinition {
   name: string;
   description: string;
   inputSchema: z.ZodRawShape;
+  annotations: ToolAnnotations;
   handler: (args: Record<string, unknown>, mcp?: McpExtras) => Promise<ToolResult>;
 }
 
-export type { ToolContext as ToolDeps } from "@/tools/context";
+/**
+ * The hints a client uses to decide what it may do on the caller's behalf: which
+ * tools it can auto-approve, which it should warn about, and which it can safely
+ * retry. Without them list_chores and delete_chore look alike to a client, and on
+ * one that declares no elicitation capability these are the only remaining guard on
+ * the destructive path, since the confirmation prompt cannot be shown at all.
+ *
+ * openWorldHint is false throughout: every tool talks to one known Donetick instance.
+ */
+export interface ToolAnnotations {
+  readOnlyHint?: boolean;
+  destructiveHint?: boolean;
+  idempotentHint?: boolean;
+  openWorldHint: boolean;
+}
+
+const READ_ONLY: ToolAnnotations = { readOnlyHint: true, openWorldHint: false };
+
+/** Same call, same end state, so a client may retry one that timed out. */
+const IDEMPOTENT: ToolAnnotations = { idempotentHint: true, openWorldHint: false };
+
+/** Removes or overwrites something the caller cannot get back from here. */
+const DESTRUCTIVE: ToolAnnotations = { destructiveHint: true, openWorldHint: false };
+
+/** Changes state, but only ever adds to it. */
+const ADDITIVE: ToolAnnotations = { openWorldHint: false };
+
 
 function ok(payload: unknown): ToolResult {
   return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
@@ -140,7 +168,11 @@ const frequencySchema = z.object({
         'occurrences to pick one of them: "first saturday of every month" is days_of_the_week with ' +
         'days: ["saturday"], week_pattern: "week_of_month", occurrences: [1], and -1 means the last. ' +
         "day_of_the_month is a calendar day number instead, and needs day_of_month plus months. " +
-        "trigger recurrence is not supported here; use the Donetick web UI for it.",
+        "trigger recurrence is not supported here; use the Donetick web UI for it. " +
+        "The remaining three: once and no_repeat both mean a one-off that never recurs, and once " +
+        "is the default, so prefer it. adaptive learns the interval from how the chore is actually " +
+        "completed and requires a due date; do not use it unless the user asks for it by name, " +
+        "since an adaptive chore that later loses its due date becomes permanently unskippable.",
     ),
   every: z.number().int().positive().optional().describe("Count for type interval, e.g. 3 for every 3 days."),
   unit: z.enum(FREQUENCY_UNIT_VALUES).optional().describe("Unit for type interval. Defaults to days."),
@@ -230,7 +262,9 @@ function clampHistoryDays(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return DEFAULT_HISTORY_DAYS;
   }
-  return Math.min(Math.floor(value), MAX_HISTORY_DAYS);
+  // Floor before the lower bound, not after. Ordered the other way, anything in
+  // (0, 1) passed the `<= 0` guard and then floored to 0, producing ?limit=0.
+  return Math.min(Math.max(1, Math.floor(value)), MAX_HISTORY_DAYS);
 }
 
 function enrichHistoryRow(row: RawHistoryRow, chores: RawChore[], members: Member[]) {
@@ -339,14 +373,16 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
   return [
     {
       name: "list_chores",
+      annotations: READ_ONLY,
       description:
         "List chores from Donetick with filters. Use scope=overdue for what is late, scope=due_today for what is due now, and scope=archived for chores that have been archived. Priority filters use Donetick's inverted scale where P1 is the most urgent and 'none' means unset. Returns a trimmed view; call get_chore for full detail.",
       inputSchema: {
         scope: z.enum(SCOPES).optional().describe("Which chores to include. Defaults to all."),
-        days: z.number().int().positive().optional().describe(
+        days: z.number().int().positive().max(3650).optional().describe(
           "The window size for scope=due_within_days, and read only with that scope. Passing days " +
             "with any other scope, or with none, changes nothing: you get the full scope you asked " +
-            "for, not an N-day window.",
+            "for, not an N-day window. Capped at ten years, past which Temporal's arithmetic " +
+            "throws a RangeError that would surface as an opaque tool failure.",
         ),
         project: z.string().optional(),
         priority: z.enum(["P1", "P2", "P3", "P4", "none"]).optional(),
@@ -380,6 +416,7 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
     },
     {
       name: "get_chore",
+      annotations: READ_ONLY,
       description:
         "Fetch one chore in full, including its subtasks and last-completion history. Accepts chore_id or name. Prefer this over list_chores when the user asks about a specific chore.",
       inputSchema: {
@@ -406,6 +443,7 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
     },
     {
       name: "list_activity",
+      annotations: READ_ONLY,
       description:
         "Recent chore completions across the circle. Answers questions like 'when did I last do X', 'who did what this week', and 'what got done'. Defaults to the last 7 days.",
       inputSchema: {
@@ -450,6 +488,7 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
     },
     {
       name: "list_members",
+      annotations: READ_ONLY,
       description:
         "Circle members with their roles and point totals. Use this to turn a person's name into the id other tools need, and to answer point-standing questions.",
       inputSchema: {},
@@ -457,6 +496,7 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
     },
     {
       name: "list_projects",
+      annotations: READ_ONLY,
       description:
         "Projects used to group chores. Use the returned names with the project filter on list_chores.",
       inputSchema: {},
@@ -464,6 +504,7 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
     },
     {
       name: "create_chore",
+      annotations: ADDITIVE,
       description:
         "Create a new chore. \"Every 3 days\" is frequency type interval with every: 3; the fixed types " +
         "daily, weekly, monthly, and yearly always repeat exactly once per unit and ignore any count you " +
@@ -481,7 +522,17 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
             'An RFC3339 timestamp, YYYY-MM-DD, or a phrase like "tomorrow", "in 3 days", or "next monday". A bare date or a phrase carries no time of day and resolves to 09:00 local; to set a different hour pass a full timestamp with an offset, like "2026-08-07T07:00:00-04:00". Omit for no due date.',
           ),
         frequency: frequencySchema.optional().describe("Defaults to a one-time chore (type once) when omitted."),
-        assign_strategy: z.enum(ASSIGN_STRATEGIES).optional(),
+        assign_strategy: z
+          .enum(ASSIGN_STRATEGIES)
+          .optional()
+          .describe(
+            "How Donetick picks the next assignee each time the chore recurs. keep_last_assigned " +
+              "keeps whoever has it, round_robin cycles through the assignees in order, " +
+              "least_assigned and least_completed pick by workload, random and " +
+              "random_except_last_assigned pick at random, and no_assignee leaves it unassigned. " +
+              "no_assignee alongside a non-empty assignees list is contradictory, so it is treated " +
+              "as keep_last_assigned rather than silently discarding the people you named.",
+          ),
         reschedule_from: z
           .enum(["due_date", "completion_date"])
           .optional()
@@ -519,8 +570,11 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
     },
     {
       name: "edit_chore",
+      annotations: DESTRUCTIVE,
       description:
-        "Edit an existing chore by chore_id. Every field you do not pass is preserved as it was; only the " +
+        "Edit an existing chore by chore_id. Every field you do not pass is preserved as it was, with one " +
+        "exception: a chore whose notifications were switched on but whose notification settings row " +
+        "is empty has them switched off by any edit, because the alternative crashes Donetick. Only the " +
         "fields you pass are changed. Pass due_date: null to clear the due date. assignees replaces the " +
         "full assignee list, while add_assignees adds to it without dropping anyone already assigned." +
         "Labels cannot be changed here: Donetick's label API needs session auth an API token cannot " +
@@ -543,7 +597,17 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
           .optional()
           .describe('An RFC3339 timestamp, YYYY-MM-DD, a phrase like "tomorrow", or null to clear it. A bare date or a phrase resolves to 09:00 local; pass a full timestamp with an offset to set a different hour.'),
         frequency: frequencySchema.optional(),
-        assign_strategy: z.enum(ASSIGN_STRATEGIES).optional(),
+        assign_strategy: z
+          .enum(ASSIGN_STRATEGIES)
+          .optional()
+          .describe(
+            "How Donetick picks the next assignee each time the chore recurs. keep_last_assigned " +
+              "keeps whoever has it, round_robin cycles through the assignees in order, " +
+              "least_assigned and least_completed pick by workload, random and " +
+              "random_except_last_assigned pick at random, and no_assignee leaves it unassigned. " +
+              "no_assignee alongside a non-empty assignees list is contradictory, so it is treated " +
+              "as keep_last_assigned rather than silently discarding the people you named.",
+          ),
         reschedule_from: z.enum(["due_date", "completion_date"]).optional(),
         assignees: z
           .array(z.string())
@@ -605,10 +669,12 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
     },
     {
       name: "delete_chore",
+      annotations: DESTRUCTIVE,
       description:
-        "Permanently delete a chore and its completion history. This asks for confirmation before " +
-        "deleting: the first call reports what would be deleted, and a second call with the user's answer " +
-        "actually deletes it. If the goal is only to stop seeing a chore while keeping its history, use " +
+        "Permanently delete a chore and its completion history. Before deleting, this asks the user " +
+        "to confirm through your client, which reissues the call once they answer. There is no confirm " +
+        "parameter to pass and nothing for you to do about it: call it once. " +
+        "If the goal is only to stop seeing a chore while keeping its history, use " +
         "archive_chore instead. Archived chores can be deleted too, without unarchiving them first. " +
         "Only the chore's creator can delete it; Donetick rejects anyone else's attempt.",
       inputSchema: {
@@ -632,6 +698,7 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
     },
     {
       name: "reschedule_chore",
+      annotations: IDEMPOTENT,
       description: "Change a chore's due date, or clear it.",
       inputSchema: {
         chore_id: choreIdSchema,
@@ -646,6 +713,7 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
     },
     {
       name: "reassign_chore",
+      annotations: IDEMPOTENT,
       description:
         "Reassign a chore to a different member. This sets who the current occurrence belongs to and " +
         "does not remove anyone already on it; use edit_chore with assignees to set the full list. To " +
@@ -661,6 +729,7 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
     },
     {
       name: "set_priority",
+      annotations: IDEMPOTENT,
       description:
         "Set a chore's priority. Donetick's scale is inverted: P1 is the most urgent, P4 is the least " +
         "urgent, and none (0) means unset.",
@@ -674,6 +743,7 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
     },
     {
       name: "archive_chore",
+      annotations: IDEMPOTENT,
       description:
         "Archive a chore. This is the answer to \"I do not need this one anymore\": the chore stops " +
         "appearing in active lists but its completion history is kept, unlike delete_chore. " +
@@ -685,6 +755,7 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
     },
     {
       name: "unarchive_chore",
+      annotations: IDEMPOTENT,
       description: "Restore a previously archived chore so it appears in active lists again.",
       inputSchema: {
         chore_id: choreIdSchema,
@@ -693,6 +764,7 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
     },
     {
       name: "complete_chore",
+      annotations: DESTRUCTIVE,
       description:
         "Mark a chore complete. Pass completed_at (e.g. \"yesterday\") to backdate a completion for " +
         "something already done; a time in the future is rejected. If the chore's require_approval is " +
@@ -713,6 +785,7 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
     },
     {
       name: "skip_chore",
+      annotations: DESTRUCTIVE,
       description:
         "Skip a recurring chore's current occurrence, advancing it to its next due date without " +
         "recording it as completed.",
@@ -723,6 +796,7 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
     },
     {
       name: "undo_chore",
+      annotations: ADDITIVE,
       description:
         "Undo the most recent completion of a chore. Expect this to fail: on the Donetick version this " +
         "server was verified against, the endpoint answers \"no recent action found\" immediately after " +
@@ -731,12 +805,20 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
         "never a name: a just-completed one-off chore drops out of " +
         "the active list this server searches by name. Use the id complete_chore returned.",
       inputSchema: {
-        chore_id: z.number().int().describe("The id complete_chore returned."),
+        chore_id: z
+          .number()
+          .int()
+          .describe(
+            "The id complete_chore returned. This tool does not take a name, and unlike the other " +
+              "id-only tools you cannot fall back to list_chores: a just-completed non-recurring " +
+              "chore has isActive false and is absent from the list this server searches by name.",
+          ),
       },
       handler: guard(async (args) => ok(await undoChore(args as unknown as UndoInput, writeCtx))),
     },
     {
       name: "approve_chore",
+      annotations: ADDITIVE,
       description:
         "Approve a chore completion that is waiting on sign-off, for a chore whose require_approval is " +
         "set (status pending_approval). Requires an admin or manager role in the circle.",
@@ -747,6 +829,7 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
     },
     {
       name: "reject_chore",
+      annotations: ADDITIVE,
       description:
         "Reject a chore completion that is waiting on sign-off, for a chore whose require_approval is " +
         "set (status pending_approval). Requires an admin or manager role in the circle.",
@@ -757,6 +840,7 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
     },
     {
       name: "nudge_chore",
+      annotations: ADDITIVE,
       description:
         "Send a reminder nudge for a chore to its assignee. Needs another member in the circle: Donetick " +
         "refuses to let you nudge yourself. The nudge reaches registered mobile devices only, not " +
@@ -770,6 +854,7 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
     },
     {
       name: "set_subtask_completed",
+      annotations: IDEMPOTENT,
       description:
         "Check or uncheck one item on a chore's checklist, matched by name. Use get_chore first to see " +
         "the current subtask names and their state. Subtask completion resets at the start of each cycle " +

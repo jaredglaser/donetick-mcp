@@ -131,6 +131,22 @@ describe("parseDueDate, additional coverage", () => {
     expect(() => parseDueDate("   ", now, NY)).toThrow(/Could not parse/);
   });
 
+  test("a relative offset past ten years is refused with a bound, not a RangeError", () => {
+    // The regex accepts any run of digits. Past four digits of year toISOString
+    // switches to the extended +010240-.. form, which Go's RFC3339 binding rejects
+    // with an opaque 400; further out Temporal throws a RangeError that would reach
+    // the caller instead of the format help.
+    expect(() => parseDueDate("in 3000000 days", now, NY)).toThrow(/too far ahead/);
+    expect(() => parseDueDate("in 99999999 days", now, NY)).toThrow(/too far ahead/);
+    expect(() => parseDueDate("in 3651 days", now, NY)).toThrow(/too far ahead/);
+  });
+
+  test("the bound is inclusive, and weeks are converted before it is applied", () => {
+    expect(parseDueDate("in 3650 days", now, NY)).toBeInstanceOf(Date);
+    expect(parseDueDate("in 521 weeks", now, NY)).toBeInstanceOf(Date); // 3647 days
+    expect(() => parseDueDate("in 522 weeks", now, NY)).toThrow(/too far ahead/);
+  });
+
   test("in 1 day is singular and matches in 1 days worth of offset", () => {
     expect(parseDueDate("in 1 day", now, NY)!.toISOString()).toBe(
       parseDueDate("tomorrow", now, NY)!.toISOString(),

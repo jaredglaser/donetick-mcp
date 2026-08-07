@@ -118,6 +118,12 @@ export function listChores(args: ListArgs, ctx: ListContext): ListResult {
 
   if (args.search !== undefined) {
     const wanted = normalizeName(args.search);
+    // A blank search matches every chore, since "x".includes("") is true, so it reads
+    // as an unfiltered list rather than as the no-op it is. resolveOne rejects a blank
+    // query for the same reason; the two used to disagree.
+    if (wanted.length === 0) {
+      throw new Error("search cannot be blank. Omit it to list without a name filter.");
+    }
     rows = rows.filter((chore) => normalizeName(chore.name).includes(wanted));
   }
 

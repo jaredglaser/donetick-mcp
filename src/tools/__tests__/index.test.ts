@@ -22,6 +22,57 @@ const deps = {
   now: () => new Date("2026-06-15T12:00:00Z"),
 };
 
+describe("tool annotations", () => {
+  const tools = buildToolDefinitions(deps);
+
+  // A client uses these to decide what it may auto-approve and what it must warn
+  // about. On a client that declares no elicitation capability the confirmation
+  // prompt cannot be shown at all, which leaves destructiveHint as the only guard
+  // left on delete_chore.
+  const READ_TOOLS = ["list_chores", "get_chore", "list_activity", "list_members", "list_projects"];
+
+  test("every tool carries annotations", () => {
+    const missing = tools.filter((t) => t.annotations === undefined).map((t) => t.name);
+    expect(missing).toEqual([]);
+  });
+
+  test("exactly the read tools are marked read-only", () => {
+    const readOnly = tools.filter((t) => t.annotations.readOnlyHint === true).map((t) => t.name);
+    expect(readOnly.sort()).toEqual([...READ_TOOLS].sort());
+  });
+
+  test("no tool is both read-only and destructive", () => {
+    const both = tools
+      .filter((t) => t.annotations.readOnlyHint === true && t.annotations.destructiveHint === true)
+      .map((t) => t.name);
+    expect(both).toEqual([]);
+  });
+
+  test("delete_chore is marked destructive, since it is the one with no way back", () => {
+    expect(tools.find((t) => t.name === "delete_chore")!.annotations.destructiveHint).toBe(true);
+  });
+
+  test("complete_chore is destructive, because undo does not work on an instance behind UTC", () => {
+    expect(tools.find((t) => t.name === "complete_chore")!.annotations.destructiveHint).toBe(true);
+  });
+
+  test("edit_chore is destructive, since Donetick has no partial update", () => {
+    expect(tools.find((t) => t.name === "edit_chore")!.annotations.destructiveHint).toBe(true);
+  });
+
+  test("every tool is closed-world, since they all talk to one known instance", () => {
+    expect(tools.every((t) => t.annotations.openWorldHint === false)).toBe(true);
+  });
+
+  test("no read tool is marked destructive or idempotent", () => {
+    for (const name of READ_TOOLS) {
+      const a = tools.find((t) => t.name === name)!.annotations;
+      expect(a.destructiveHint).toBeUndefined();
+      expect(a.idempotentHint).toBeUndefined();
+    }
+  });
+});
+
 describe("buildToolDefinitions", () => {
   test("registers the plan 1 read tools", () => {
     const names = buildToolDefinitions(deps).map((tool) => tool.name);
@@ -94,6 +145,7 @@ describe("get_chore merging", () => {
       status: 0,
       frequencyType: "interval",
       frequency: 3,
+      frequencyMetadata: { unit: "days" },
       requireApproval: true,
       labelsV2: [{ id: 1, name: "kitchen" }],
       createdBy: 1,

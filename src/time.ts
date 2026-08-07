@@ -142,7 +142,11 @@ export function humanizeDueIn(dueDate: Date | null, now: Date): string {
     const unit = hours === 1 ? "hour" : "hours";
     return overdue ? `${hours} ${unit} overdue` : `in ${hours} ${unit}`;
   }
-  const minutes = Math.max(1, Math.floor(abs / 60_000));
+  const minutes = Math.floor(abs / 60_000);
+  // Under a minute is "now", not "in 1 minute". Rounding up read as a deadline not
+  // yet reached for something already due, and as one minute of grace for something
+  // already overdue.
+  if (minutes === 0) return "now";
   const unit = minutes === 1 ? "minute" : "minutes";
   return overdue ? `${minutes} ${unit} overdue` : `in ${minutes} ${unit}`;
 }

@@ -47,7 +47,11 @@ async function main(): Promise<void> {
     for (const tool of tools) {
       server.registerTool(
         tool.name,
-        { description: tool.description, inputSchema: z.object(tool.inputSchema) },
+        {
+          description: tool.description,
+          inputSchema: z.object(tool.inputSchema),
+          annotations: tool.annotations,
+        },
         async (args: Record<string, unknown>, ctx: ServerContext) => {
           // Re-checked rather than remembered, so a Donetick that came up after this
           // server did serves the call instead of inheriting the startup verdict.

@@ -162,18 +162,42 @@ describe("summarizeFrequency", () => {
 });
 
 describe("live-observed edge cases", () => {
-  test("treats a null interval unit as the default rather than printing 'null'", () => {
+  // These two used to assert the friendly reading, "every 5 days" and "on selected
+  // days". Measured against a live v0.1.76 container: an interval created with the
+  // unit omitted stores unit null, and completing it dereferences a nil pointer in
+  // scheduleNextDueDate. The router has no Recovery middleware, so the connection is
+  // dropped and the container logs "nil pointer dereference". Describing that chore
+  // as an ordinary five-day interval told the caller it was fine while every
+  // completion killed the request and every edit was refused by
+  // assertSchedulableFrequency.
+  test("an interval with a null unit reads as broken, because completing it crashes the request", () => {
     expect(
       summarizeFrequency(
         chore({ frequencyType: "interval", frequency: 5, frequencyMetadata: { unit: null } }),
       ),
+    ).toBe("broken: an interval with no unit");
+  });
+
+  test("days_of_the_week with null days reads as broken, since the scheduler refuses it", () => {
+    expect(
+      summarizeFrequency(chore({ frequencyType: "days_of_the_week", frequencyMetadata: { days: null } })),
+    ).toBe("broken: days_of_the_week with no days");
+  });
+
+  test("a well-formed interval is still described plainly", () => {
+    expect(
+      summarizeFrequency(
+        chore({ frequencyType: "interval", frequency: 5, frequencyMetadata: { unit: "days" } }),
+      ),
     ).toBe("every 5 days");
   });
 
-  test("treats null days on days_of_the_week as no selection rather than throwing", () => {
+  test("day_of_the_month with a day of 0 reads as broken, since the scheduler takes 1 to 31", () => {
     expect(
-      summarizeFrequency(chore({ frequencyType: "days_of_the_week", frequencyMetadata: { days: null } })),
-    ).toBe("on selected days");
+      summarizeFrequency(
+        chore({ frequencyType: "day_of_the_month", frequency: 0, frequencyMetadata: { months: ["october"] } }),
+      ),
+    ).toBe("broken: day_of_the_month with a day of 0");
   });
 
   test("treats an empty-string completedAt as not done", () => {

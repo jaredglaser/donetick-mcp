@@ -20,6 +20,9 @@ const BARE_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const RELATIVE_RE = /^in (\d+) (day|days|week|weeks)$/;
 const WEEKDAY_RE = /^(?:(next|this) )?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)$/;
 
+/** Ten years, matching the cap list_chores puts on its own day window. */
+const MAX_RELATIVE_DAYS = 3650;
+
 /**
  * A bare date or relative phrase carries no time of day, so one is chosen: 09:00 in
  * the target zone. Midnight would make "due tomorrow" read as "in 14 hours" at 10am,
@@ -56,6 +59,15 @@ export function parseDueDate(input: string | null, now: Date, tz: string): Date 
   if (relative) {
     const count = Number(relative[1]);
     const days = relative[2]!.startsWith("week") ? count * 7 : count;
+    // Bounded, because the regex accepts any run of digits. Past four digits of year
+    // toISOString switches to the extended form (+010240-04-26...), which Go's
+    // RFC3339 binding rejects with an opaque 400, and far enough out Temporal throws
+    // a RangeError that would surface instead of the format help.
+    if (days > MAX_RELATIVE_DAYS) {
+      throw new Error(
+        `"${trimmed}" is too far ahead. Use at most ${MAX_RELATIVE_DAYS} days, or pass an explicit date.`,
+      );
+    }
     return nineAmAtOffset(now, days, tz);
   }
 
