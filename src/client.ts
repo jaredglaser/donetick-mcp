@@ -145,9 +145,15 @@ export class DonetickClient {
       const parsed = JSON.parse(text);
       return unwrapRes ? unwrap(parsed) : parsed;
     } catch {
+      // On a read the wrong-service reading is the useful one. On a write it is
+      // actively misleading: the URL is fine, something between here and Donetick
+      // mangled the response, and the write may well have applied, so this must not
+      // read as a clean failure.
       throw new DonetickError(
-        `${this.baseUrl}${path} returned a 200 that is not JSON. DONETICK_URL may be pointing at the wrong service.`,
-        { status: response.status },
+        method === "GET"
+          ? `${this.baseUrl}${path} returned a 200 that is not JSON. DONETICK_URL may be pointing at the wrong service.`
+          : `${this.baseUrl}${path} answered 200 with a body that is not JSON, so the result cannot be read. Something between this server and Donetick is rewriting responses.`,
+        { status: response.status, indeterminate: method !== "GET" },
       );
     }
   }

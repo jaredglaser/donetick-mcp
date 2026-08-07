@@ -336,7 +336,7 @@ export async function approveChore(input: ApprovalInput, ctx: ToolContext): Prom
     id: chore.id,
     name: chore.name,
     decision: "approved",
-    message: `The pending completion of "${chore.name}" was approved.`,
+    message: `The pending completion of "${chore.name}" was approved.${inactiveNote(chore)}`,
   };
 }
 
@@ -347,7 +347,7 @@ export async function rejectChore(input: ApprovalInput, ctx: ToolContext): Promi
     id: chore.id,
     name: chore.name,
     decision: "rejected",
-    message: `The pending completion of "${chore.name}" was rejected. The chore is not marked done.`,
+    message: `The pending completion of "${chore.name}" was rejected. The chore is not marked done.${inactiveNote(chore)}`,
   };
 }
 

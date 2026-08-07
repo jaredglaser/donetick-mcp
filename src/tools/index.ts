@@ -179,6 +179,12 @@ const frequencySchema = z.object({
         'days: ["saturday"], week_pattern: "week_of_month", occurrences: [1], and -1 means the last. ' +
         "day_of_the_month is a calendar day number instead, and needs day_of_month plus months. " +
         "trigger recurrence is not supported here; use the Donetick web UI for it. " +
+        "A second caveat, for monthly and a months-unit interval specifically: Donetick adds a " +
+        "month with Go's date arithmetic, which normalises September 31 to October 1, so a chore " +
+        "due the 29th, 30th or 31st rolls forward into the next month on its first completion and " +
+        "stays there. A chore due the 31st of August becomes a 1st-of-the-month chore and skips " +
+        "September entirely. day_of_the_month handles month lengths properly and is the right " +
+        "choice for a fixed calendar day. " +
         "One caveat that applies to all of them except days_of_the_week and yearly: Donetick " +
         "reschedules by adding elapsed time rather than by calendar, so a recurring chore drifts an " +
         "hour at each daylight-saving transition. A 9am daily chore becomes an 8am one from the " +

@@ -54,8 +54,15 @@ function extractCreatedId(response: unknown): { id: number; warnings?: unknown }
     const envelope = response as { res: unknown; warnings?: unknown };
     if (isValidCreatedId(envelope.res)) return { id: envelope.res, warnings: envelope.warnings };
   }
+  // The 200 means Donetick accepted the create, so the chore almost certainly exists
+  // even though its id is unreadable here. Saying only "unexpected response" invites
+  // a retry that makes a second one. The body is truncated because it is untrusted
+  // and unbounded.
+  const shown = JSON.stringify(response) ?? String(response);
   throw new Error(
-    `create_chore expected POST ${endpoints.createChore()} to return the new chore's numeric id, got ${JSON.stringify(response)}.`,
+    `create_chore expected POST ${endpoints.createChore()} to return the new chore's numeric id, got ${
+      shown.length > 200 ? `${shown.slice(0, 200)}...` : shown
+    }. Donetick answered 200, so the chore was probably created despite this; check list_chores before trying again, or a retry will make a second one.`,
   );
 }
 

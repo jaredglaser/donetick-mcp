@@ -1,4 +1,5 @@
 import { parseDueDate } from "@/dates";
+import { dueDateOf } from "@/time";
 import { buildFrequency, type FrequencyInput } from "@/frequency";
 import { findMember, normalizeName } from "@/resolve";
 import { PRIORITY_VALUE, type Member, type Project, type RawChore, type RawSubTask } from "@/types";
@@ -585,9 +586,11 @@ export function mergeEditRequest(existing: RawChore, input: EditInput, ctx: Buil
   const parsedDueDate =
     input.due_date !== undefined && input.due_date !== null
       ? parseDueDate(input.due_date, ctx.now, ctx.timezone)
-      : existing.nextDueDate === null
-        ? null
-        : new Date(existing.nextDueDate);
+      // dueDateOf rather than a bare new Date: it exists because this same parse was
+      // written unchecked three times, and this was the fourth site, the only one
+      // still skipping it. An unparseable stored date reached toISOString below and
+      // failed the whole edit with a message that was only the words "Invalid Date".
+      : dueDateOf(existing.nextDueDate);
   const dueDate = parsedDueDate;
   // Against undefined, not folded into a ?? chain, for the reason points is: under
   // ?? an explicit null is nullish and falls through to the stored value, so the

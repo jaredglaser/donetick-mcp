@@ -219,3 +219,36 @@ describe("indeterminate marks writes whose outcome is unknown", () => {
     }
   });
 });
+
+describe("a 200 whose body is not JSON", () => {
+  // The wrong-service reading is useful on a read and misleading on a write: the URL
+  // is fine, something in between mangled the response, and the write may have
+  // applied. Marked indeterminate so fail() adds its caveat rather than letting the
+  // caller read it as a clean failure and retry.
+  test("a read is told the URL may be wrong", async () => {
+    const client = new DonetickClient({
+      baseUrl: "https://donetick.test",
+      token: "t",
+      timeoutMs: 1000,
+      fetchFn: async () => new Response("<html>502</html>", { status: 200 }),
+    });
+
+    const error = await client.get("/api/v1/chores/").catch((e: DonetickError) => e);
+    expect(error.message).toMatch(/wrong service/);
+    expect(error.indeterminate).toBe(false);
+  });
+
+  test("a write is told the response was unreadable, and is indeterminate", async () => {
+    const client = new DonetickClient({
+      baseUrl: "https://donetick.test",
+      token: "t",
+      timeoutMs: 1000,
+      fetchFn: async () => new Response("<html>502</html>", { status: 200 }),
+    });
+
+    const error = await client.post("/api/v1/chores/", {}).catch((e: DonetickError) => e);
+    expect(error.message).not.toMatch(/wrong service/);
+    expect(error.message).toMatch(/rewriting responses/);
+    expect(error.indeterminate).toBe(true);
+  });
+});
