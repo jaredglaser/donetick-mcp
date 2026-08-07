@@ -1010,13 +1010,33 @@ async function main(): Promise<void> {
       },
     );
 
-    await check("undo, recorded as it behaves rather than as the tool describes it", async () => {
-      // This check used to assert that undo fails after a skip, implying it succeeds
-      // after a completion. Measured 2026-08-06: it fails after both, on this
-      // instance, immediately, well inside the five-minute window. Donetick's own
-      // handler accepts a skip, so the refusal is not skip-specific and undo_chore's
-      // promise is unreliable here. Recorded as data so a future change is visible
-      // rather than asserted as a contract this server does not control.
+    await check("undo fails whenever the server stores timestamps behind UTC, and only then", async () => {
+      // Twice rewritten, because the first two readings blamed the wrong thing. It
+      // first asserted undo fails after a skip and so succeeds after a completion;
+      // it fails after both. It then recorded that as an unexplained anomaly about
+      // the five-minute window. The window is not involved: GetUserLastChoreAction
+      // filters `created_at > cutoff` with the cutoff built in UTC, while the
+      // pure-Go SQLite driver wrote created_at as text in the server's own offset,
+      // and SQLite compares them as strings. Behind UTC the stored value always
+      // sorts earlier, so nothing is ever recent enough, one second after the act
+      // or an hour.
+      //
+      // That makes the sign of the offset the predictor, which is what this asserts.
+      // A plain warn could not tell an upstream fix from a server that merely moved
+      // to UTC.
+      const offsetProbeId = await createScratchChore(
+        baseChoreBody(scoped("undo-offset"), { frequencyType: "daily" }),
+      );
+      await client.post(endpoints.completeChore(offsetProbeId), {});
+      const historyRow = ((await client.get(endpoints.choreHistory(1, true))) as Array<{
+        choreId: number;
+        createdAt: string;
+      }>).find((row) => row.choreId === offsetProbeId);
+      if (historyRow === undefined) {
+        throw new Error(`no history row for the scratch chore ${offsetProbeId} it just completed`);
+      }
+      const behindUtc = /-\d{2}:\d{2}$/.test(historyRow.createdAt);
+
       const outcomes: string[] = [];
       for (const [label, act] of [
         ["skip", (id: number) => client.post(endpoints.skipChore(id), {})],
@@ -1034,14 +1054,25 @@ async function main(): Promise<void> {
         }
       }
 
-      const undoable = outcomes.filter((o) => o.endsWith("undone"));
-      if (undoable.length === 0) {
-        return {
-          status: "warn",
-          detail: `undo refused for both actions (${outcomes.join(", ")}), so undo_chore cannot do what it advertises on this instance`,
-        };
+      const undoable = outcomes.filter((o) => o.endsWith("undone")).length;
+      const stored = historyRow.createdAt;
+
+      if (behindUtc && undoable > 0) {
+        throw new Error(
+          `undo succeeded (${outcomes.join(", ")}) even though created_at is stored behind UTC (${stored}). The string-comparison diagnosis in undoChore's explainUndoFailure is wrong or Donetick has been fixed; re-read GetUserLastChoreAction before trusting that error message.`,
+        );
       }
-      return { detail: outcomes.join(", ") };
+      if (!behindUtc && undoable < outcomes.length) {
+        throw new Error(
+          `undo refused (${outcomes.join(", ")}) but created_at is not behind UTC (${stored}), so the offset cannot be the cause. explainUndoFailure now tells the caller something untrue.`,
+        );
+      }
+
+      return {
+        detail: behindUtc
+          ? `refused as predicted (${outcomes.join(", ")}); created_at ${stored} sorts before a UTC cutoff`
+          : `undo works, and created_at ${stored} is not behind UTC`,
+      };
     });
 
     await check("PUT /:id/archive flips isActive to false and back, and moves the chore between the two lists", async () => {

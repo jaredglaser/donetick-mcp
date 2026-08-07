@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { utcOffsetFor } from "@/time";
 import { buildFrequency, FREQUENCY_TYPES } from "@/frequency";
 import type { FrequencyInput, FrequencyType, WeekPattern } from "@/frequency";
 
@@ -340,7 +341,10 @@ describe("week_pattern needs occurrences Donetick can match", () => {
         tz,
         now,
       ),
-    ).toThrow(/occurrences/);
+      // Matched on the sentence, not the word: deleting the guard leaves a TypeError
+      // reading "undefined is not an object (evaluating 'input.occurrences.filter')",
+      // which contains "occurrences" and satisfied the looser pattern.
+    ).toThrow(/needs occurrences/);
   });
 
   test("an occurrence Donetick can never match is refused", () => {
@@ -498,5 +502,30 @@ describe("interval's unit default, which two places have to agree about", () => 
     const out = buildFrequency({ type: "interval", every: 3, time: "09:00" }, tz, now);
     expect(out.frequencyMetadata.unit).toBe("days");
     expect(out.frequencyMetadata.time).toBe("1970-01-01T09:00:00-04:00");
+  });
+});
+
+describe("empty arrays reach the same broken shapes as omitted ones", () => {
+  test("months: [] is refused, like omitting months", () => {
+    // A JSON caller produces [] routinely, and Donetick answers 500 on every
+    // completion for a day_of_the_month chore with no months either way.
+    expect(() =>
+      buildFrequency({ type: "day_of_the_month", day_of_month: 15, months: [] }, tz, now),
+    ).toThrow(/needs "months"/);
+  });
+});
+
+describe("utcOffsetFor's format guard", () => {
+  test("an offset carrying seconds is truncated to what RFC3339 allows", () => {
+    // Zones carried local mean times with sub-minute offsets before standardisation,
+    // and Go's time.Parse refuses -00:44:30. Nothing exercised the branch, because
+    // every test instant lands in the modern era where the regex passes.
+    expect(utcOffsetFor("Africa/Monrovia", new Date("1900-01-01T00:00:00Z"))).toMatch(
+      /^[+-]\d{2}:\d{2}$/,
+    );
+  });
+
+  test("an ordinary offset is passed through whole", () => {
+    expect(utcOffsetFor("Asia/Kolkata", new Date("2026-08-06T00:00:00Z"))).toBe("+05:30");
   });
 });

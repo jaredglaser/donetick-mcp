@@ -191,10 +191,12 @@ export interface UndoOutcome {
 }
 
 /**
- * Takes chore_id only. Undo has a five-minute window on the calling account's own
- * action, and a completed non-recurring chore has isActive: false and drops out of
- * the active list name resolution searches, so name lookup could never find it.
- * complete_chore returns the id for exactly this reason.
+ * Takes chore_id only. A completed non-recurring chore has isActive: false and drops
+ * out of the active list name resolution searches, so name lookup could never find
+ * it. complete_chore returns the id for exactly this reason.
+ *
+ * Donetick documents a five-minute window on the calling account's own action, but
+ * see explainUndoFailure: on an instance behind UTC the window never opens at all.
  */
 export async function undoChore(input: UndoInput, ctx: ToolContext): Promise<UndoOutcome> {
   if (typeof input.chore_id !== "number") {
@@ -208,8 +210,29 @@ export async function undoChore(input: UndoInput, ctx: ToolContext): Promise<Und
     );
   }
 
-  await ctx.service.write(() => ctx.service.client.post(endpoints.undoChore(input.chore_id!), {}));
+  try {
+    await ctx.service.write(() => ctx.service.client.post(endpoints.undoChore(input.chore_id!), {}));
+  } catch (error) {
+    throw new Error(explainUndoFailure(error));
+  }
   return { id: input.chore_id, message: "The most recent completion was undone." };
+}
+
+/**
+ * Donetick blames the five-minute window for a failure that has nothing to do with
+ * elapsed time, so retrying sooner is the one thing that cannot help.
+ *
+ * Its lookup is `created_at > cutoff` where cutoff is built in UTC but created_at was
+ * written by the pure-Go SQLite driver as text carrying the server's own offset.
+ * SQLite compares those as strings, so on a server behind UTC the stored value always
+ * sorts earlier and the row is never found, a second after the completion or an hour.
+ * Verified against a completion one second old on a UTC-4 instance.
+ */
+function explainUndoFailure(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (!message.includes("No recent action found")) return message;
+
+  return `${message}\n\nThe window is not the real cause, so retrying will not help. Donetick looks the completion up with a UTC cutoff against a timestamp its SQLite driver stored in the server's local offset, and compares the two as text, so on a server behind UTC no completion is ever recent enough. Reverse it by completing or rescheduling the chore back to where it was.`;
 }
 
 export interface ApprovalInput {

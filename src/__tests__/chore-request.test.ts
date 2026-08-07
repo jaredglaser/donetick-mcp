@@ -169,9 +169,13 @@ describe("buildCreateRequest", () => {
       );
       expect(body.notification).toBe(true);
       expect(body.notificationMetadata?.dueDate).toBe(true);
+      // Negative: Donetick adds the value to the due date, so a positive offset is
+      // its Overdue class. Every reminder this server built used to fire after the
+      // due date while the schema promised before, and an already-overdue chore got
+      // nothing at all because the planner drops templates whose time has passed.
       expect(body.notificationMetadata?.templates).toEqual([
-        { value: 1, unit: "h" },
-        { value: 30, unit: "m" },
+        { value: -1, unit: "h" },
+        { value: -30, unit: "m" },
       ]);
     });
 
@@ -197,16 +201,16 @@ describe("buildCreateRequest", () => {
           ctx(),
         );
         expect(body.notificationMetadata?.templates).toEqual([
-          { value: 90, unit: "m" },
-          { value: 2, unit: "d" },
+          { value: -90, unit: "m" },
+          { value: -2, unit: "d" },
         ]);
       });
 
       test("is case-insensitive", () => {
         const body = buildCreateRequest({ name: "Trash", notify: { reminders: ["1H", "2D"] } }, ctx());
         expect(body.notificationMetadata?.templates).toEqual([
-          { value: 1, unit: "h" },
-          { value: 2, unit: "d" },
+          { value: -1, unit: "h" },
+          { value: -2, unit: "d" },
         ]);
       });
 
@@ -225,7 +229,10 @@ const existing: RawChore = {
   description: "curb by 7am",
   nextDueDate: "2026-06-18T13:00:00Z",
   assignedTo: 1,
-  assignees: [{ userId: 1 }],
+  // Two assignees, and assignedTo is deliberately not the first. With one, "keep the
+  // current assignee" and "take the first of the list" produce the same number, so
+  // the preservation logic could not be told apart from a rewrite.
+  assignees: [{ userId: 2 }, { userId: 1 }],
   assignStrategy: "keep_last_assigned",
   labelsV2: [{ id: 3, name: "outside" }],
   priority: 2,
@@ -289,8 +296,18 @@ expect(body.labelsV2).toEqual([{ id: 3 }]);
   });
 
   test("add_assignees unions with existing assignees rather than replacing", () => {
+    // Sam is already on this chore, so the union is the existing pair in their
+    // stored order rather than a new entry.
     const body = mergeEditRequest(existing, { add_assignees: ["Sam"] }, ctx());
-    expect(body.assignees).toEqual([{ userId: 1 }, { userId: 2 }]);
+    expect(body.assignees).toEqual([{ userId: 2 }, { userId: 1 }]);
+  });
+
+  test("add_assignees appends someone genuinely new", () => {
+    const soloRow = { ...existing, assignees: [{ userId: 1 }], assignedTo: 1 } as unknown as RawChore;
+    expect(mergeEditRequest(soloRow, { add_assignees: ["Sam"] }, ctx()).assignees).toEqual([
+      { userId: 1 },
+      { userId: 2 },
+    ]);
   });
 
   test("assignees replaces rather than unioning", () => {

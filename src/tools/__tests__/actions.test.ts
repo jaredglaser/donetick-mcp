@@ -327,6 +327,34 @@ describe("undoChore", () => {
     expect(fake.calls.some((c) => c.method === "GET")).toBe(false);
   });
 
+  test("contradicts Donetick's window excuse, which sends the caller after the wrong cause", async () => {
+    const fake = fakeService({
+      post: () => {
+        throw new Error(
+          "Donetick rejected the request: No recent action found to undo (actions can only be undone within 5 minutes)",
+        );
+      },
+    });
+
+    // Verified live against a completion one second old: the window is not what
+    // failed, so "wait less" is the one remedy guaranteed not to work.
+    const error = await undoChore({ chore_id: 7 }, ctxFor(fake.service)).catch((e: Error) => e);
+    expect(error.message).toMatch(/retrying will not help/);
+    expect(error.message).toMatch(/local offset/);
+  });
+
+  test("passes an unrelated failure through untouched", async () => {
+    const fake = fakeService({
+      post: () => {
+        throw new Error("Donetick rejected the request: chore not found");
+      },
+    });
+
+    await expect(undoChore({ chore_id: 7 }, ctxFor(fake.service))).rejects.toThrow(
+      /^Donetick rejected the request: chore not found$/,
+    );
+  });
+
   test("invalidates the cache on success and on failure", async () => {
     const ok = fakeService();
     await undoChore({ chore_id: 7 }, ctxFor(ok.service));

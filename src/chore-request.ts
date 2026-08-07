@@ -189,7 +189,12 @@ function buildNotification(
     if (!parsed) {
       throw new Error(`"${reminder}" is not a reminder offset. Use forms like "30m", "1h", "2d".`);
     }
-    return { value: Number(parsed[1]), unit: parsed[2]! };
+    // Negative, because Donetick adds the value to the due date rather than
+    // subtracting it: value < 0 is its PreDue class, 0 is Due, and > 0 is Overdue.
+    // Positive offsets made every reminder this server built an overdue nag, and the
+    // schema promised the opposite. A chore already overdue gets nothing at all,
+    // since the planner drops any template whose computed time has passed.
+    return { value: -Number(parsed[1]), unit: parsed[2]! };
   });
 
   if (templates.length > 5) {

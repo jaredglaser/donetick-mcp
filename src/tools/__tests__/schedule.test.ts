@@ -71,7 +71,10 @@ const listRow: RawChore = {
   description: null,
   nextDueDate: "2026-08-10T12:00:00Z",
   assignedTo: 1,
-  assignees: [{ userId: 1 }],
+  // Disagrees with assignedTo on purpose: with both naming the same person, reading
+  // the array and reading the scalar produce identical answers, so the branch that
+  // picks between reassign_chore's fast path and its full edit was untestable.
+  assignees: [{ userId: 2 }],
   assignStrategy: "keep_last_assigned",
   labelsV2: [{ id: 10, name: "Kitchen" }],
   priority: 2,
@@ -182,22 +185,26 @@ describe("rescheduleChore", () => {
 
 describe("reassignChore", () => {
   test("uses the fast endpoint when the person is already an assignee, sending userId and updatedAt", async () => {
+    // Sam is in assignees; Jared is only assignedTo. The fixture disagrees on purpose,
+    // so this proves the fast path reads the array rather than the scalar.
     const fake = fakeService({ chores: [listRow] });
 
-    await reassignChore({ chore_id: 5, assignee: "Jared Glaser" }, ctxFor(fake.service));
+    await reassignChore({ chore_id: 5, assignee: "Sam" }, ctxFor(fake.service));
 
     expect(fake.calls).toContain("PUT /api/v1/chores/5/assignee");
     const sent = fake.bodies[0]!.body as Record<string, unknown>;
-    expect(sent.assignee).toBe(1);
+    expect(sent.assignee).toBe(2);
     // This endpoint stores the token it is given, so it must never be a clock
     // reading: a client running ahead would stamp the row with a future version.
     expect(sent.updatedAt).toBe(STALE_UPDATED_AT);
   });
 
   test("falls through to a full edit when the person is not on the chore", async () => {
+    // Jared is assignedTo but not in assignees, so a lookup that read only the scalar
+    // would wrongly take the fast path here.
     const fake = fakeService({ chores: [listRow] });
 
-    await reassignChore({ chore_id: 5, assignee: "Sam" }, ctxFor(fake.service));
+    await reassignChore({ chore_id: 5, assignee: "Jared Glaser" }, ctxFor(fake.service));
 
     expect(fake.calls).toContain("PUT /api/v1/chores/");
     expect(fake.calls).not.toContain("PUT /api/v1/chores/5/assignee");
@@ -206,17 +213,17 @@ describe("reassignChore", () => {
   test("the full-edit body's assignees union old and new, and assignedTo is the new person", async () => {
     const fake = fakeService({ chores: [listRow] });
 
-    await reassignChore({ chore_id: 5, assignee: "Sam" }, ctxFor(fake.service));
+    await reassignChore({ chore_id: 5, assignee: "Jared Glaser" }, ctxFor(fake.service));
 
     const sent = fake.bodies[0]!.body as { assignees: Array<{ userId: number }>; assignedTo: number };
     expect(sent.assignees.map((a) => a.userId).sort()).toEqual([1, 2]);
-    expect(sent.assignedTo).toBe(2);
+    expect(sent.assignedTo).toBe(1);
   });
 
   test("a full edit preserves frequencyType, points, and requireApproval", async () => {
     const fake = fakeService({ chores: [listRow] });
 
-    await reassignChore({ chore_id: 5, assignee: "Sam" }, ctxFor(fake.service));
+    await reassignChore({ chore_id: 5, assignee: "Jared Glaser" }, ctxFor(fake.service));
 
     const sent = fake.bodies[0]!.body as Record<string, unknown>;
     expect(sent.frequencyType).toBe("daily");
