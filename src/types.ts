@@ -96,16 +96,20 @@ export const CHORE_STATUS: Record<number, string> = {
 /**
  * Chore history rows, which are not the same scale as CHORE_STATUS. Measured on
  * v0.1.76: completing wrote 1, skipping 2, a completion awaiting sign-off 3, and a
- * plain rename wrote 6. Donetick records a reschedule on every edit that carries a
- * nextDueDate, and it compares the old and new dates by pointer, so the row appears
- * even when the date is unchanged.
+ * plain rename wrote 6. 0 is written when someone starts a chore timer, and 4 by a
+ * rejection. 5 exists in Donetick's enum as "missed" and nothing writes it, so it is
+ * left out rather than advertised.
+ *
+ * Donetick records a reschedule on every edit that carries a nextDueDate, comparing
+ * the old and new dates by pointer, so the row appears even when the date is
+ * unchanged.
  */
 export const CHORE_HISTORY_STATUS: Record<number, string> = {
+  0: "started",
   1: "completed",
   2: "skipped",
   3: "pending_approval",
   4: "rejected",
-  5: "missed",
   6: "rescheduled",
 };
 

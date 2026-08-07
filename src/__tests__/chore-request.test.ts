@@ -607,11 +607,18 @@ describe("combinations Donetick cannot complete", () => {
     ).not.toThrow();
   });
 
-  test("a completion window of zero is not a completion window", () => {
-    // 0 passed a null/undefined check and refused a chore that is under no window at
-    // all. It matters more than it looks: if Donetick ever reports an unset window as
-    // 0 rather than null, that check would refuse every edit of every dateless chore.
-    expect(() => buildCreateRequest({ name: "x", completion_window: 0 }, ctx())).not.toThrow();
+  test("a completion window of zero still needs a due date", () => {
+    // Measured: a chore with completionWindow 0 and no due date answers 502 on every
+    // completion, exactly as one with 4 does. Donetick gates the due-date deref on
+    // the pointer being non-nil, not on the value, and 0 is not nullish so it
+    // survives the ?? chain and reaches the wire as a real window.
+    expect(() => buildCreateRequest({ name: "x", completion_window: 0 }, ctx())).toThrow(
+      /completion window/i,
+    );
+  });
+
+  test("no completion window at all is still fine without a due date", () => {
+    expect(() => buildCreateRequest({ name: "x" }, ctx())).not.toThrow();
   });
 });
 
@@ -649,5 +656,129 @@ describe("adding a checklist item without destroying the checklist", () => {
   test("add_subtasks on a chore with no checklist just creates one", () => {
     const body = mergeEditRequest(existing, { add_subtasks: ["First"] }, ctx());
     expect(body.subTasks?.map((t) => t.name)).toContain("First");
+  });
+});
+
+describe("a chore's own timezone survives an edit", () => {
+  // Every merge fixture set frequencyMetadata.timezone to the same string as the
+  // build context, so "read it from the chore" and "read it from the config" were
+  // indistinguishable. Donetick's scheduler honors the chore's own zone, so
+  // clobbering it silently reschedules the chore into the server's zone.
+  test("the chore's zone wins over the server default", () => {
+    const tokyo = {
+      ...existing,
+      frequencyMetadata: { unit: "days", timezone: "Asia/Tokyo" },
+    } as unknown as RawChore;
+
+    expect(mergeEditRequest(tokyo, { name: "Renamed" }, ctx()).frequencyMetadata.timezone).toBe(
+      "Asia/Tokyo",
+    );
+  });
+
+  test("the server default fills in when the chore carries no zone", () => {
+    const zoneless = { ...existing, frequencyMetadata: { unit: "days" } } as unknown as RawChore;
+
+    expect(mergeEditRequest(zoneless, { name: "Renamed" }, ctx()).frequencyMetadata.timezone).toBe(tz);
+  });
+});
+
+describe("a stored subtask order survives an edit", () => {
+  test("non-contiguous orderIds are carried, not renumbered", () => {
+    // Every fixture had orderId equal to its array index, so "carry the stored
+    // value" and "use the position" produced identical output. Deleting a subtask in
+    // the web UI leaves gaps, and renumbering reorders the user's checklist.
+    const gapped = {
+      ...existing,
+      subTasks: [
+        { id: 1, choreId: 7, name: "first", completedAt: null, orderId: 3 },
+        { id: 2, choreId: 7, name: "second", completedAt: null, orderId: 7 },
+      ],
+    } as unknown as RawChore;
+
+    expect(mergeEditRequest(gapped, { name: "Renamed" }, ctx()).subTasks?.map((t) => t.orderId)).toEqual(
+      [3, 7],
+    );
+  });
+});
+
+describe("the Thing guard's live half", () => {
+  test("a trigger chore is refused even when thingChore is absent from the row", () => {
+    // The thingChore half never fires in production: Donetick's list query does not
+    // preload it, so the field is null on every row this server merges from. The
+    // fixture that set it was testing the dead branch.
+    const trigger = {
+      ...existing,
+      frequencyType: "trigger",
+      thingChore: null,
+    } as unknown as RawChore;
+
+    expect(() => mergeEditRequest(trigger, { name: "Renamed" }, ctx())).toThrow(/Thing/);
+  });
+});
+
+describe("add_subtasks on a chore that genuinely has no checklist", () => {
+  test("creates one rather than throwing", () => {
+    // The test that claimed to cover this used a fixture with two subtasks, so the
+    // empty case was never exercised and a missing null guard would have crashed.
+    const bare = { ...existing, subTasks: [] } as unknown as RawChore;
+
+    expect(mergeEditRequest(bare, { add_subtasks: ["First"] }, ctx()).subTasks).toEqual([
+      { name: "First", orderId: 0, completedAt: null },
+    ]);
+  });
+});
+
+describe("combinations that would crash or silently revert on Donetick's side", () => {
+  test("an assignment never carries no_assignee forward, which would revert on the next completion", () => {
+    // Donetick's next-assignee step maps no_assignee to nil and persists it, so an
+    // assignment that lands and reports success is undone the first time anyone
+    // completes the chore.
+    const unassigned = {
+      ...existing,
+      assignStrategy: "no_assignee",
+      assignees: [],
+      assignedTo: null,
+    } as unknown as RawChore;
+
+    const body = mergeEditRequest(unassigned, { add_assignees: ["Sam"] }, ctx());
+
+    expect(body.assignees).toEqual([{ userId: 2 }]);
+    expect(body.assignStrategy).not.toBe("no_assignee");
+  });
+
+  test("a chore genuinely left with nobody on it keeps no_assignee", () => {
+    const unassigned = {
+      ...existing,
+      assignStrategy: "no_assignee",
+      assignees: [],
+      assignedTo: null,
+    } as unknown as RawChore;
+
+    expect(mergeEditRequest(unassigned, { name: "Renamed" }, ctx()).assignStrategy).toBe(
+      "no_assignee",
+    );
+  });
+
+  test("notification is never carried forward without the metadata it is read against", () => {
+    // Donetick's planner dereferences the metadata whenever notification is true, in
+    // a goroutine whose panic is not recovered by the request middleware. A chore
+    // whose metadata column is null comes back as null, which is the shape that
+    // reaches that deref.
+    const noMetadata = {
+      ...existing,
+      notification: true,
+      notificationMetadata: null,
+    } as unknown as RawChore;
+
+    const body = mergeEditRequest(noMetadata, { name: "Renamed" }, ctx());
+
+    expect(body.notification).toBe(false);
+    expect(body).not.toHaveProperty("notificationMetadata");
+  });
+
+  test("a chore with real metadata keeps both", () => {
+    const body = mergeEditRequest(existing, { name: "Renamed" }, ctx());
+    expect(body.notification).toBe(true);
+    expect(body.notificationMetadata).toBeDefined();
   });
 });

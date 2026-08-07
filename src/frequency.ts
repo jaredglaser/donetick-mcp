@@ -59,11 +59,11 @@ export interface FrequencyInput {
   unit?: FrequencyUnit;
   days?: string[];
   months?: string[];
-  /** The calendar day for day_of_the_month, 1 to 31. Donetick carries it in `frequency`. */
-  day_of_month?: number;
   week_pattern?: WeekPattern;
   occurrences?: number[];
   time?: string;
+  /** The calendar day for day_of_the_month, 1 to 31. Donetick carries it in `frequency`. */
+  day_of_month?: number;
 }
 
 export interface FrequencyMetadata {
@@ -71,8 +71,6 @@ export interface FrequencyMetadata {
   unit?: FrequencyUnit;
   days?: string[];
   months?: string[];
-  /** The calendar day for day_of_the_month, 1 to 31. Donetick carries it in `frequency`. */
-  day_of_month?: number;
   weekPattern?: WeekPattern;
   occurrences?: number[];
   time?: string;
@@ -136,7 +134,42 @@ export function buildFrequency(input: FrequencyInput, timezone: string, now: Dat
         }
         metadata.weekPattern = input.week_pattern;
       }
+      if (input.week_pattern !== undefined && input.week_pattern !== "every_week") {
+        // Measured: week_of_month with no occurrences answers 500 on every
+        // completion. Donetick's scheduler requires at least one, and the chore is
+        // created happily first, so this is the same never-completable shape as
+        // day_of_the_month with no months.
+        if (input.occurrences === undefined || input.occurrences.length === 0) {
+          throw new Error(
+            `week_pattern "${input.week_pattern}" needs occurrences. Donetick cannot schedule ` +
+              "without them and answers 500 on every completion. Pass occurrences: [1] for the " +
+              "first of each period, or [-1] for the last.",
+          );
+        }
+        const OCCURRENCE_LIMIT = input.week_pattern === "week_of_quarter" ? 13 : 5;
+        const bad = input.occurrences.filter(
+          (n) => !Number.isInteger(n) || (n !== -1 && (n < 1 || n > OCCURRENCE_LIMIT)),
+        );
+        if (bad.length > 0) {
+          // Donetick matches an occurrence against the positions that exist in the
+          // period. One that never matches exhausts its search and fails the same way.
+          throw new Error(
+            `${JSON.stringify(bad)} is not a valid occurrence for ${input.week_pattern}. Use -1 for the last, or 1 through ${OCCURRENCE_LIMIT}.`,
+          );
+        }
+      }
       if (input.occurrences !== undefined) {
+        // Measured on v0.1.76: occurrences with no week_pattern is ignored outright.
+        // A chore due Thu 2026-09-10 with occurrences [-1] and no pattern scheduled
+        // Sat Sep 12, the plain next Saturday, not the last of the month. Accepting
+        // it would build a schedule the caller did not ask for and report success.
+        if (input.week_pattern === undefined) {
+          throw new Error(
+            'occurrences needs week_pattern. Donetick ignores it otherwise and falls back to every ' +
+              'matching weekday. For "the first saturday of every month" pass week_pattern: ' +
+              '"week_of_month" with occurrences: [1]; -1 is the last.',
+          );
+        }
         metadata.occurrences = input.occurrences;
       }
       return { frequencyType: "days_of_the_week", frequency: 1, frequencyMetadata: metadata };

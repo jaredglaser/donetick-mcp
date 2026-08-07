@@ -217,17 +217,29 @@ function buildNotification(
  * but would silently strip an existing chore's reminders on every edit that does
  * not mention notify.
  */
+/**
+ * Donetick's notification planner dereferences the metadata whenever notification is
+ * true, in a bare goroutine whose panic would take the process down rather than
+ * being recovered by the request middleware. A chore whose metadata column is null
+ * comes back as notificationMetadata: null, so carrying notification true forward
+ * without it is the shape that reaches that deref.
+ */
 function mergeNotification(
   notify: NotifyInput | undefined,
   existing: RawChore,
 ): Pick<ChoreRequestBody, "notification" | "notificationMetadata"> {
   if (notify !== undefined) return buildNotification(notify);
-  return {
-    notification: existing.notification ?? false,
-    ...(existing.notificationMetadata
-      ? { notificationMetadata: existing.notificationMetadata as ChoreRequestBody["notificationMetadata"] }
-      : {}),
-  };
+  if (existing.notificationMetadata) {
+    return {
+      notification: existing.notification ?? false,
+      notificationMetadata: existing.notificationMetadata as ChoreRequestBody["notificationMetadata"],
+    };
+  }
+  // notification true with no metadata is the combination that reaches the deref, so
+  // it is never sent. Turning notification off is the safe half of the pair: a chore
+  // stored that way already produces nothing, since every notification is generated
+  // from the templates the missing metadata would have carried.
+  return { notification: false };
 }
 
 function buildSubtasks(names: string[]): NonNullable<ChoreRequestBody["subTasks"]> {
@@ -246,10 +258,11 @@ function carriedSubtasks(existing: RawChore): ChoreRequestBody["subTasks"] {
 }
 
 /**
- * Donetick's completion handler dereferences NextDueDate without a nil check when
- * a chore has a completionWindow, and its adaptive scheduler does the same. Either
- * combination with no due date panics the handler, so the chore can be created and
- * then never completed: a 502 on every attempt, permanently. Verified live.
+ * Donetick dereferences NextDueDate without a nil check in two places: the
+ * completion handler when a chore has a completionWindow, and the skip scheduler's
+ * adaptive arm. Either combination with no due date means the chore can be created
+ * and then never completed or skipped, a 502 on every attempt, permanently.
+ * Measured live for the completion-window case, including a window of 0.
  */
 export function requireDueDateFor(
   dueDate: Date | null,
@@ -257,7 +270,11 @@ export function requireDueDateFor(
   completionWindow: number | null,
 ): void {
   if (dueDate !== null) return;
-  if (completionWindow !== null && completionWindow !== undefined && completionWindow > 0) {
+  // Any window at all, including 0. Donetick gates the due-date deref on the pointer
+  // being non-nil rather than on the value, and 0 is not nullish, so it survives the
+  // ?? chain and reaches the wire as a real window. Measured: a chore with
+  // completionWindow 0 and no due date answers 502 on every completion, same as 4.
+  if (completionWindow !== null && completionWindow !== undefined) {
     throw new Error(
       "A chore with a completion window needs a due date: Donetick measures the window against it and cannot complete a chore that has none.",
     );
@@ -291,6 +308,11 @@ export function buildCreateRequest(input: CreateInput, ctx: BuildContext): Chore
   const completionWindowValue = input.completion_window ?? null;
   requireDueDateFor(dueDate, frequency.frequencyType, completionWindowValue);
 
+  // A chore carrying no_assignee with someone on it reverts on the next completion:
+  // Donetick's next-assignee step maps that strategy to nil and persists it. So an
+  // assignment that lands and reports success is undone the first time anyone
+  // completes the chore. Promoted rather than refused, since the caller asked for
+  // the assignment, not for the strategy.
   const strategy: AssignStrategy = input.assign_strategy
     ? validateAssignStrategy(input.assign_strategy)
     : assigneeIds.length > 0
@@ -355,6 +377,31 @@ function assertNoThingTrigger(existing: RawChore): void {
  * absent is a stronger signal that this is genuinely the wrong shape, rather than a
  * list row that happens to omit one optional field for a legitimate reason.
  */
+/**
+ * A chore whose stored recurrence Donetick cannot schedule. Reachable because this
+ * server built "first saturday of every month" as day_of_the_month with days,
+ * weekPattern and occurrences until 7d0940a, and the carry-forward branch spreads
+ * frequencyMetadata wholesale, so an unrelated edit would re-send the broken shape
+ * and report success. Measured: such a chore answers 500 on every completion, and
+ * get_chore renders it as an ordinary monthly chore, so nothing else points at it.
+ */
+function assertSchedulableFrequency(existing: RawChore): void {
+  if (existing.frequencyType !== "day_of_the_month") return;
+  const meta = (existing.frequencyMetadata ?? {}) as Record<string, unknown>;
+  const hasWeekdays = Array.isArray(meta.days) && meta.days.length > 0;
+  const months = meta.months;
+  const hasMonths = Array.isArray(months) && months.length > 0;
+  if (!hasWeekdays && hasMonths) return;
+
+  throw new Error(
+    `"${existing.name}" has a recurrence Donetick cannot schedule: it is day_of_the_month ${
+      hasWeekdays ? "carrying weekday names" : "with no months"
+    }, so every completion fails. This server used to build "the first saturday of every month" that ` +
+      'way. Pass frequency: {type: "days_of_the_week", days: ["saturday"], week_pattern: ' +
+      '"week_of_month", occurrences: [1]} to repair it, or day_of_the_month with day_of_month and months.',
+  );
+}
+
 function assertListRowShape(existing: RawChore): void {
   const looksLikeDetailsView =
     existing.assignStrategy === undefined &&
@@ -381,6 +428,7 @@ function assertListRowShape(existing: RawChore): void {
 export function mergeEditRequest(existing: RawChore, input: EditInput, ctx: BuildContext): ChoreRequestBody {
   assertListRowShape(existing);
   assertNoThingTrigger(existing);
+  assertSchedulableFrequency(existing);
 
   if (!existing.id || existing.id <= 0) {
     throw new Error(`Cannot edit a chore with id ${existing.id}. The existing chore's id must be a positive number.`);
@@ -414,13 +462,25 @@ export function mergeEditRequest(existing: RawChore, input: EditInput, ctx: Buil
   const added = input.add_assignees !== undefined ? resolveMemberIds(input.add_assignees, ctx.members) : [];
   const assigneeIds = replaced ?? [...new Set([...existingAssignees, ...added])];
 
-  const strategy: AssignStrategy = input.assign_strategy
+  const carriedStrategy: AssignStrategy = input.assign_strategy
     ? validateAssignStrategy(input.assign_strategy)
     : existing.assignStrategy !== undefined
       ? validateAssignStrategy(existing.assignStrategy)
       : assigneeIds.length > 0
         ? "keep_last_assigned"
         : "no_assignee";
+
+  // Promoted only when the caller did not name a strategy, so an explicit choice is
+  // still honored. Left alone, a chore carrying no_assignee with someone on it
+  // reverts on the next completion: Donetick's next-assignee step maps that strategy
+  // to nil and persists it, so the assignment lands, reports success, and is undone
+  // the first time anyone completes the chore.
+  const strategy: AssignStrategy =
+    input.assign_strategy === undefined &&
+    carriedStrategy === "no_assignee" &&
+    assigneeIds.length > 0
+      ? "keep_last_assigned"
+      : carriedStrategy;
 
   const isRolling =
     input.reschedule_from !== undefined

@@ -9,6 +9,7 @@ const service = {
   projects: async () => [],
   choreDetails: async () => ({}),
   archivedChores: async () => [],
+  allChores: async () => [],
   rawGet: async () => [],
   write: async (op: () => Promise<unknown>) => op(),
   invalidateChores: () => {},
@@ -586,6 +587,81 @@ describe("create_chore detail-unavailable reporting", () => {
     const parsed = JSON.parse(result.content[0]!.text) as { kind: string; message: string };
     expect(parsed.kind).toBe("created_detail_unavailable");
     expect(parsed.message).toMatch(/details endpoint down/);
+  });
+});
+
+describe("an id that is real but not in the cached list", () => {
+  // The dangerous case is an active chore the cache has not seen: created or edited
+  // in the web UI within the TTL. Searching only the archived subset left it falling
+  // through to /details, which omits every list-only field, so get_chore reported
+  // "every 1 days" for a three-weekly chore and false for every flag, with no error.
+  const listRow = {
+    id: 42,
+    name: "Gutters",
+    nextDueDate: null,
+    assignedTo: null,
+    status: 0,
+    createdBy: 1,
+    isActive: true,
+    frequencyType: "interval",
+    frequency: 3,
+    frequencyMetadata: { unit: "weeks" },
+    assignStrategy: "no_assignee",
+    assignees: [],
+    labelsV2: [],
+    priority: 2,
+    points: 7,
+    isRolling: true,
+    isPrivate: false,
+    requireApproval: true,
+    notification: false,
+    subTasks: [],
+  };
+
+  function toolsFor(overrides: Record<string, unknown>) {
+    return buildToolDefinitions({
+      ...deps,
+      service: { ...service, ...overrides } as never,
+    });
+  }
+
+  test("is resolved from the full list rather than from /details", async () => {
+    let detailsCalled = false;
+    const tools = toolsFor({
+      chores: async () => [],
+      allChores: async () => [listRow],
+      choreDetails: async () => {
+        detailsCalled = true;
+        return { id: 42, name: "Gutters", frequencyType: "interval" };
+      },
+    });
+
+    const parsed = jsonOf(await tools.find((t) => t.name === "get_chore")!.handler({ chore_id: 42 })) as {
+      frequency: string;
+      requires_approval: boolean;
+      points: number | null;
+    };
+
+    expect(parsed.frequency).toBe("every 3 weeks");
+    expect(parsed.requires_approval).toBe(true);
+    expect(parsed.points).toBe(7);
+    // /details is still fetched for the fields only it carries; what must not happen
+    // is it being used as the merge base.
+    expect(detailsCalled).toBe(true);
+  });
+
+  test("an archived chore resolves the same way", async () => {
+    const tools = toolsFor({
+      chores: async () => [],
+      allChores: async () => [{ ...listRow, isActive: false }],
+      choreDetails: async () => ({ id: 42, name: "Gutters" }),
+    });
+
+    const parsed = jsonOf(await tools.find((t) => t.name === "get_chore")!.handler({ chore_id: 42 })) as {
+      frequency: string;
+    };
+
+    expect(parsed.frequency).toBe("every 3 weeks");
   });
 });
 

@@ -29,8 +29,9 @@ export const endpoints = {
 
 /**
  * Write paths scoped to a single chore id whose handlers answer a missing chore with
- * 500 rather than 404, so a 500 on one of these means the chore is gone rather than
- * that the instance is broken. errors.ts depends on this set. Nudge is deliberately
+ * 500 rather than 404, so a 500 here is not an instance fault. /do and /skip carry a
+ * second cause and are matched by SCHEDULING_WRITE_PATHS first; for the rest a 500
+ * means the chore is gone. errors.ts depends on this ordering. Nudge is deliberately
  * absent: it is the one id-scoped write that does return 404.
  */
 export const ID_SCOPED_WRITE_PATHS = [

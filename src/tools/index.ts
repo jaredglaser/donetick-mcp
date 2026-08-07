@@ -113,7 +113,7 @@ function guardWith(
 }
 
 /**
- * The twelve tools that take an id and no name share this. The wording has to live
+ * The tools that take an id and no name share this. The wording has to live
  * in the schema rather than in a handler's error: the SDK validates against the
  * schema before it calls the handler, so a caller passing a name gets zod's generic
  * rejection and never reaches the sentence explaining what to do instead.
@@ -151,8 +151,8 @@ const frequencySchema = z.object({
   days: z
     .array(z.string())
     .optional()
-    .describe("Weekday names, used by days_of_the_week and day_of_the_month."),
-  months: z.array(z.string()).optional().describe("Month names, to restrict day_of_the_month further."),
+    .describe("Weekday names, for days_of_the_week. day_of_the_month refuses them and takes day_of_month instead."),
+  months: z.array(z.string()).optional().describe("Month names. Required by day_of_the_month, which cannot be scheduled without them, and used by nothing else."),
   week_pattern: z
     .enum(WEEK_PATTERNS)
     .optional()
@@ -164,7 +164,8 @@ const frequencySchema = z.object({
     .array(z.number())
     .optional()
     .describe(
-      "Which occurrence of the weekday, with week_pattern. 1 is the first of the month, -1 the last.",
+      "Which occurrence of the weekday. Needs week_pattern: Donetick ignores occurrences without " +
+        "one. 1 is the first, -1 the last, and several may be given.",
     ),
   day_of_month: z
     .number()
@@ -185,7 +186,11 @@ const notifySchema = z.object({
     .array(z.string())
     .max(5)
     .optional()
-    .describe('Reminder offsets before the due date, like "30m", "1h", "2d". Donetick accepts at most 5.'),
+    .describe(
+      'Reminder offsets before the due date, like "30m", "1h", "2d". Donetick accepts at most 5, ' +
+        "and this is the only field here that produces a notification: the flags above are stored " +
+        "but never read, so notify without reminders sends nothing.",
+    ),
 });
 
 /**
@@ -282,17 +287,14 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
       const found = all.find((chore) => chore.id === args.chore_id);
       if (found) return found;
 
-      // An id that misses the active list is usually archived, and the archived list
-      // is a real list row. The /details fallback below is not: it omits every
-      // list-only field, and projectChore has no way to say "unknown", so it reports
-      // "every 1 days" for a three-weekly chore and false for every flag. Reaching
-      // for a real row first is what keeps get_chore from inventing an answer.
-      if (!includeArchived) {
-        const archived = (await service.archivedChores()).find(
-          (chore) => chore.id === args.chore_id,
-        );
-        if (archived) return archived;
-      }
+      // Unfiltered, because a chore can be missing from the cached active list
+      // without being archived: anything created or edited elsewhere within the
+      // cache TTL. Searching only the archived subset left that case falling through
+      // to /details, which omits every list-only field, and projectChore has no way
+      // to say "unknown", so get_chore answered "every 1 days" for a three-weekly
+      // chore and false for every flag.
+      const anywhere = (await service.allChores()).find((chore) => chore.id === args.chore_id);
+      if (anywhere) return anywhere;
       // Not in the cached list (e.g. archived, or the cache is between refreshes).
       // A failure here means the id does not exist, but the details endpoint answers
       // that with a 500, which errors.ts reads as an instance fault. Say what is
@@ -408,8 +410,9 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
           .boolean()
           .optional()
           .describe(
-            "Include skips, rejections, misses and reschedules as well as completions. Off by " +
-              "default, because a reschedule is written on every edit and reads as a completion.",
+            "Include skips, rejections, timer starts, pending approvals and reschedules as well as " +
+              "completions. Off by default, because a reschedule is written on every edit and would " +
+              "read as a completion.",
           ),
       },
       handler: guard(async (args) => {

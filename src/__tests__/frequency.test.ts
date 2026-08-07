@@ -290,3 +290,100 @@ describe("exhaustiveness across all eleven types", () => {
     }
   });
 });
+
+describe("occurrence shapes Donetick honors, and the one it ignores", () => {
+  // Measured against a chore due Thu 2026-09-10, where the answers differ:
+  // week_of_month [2] scheduled the 2nd Saturday (Sep 12), [1,3] the next of either
+  // (Sep 19), week_of_quarter [1] the first of the quarter (Oct 3), and occurrences
+  // with no pattern scheduled the plain next Saturday (Sep 12), ignoring it.
+
+  test("occurrences without week_pattern is refused, since Donetick discards it", () => {
+    expect(() =>
+      buildFrequency({ type: "days_of_the_week", days: ["saturday"], occurrences: [-1] }, tz, now),
+    ).toThrow(/week_pattern/);
+  });
+
+  test("the error names the shape that works", () => {
+    expect(() =>
+      buildFrequency({ type: "days_of_the_week", days: ["saturday"], occurrences: [1] }, tz, now),
+    ).toThrow(/week_of_month/);
+  });
+
+  test("week_of_quarter is carried, not just week_of_month", () => {
+    const out = buildFrequency(
+      { type: "days_of_the_week", days: ["saturday"], week_pattern: "week_of_quarter", occurrences: [1] },
+      tz,
+      now,
+    );
+    expect(out.frequencyMetadata.weekPattern).toBe("week_of_quarter");
+  });
+
+  test("several occurrences are carried", () => {
+    const out = buildFrequency(
+      { type: "days_of_the_week", days: ["saturday"], week_pattern: "week_of_month", occurrences: [1, 3] },
+      tz,
+      now,
+    );
+    expect(out.frequencyMetadata.occurrences).toEqual([1, 3]);
+  });
+});
+
+describe("week_pattern needs occurrences Donetick can match", () => {
+  test("a pattern with no occurrences is refused", () => {
+    // Measured: week_of_month with no occurrences answers 500 on every completion.
+    // Donetick's scheduler requires at least one, and the chore is created happily
+    // first, so this is the same never-completable shape as day_of_the_month with no
+    // months.
+    expect(() =>
+      buildFrequency(
+        { type: "days_of_the_week", days: ["saturday"], week_pattern: "week_of_month" },
+        tz,
+        now,
+      ),
+    ).toThrow(/occurrences/);
+  });
+
+  test("an occurrence Donetick can never match is refused", () => {
+    // The scheduler matches against the positions that exist in the period, so one
+    // outside that range exhausts its search and fails the same way.
+    expect(() =>
+      buildFrequency(
+        {
+          type: "days_of_the_week",
+          days: ["saturday"],
+          week_pattern: "week_of_month",
+          occurrences: [6],
+        },
+        tz,
+        now,
+      ),
+    ).toThrow(/1 through 5/);
+  });
+
+  test("a quarter allows more positions than a month", () => {
+    expect(() =>
+      buildFrequency(
+        {
+          type: "days_of_the_week",
+          days: ["saturday"],
+          week_pattern: "week_of_quarter",
+          occurrences: [13],
+        },
+        tz,
+        now,
+      ),
+    ).not.toThrow();
+  });
+
+  test("-1 is allowed for both, since it means the last", () => {
+    for (const pattern of ["week_of_month", "week_of_quarter"] as const) {
+      expect(() =>
+        buildFrequency(
+          { type: "days_of_the_week", days: ["saturday"], week_pattern: pattern, occurrences: [-1] },
+          tz,
+          now,
+        ),
+      ).not.toThrow();
+    }
+  });
+});

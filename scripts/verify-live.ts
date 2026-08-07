@@ -413,6 +413,11 @@ async function main(): Promise<void> {
             // Populated on purpose. An empty assignee list cannot be emptied and a
             // chore with no subtasks cannot lose them, so a bare fixture makes the
             // destruction this check exists to catch impossible to observe.
+            // keep_last_assigned, not the no_assignee default: a chore carrying
+            // no_assignee with someone on it is the state mergeEditRequest promotes
+            // away from, so leaving it here would make the promotion look like the
+            // destruction this check hunts for.
+            assignStrategy: "keep_last_assigned",
             assignedTo: someone,
             assignees: [{ userId: someone }],
             subTasks: [

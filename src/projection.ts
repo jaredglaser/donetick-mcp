@@ -28,9 +28,13 @@ export function summarizeFrequency(chore: RawChore): string {
     case "days_of_the_week": {
       const days = meta.days ?? [];
       if (days.length === 0) return "on selected days";
-      // weekPattern and occurrences live on this type, not on day_of_the_month.
-      if (meta.weekPattern === "week_of_month" && meta.occurrences && meta.occurrences.length > 0) {
-        return `the ${meta.occurrences.map(ordinal).join(", ")} ${days.join("/")} of every month`;
+      // Every pattern Donetick honors, measured against a chore due Thu 2026-09-10:
+      // week_of_month [2] scheduled the 2nd Saturday, [1,3] the next of either, and
+      // week_of_quarter [1] the first of the quarter. Rendering only week_of_month
+      // described the rest as "every saturday", which is a different schedule.
+      if (meta.occurrences && meta.occurrences.length > 0 && meta.weekPattern) {
+        const period = meta.weekPattern === "week_of_quarter" ? "quarter" : "month";
+        return `the ${meta.occurrences.map(ordinal).join(", ")} ${days.join("/")} of every ${period}`;
       }
       return `every ${days.join(", ")}`;
     }
@@ -51,6 +55,9 @@ export function summarizeFrequency(chore: RawChore): string {
 }
 
 function ordinal(n: number): string {
+  // Donetick's own frontend offers 1st through 4th and "Last", and -1 is how it
+  // carries that. Without this, the projection reported "the -1th saturday".
+  if (n === -1) return "last";
   const suffix = n % 10 === 1 && n % 100 !== 11
     ? "st"
     : n % 10 === 2 && n % 100 !== 12

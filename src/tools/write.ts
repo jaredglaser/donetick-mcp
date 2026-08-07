@@ -130,17 +130,16 @@ export async function editChore(
 
   const put = async (base: RawChore): Promise<void> => {
     body = mergeEditRequest(base, input, buildCtx);
+    // Inside put, so the retry re-checks. The clear lands on a separate endpoint
+    // after this write, so the merged body still carries the old date and the guard
+    // inside mergeEditRequest cannot see the state this call will leave behind. The
+    // retry re-reads and re-merges, and the row it re-reads can have acquired a
+    // completion window or an adaptive frequency in the meantime.
+    if (input.due_date === null) {
+      requireDueDateFor(null, body.frequencyType, body.completionWindow);
+    }
     await ctx.service.write(() => ctx.service.client.put(endpoints.editChore(), body));
   };
-
-  // Checked before anything is written, and against the state this call will leave
-  // rather than the state the body describes. Clearing happens on a separate
-  // endpoint after the main write, so the merged body still carries the old date and
-  // the guard inside mergeEditRequest cannot see the combination being created.
-  if (input.due_date === null) {
-    const preview = mergeEditRequest(existing, { ...input, due_date: undefined }, buildCtx);
-    requireDueDateFor(null, preview.frequencyType, preview.completionWindow);
-  }
 
   try {
     await put(existing);
@@ -164,9 +163,8 @@ export async function editChore(
   // a clear has to go there. Without this, edit_chore advertised a capability that
   // silently did nothing and then reported success.
   if (input.due_date === null) {
-    // Re-read first. existing predates the write just issued, so its updatedAt is
-    // already behind the row and concurrencyToken would fall through to a bare now,
-    // which is the input it exists to avoid sending. This is the only place two
+    // Re-read first. existing predates the write just issued, so its stamp is already
+    // behind the row and this endpoint refuses anything older. The only place two
     // writes hit one chore in sequence.
     ctx.service.invalidateChores();
     const written = await loadChoreById(existing.id, ctx);

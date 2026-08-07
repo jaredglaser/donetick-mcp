@@ -227,3 +227,30 @@ describe("live-observed edge cases", () => {
     expect(projectChore(chore({ priority: 7 }), members, projects, now).priority).toBe("7");
   });
 });
+
+describe("every occurrence shape reads back as the schedule Donetick runs", () => {
+  const dow = (fm: Record<string, unknown>) =>
+    summarizeFrequency(chore({ frequencyType: "days_of_the_week", frequencyMetadata: fm }));
+
+  test("-1 is 'last', not '-1th'", () => {
+    expect(dow({ days: ["saturday"], weekPattern: "week_of_month", occurrences: [-1] })).toBe(
+      "the last saturday of every month",
+    );
+  });
+
+  test("week_of_quarter says quarter rather than falling back to 'every saturday'", () => {
+    expect(dow({ days: ["saturday"], weekPattern: "week_of_quarter", occurrences: [1] })).toBe(
+      "the 1st saturday of every quarter",
+    );
+  });
+
+  test("several occurrences are all named", () => {
+    expect(dow({ days: ["saturday"], weekPattern: "week_of_month", occurrences: [1, 3] })).toBe(
+      "the 1st, 3rd saturday of every month",
+    );
+  });
+
+  test("a plain weekday schedule still reads plainly", () => {
+    expect(dow({ days: ["monday", "thursday"] })).toBe("every monday, thursday");
+  });
+});
