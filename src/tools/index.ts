@@ -74,7 +74,15 @@ function ok(payload: unknown): ToolResult {
 
 function fail(error: unknown): ToolResult {
   const message = error instanceof Error ? error.message : String(error);
-  return { content: [{ type: "text", text: message }], isError: true };
+  // A write that timed out or lost the connection says nothing about whether the
+  // server acted on it. Reporting that as a flat failure reads as "it did not
+  // happen", and the natural next move is a retry that duplicates the chore or
+  // double-advances a completion.
+  const caveat =
+    error instanceof DonetickError && error.indeterminate
+      ? " This request may or may not have been applied. Check with list_chores or get_chore before trying again."
+      : "";
+  return { content: [{ type: "text", text: `${message}${caveat}` }], isError: true };
 }
 
 /**
@@ -103,6 +111,20 @@ function guardWith(
     }
   };
 }
+
+/**
+ * The twelve tools that take an id and no name share this. The wording has to live
+ * in the schema rather than in a handler's error: the SDK validates against the
+ * schema before it calls the handler, so a caller passing a name gets zod's generic
+ * rejection and never reaches the sentence explaining what to do instead.
+ */
+const choreIdSchema = z
+  .number()
+  .int()
+  .describe(
+    "The chore's numeric id. This tool does not take a name: call list_chores (with search to " +
+      "narrow it) or get_chore first and pass the id it returns.",
+  );
 
 const FREQUENCY_UNIT_VALUES = ["hours", "days", "weeks", "months", "years"] as const;
 
@@ -247,7 +269,14 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
       // actually true instead, or the user goes looking for an outage.
       try {
         return await service.choreDetails(args.chore_id);
-      } catch {
+      } catch (error) {
+        // Only the statuses that actually mean "not there". A bare catch turned a
+        // timeout, a revoked token, or a genuine instance fault into "that chore
+        // does not exist", which sends the user looking for data they were told was
+        // gone. The 500 is in here because /details answers a missing id with one.
+        const missing =
+          error instanceof DonetickError && (error.status === 404 || error.status >= 500);
+        if (!missing) throw error;
         throw new Error(
           `No chore with id ${args.chore_id} exists on this account. Use list_chores to see what is there.`,
         );
@@ -419,7 +448,14 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
         "full assignee list, while add_assignees adds to it without dropping anyone already assigned.",
       inputSchema: {
         chore_id: z.number().int().describe("The chore to edit."),
-        name: z.string().optional().describe("New name. Omitted means keep the current name."),
+        name: z
+          .string()
+          .optional()
+          .describe(
+            "Renames the chore. Pass this only when a different name was asked for. chore_id " +
+              "already says which chore this is, so passing the current name here to identify it " +
+              "rewrites the name to whatever wording or casing you typed.",
+          ),
         description: z.string().optional(),
         due_date: z
           .string()
@@ -434,11 +470,23 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
         project: z.string().optional(),
         priority: priorityEnumSchema.optional(),
         points: z.number().nullable().optional(),
-        subtasks: z.array(z.string()).optional(),
+        subtasks: z
+          .array(z.string())
+          .optional()
+          .describe(
+            "Replaces the whole checklist. Any item not in this list is removed, and every item in " +
+              "it comes back unchecked, including ones already ticked. To tick or untick one item " +
+              "use set_subtask_completed instead.",
+          ),
         require_approval: z.boolean().optional(),
         is_private: z.boolean().optional(),
         completion_window: z.number().optional(),
-        notify: notifySchema.optional(),
+        notify: notifySchema
+          .optional()
+          .describe(
+            "Replaces the whole notification setting. Any flag left out becomes false and any " +
+              "reminder offset left out is dropped, so pass every flag and reminder you want kept.",
+          ),
       },
       handler: guard(async (args) => ok(await editChore(args as unknown as EditInput & { chore_id?: number }, writeCtx))),
     },
@@ -473,7 +521,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
       name: "reschedule_chore",
       description: "Change a chore's due date, or clear it.",
       inputSchema: {
-        chore_id: z.number().int(),
+        chore_id: choreIdSchema,
         due_date: z
           .string()
           .nullable()
@@ -490,7 +538,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
         "the whole chore rather than just the assignee field, since Donetick's fast assignee endpoint only " +
         "accepts people already assigned to it.",
       inputSchema: {
-        chore_id: z.number().int(),
+        chore_id: choreIdSchema,
         assignee: z.string().describe("The member's name."),
       },
       handler: guard(async (args) => ok(await reassignChore(args as unknown as ReassignInput, writeCtx))),
@@ -501,7 +549,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
         "Set a chore's priority. Donetick's scale is inverted: P1 is the most urgent, P4 is the least " +
         "urgent, and none (0) means unset.",
       inputSchema: {
-        chore_id: z.number().int(),
+        chore_id: choreIdSchema,
         priority: z
           .union([priorityEnumSchema, z.number().int().min(0).max(4)])
           .describe("A P-label or the equivalent 0-4 integer."),
@@ -515,7 +563,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
         "appearing in active lists but its completion history is kept, unlike delete_chore. " +
         "unarchive_chore reverses it.",
       inputSchema: {
-        chore_id: z.number().int(),
+        chore_id: choreIdSchema,
       },
       handler: guard(async (args) => ok(await archiveChore(args as unknown as ArchiveInput, writeCtx))),
     },
@@ -523,7 +571,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
       name: "unarchive_chore",
       description: "Restore a previously archived chore so it appears in active lists again.",
       inputSchema: {
-        chore_id: z.number().int(),
+        chore_id: choreIdSchema,
       },
       handler: guard(async (args) => ok(await unarchiveChore(args as unknown as ArchiveInput, writeCtx))),
     },
@@ -537,7 +585,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
         "undo_chore can reverse it. Backdating a rolling chore (one that reschedules from its completion " +
         "date rather than its due date) also moves its next occurrence earlier.",
       inputSchema: {
-        chore_id: z.number().int(),
+        chore_id: choreIdSchema,
         completed_at: z
           .string()
           .optional()
@@ -553,7 +601,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
         "Skip a recurring chore's current occurrence, advancing it to its next due date without " +
         "recording it as completed.",
       inputSchema: {
-        chore_id: z.number().int(),
+        chore_id: choreIdSchema,
       },
       handler: guard(async (args) => ok(await skipChore(args as unknown as SkipInput, writeCtx))),
     },
@@ -564,7 +612,14 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
         "completing it. Takes chore_id only, never a name: a just-completed one-off chore drops out of " +
         "the active list this server searches by name. Use the id complete_chore returned.",
       inputSchema: {
-        chore_id: z.number().int(),
+        chore_id: z
+          .number()
+          .int()
+          .describe(
+            "The id complete_chore returned. Names are not taken here: a just-completed one-off " +
+              "chore leaves the active list this server searches by name, so a name could never " +
+              "find it.",
+          ),
       },
       handler: guard(async (args) => ok(await undoChore(args as unknown as UndoInput, writeCtx))),
     },
@@ -574,7 +629,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
         "Approve a chore completion that is waiting on sign-off, for a chore whose require_approval is " +
         "set (status pending_approval). Requires an admin or manager role in the circle.",
       inputSchema: {
-        chore_id: z.number().int(),
+        chore_id: choreIdSchema,
       },
       handler: guard(async (args) => ok(await approveChore(args as unknown as ApprovalInput, writeCtx))),
     },
@@ -584,7 +639,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
         "Reject a chore completion that is waiting on sign-off, for a chore whose require_approval is " +
         "set (status pending_approval). Requires an admin or manager role in the circle.",
       inputSchema: {
-        chore_id: z.number().int(),
+        chore_id: choreIdSchema,
       },
       handler: guard(async (args) => ok(await rejectChore(args as unknown as ApprovalInput, writeCtx))),
     },
@@ -595,7 +650,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
         "refuses to let you nudge yourself. The nudge reaches registered mobile devices only, not " +
         "Telegram or Pushover, so it can silently fail to deliver even when this call succeeds.",
       inputSchema: {
-        chore_id: z.number().int(),
+        chore_id: choreIdSchema,
         message: z.string().optional(),
         all_assignees: z.boolean().optional().describe("Nudge every assignee rather than just one."),
       },
@@ -608,7 +663,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
         "the current subtask names and their state. Subtask completion resets at the start of each cycle " +
         "on a recurring chore.",
       inputSchema: {
-        chore_id: z.number().int(),
+        chore_id: choreIdSchema,
         subtask: z.string().describe("The checklist item's name, or a distinguishing substring of it."),
         completed: z.boolean().describe("true to check the item, false to uncheck it."),
       },

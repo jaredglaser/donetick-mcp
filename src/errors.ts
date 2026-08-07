@@ -1,4 +1,4 @@
-import { isIdScopedWrite } from "@/endpoints";
+import { isCreatorOnlyWrite, isIdScopedWrite } from "@/endpoints";
 
 const MAX_DETAIL_LENGTH = 200;
 
@@ -10,14 +10,27 @@ export class DonetickError extends Error {
   readonly status: number;
   readonly retryable: boolean;
   readonly invalidatesCache: boolean;
+  /**
+   * The request may have been applied despite failing. A timeout or a dropped
+   * connection says nothing about whether the server acted, and Donetick's create
+   * inserts the row before later steps that can fail. Reporting those as a flat
+   * failure invites the caller to retry and make a duplicate.
+   */
+  readonly indeterminate: boolean;
 
   constructor(
     message: string,
-    options: { status: number; retryable?: boolean; invalidatesCache?: boolean },
+    options: {
+      status: number;
+      retryable?: boolean;
+      invalidatesCache?: boolean;
+      indeterminate?: boolean;
+    },
   ) {
     super(message);
     this.name = "DonetickError";
     this.status = options.status;
+    this.indeterminate = options.indeterminate ?? false;
     this.retryable = options.retryable ?? false;
     this.invalidatesCache = options.invalidatesCache ?? false;
   }
@@ -83,6 +96,13 @@ export function mapHttpError(input: {
   }
 
   if (status >= 500) {
+    if (isCreatorOnlyWrite(path, method)) {
+      return new DonetickError(
+        "Donetick refused that. Archiving is creator-only, and it reports 'not yours' and 'not there' " +
+          "identically, so either this chore was deleted or this account did not create it.",
+        { status, retryable: true, invalidatesCache: true },
+      );
+    }
     if (isIdScopedWrite(path, method)) {
       return new DonetickError(
         "That chore no longer exists, or is no longer visible to this account.",

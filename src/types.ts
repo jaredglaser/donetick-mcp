@@ -50,6 +50,13 @@ export interface RawChore {
   projectId?: number | null;
   createdBy: number;
   updatedAt?: string;
+  /**
+   * Present when a Donetick Thing drives this chore. Read-only here: EditChore
+   * dissociates the Thing unconditionally and re-associates only when the request
+   * carries a thingTrigger, which this server has no way to build, so an edit would
+   * sever the link permanently and silently.
+   */
+  thingChore?: unknown | null;
   subTasks?: RawSubTask[] | null;
   lastCompletedDate?: string | null;
   lastCompletedBy?: number | null;
@@ -104,6 +111,9 @@ export interface ProjectedChore {
   due_in: string;
   is_overdue: boolean;
   assigned_to: string | null;
+  description: string | null;
+  points: number | null;
+  is_rolling: boolean;
   labels: string[];
   priority: string;
   project: string | null;

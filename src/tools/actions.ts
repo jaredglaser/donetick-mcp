@@ -87,9 +87,11 @@ export async function completeChore(input: CompleteInput, ctx: WriteContext): Pr
     }
   }
 
-  if (input.note !== undefined) {
+  if (input.note !== undefined && input.note !== "") {
     // notes is the current field; the deprecated note wins over it when both are
-    // present, so note is never sent from here.
+    // present, so note is never sent from here. An empty string is dropped rather
+    // than sent: the binding is omitempty,min=1, so "" is a 400 for a value that
+    // means the same as not passing one.
     body.notes = input.note;
   }
 

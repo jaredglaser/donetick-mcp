@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { DonetickError } from "@/errors";
 import { z } from "zod";
 import { buildToolDefinitions, type McpExtras, type ToolResult } from "../index";
 
@@ -591,6 +592,29 @@ describe("create_chore detail-unavailable reporting", () => {
 });
 
 describe("a chore id that does not exist", () => {
+  test("a read failure that is not a missing id keeps its own reason", async () => {
+    // The 500 branch above exists because /details answers a missing id with one.
+    // Covering every other failure with the same sentence told the user their chore
+    // was gone when the token had been revoked or the request had timed out.
+    const failing = {
+      ...service,
+      chores: async () => [],
+      choreDetails: async () => {
+        throw new DonetickError("The request to https://donetick.test timed out after 15000ms.", {
+          status: 0,
+        });
+      },
+    };
+    const tools = buildToolDefinitions({ ...deps, service: failing as never });
+    const tool = tools.find((t) => t.name === "get_chore")!;
+
+    const result = await tool.handler({ chore_id: 42 });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toMatch(/timed out/);
+    expect(result.content[0]!.text).not.toMatch(/does not exist|No chore with id/);
+  });
+
   test("reads as not found, not as an instance fault", async () => {
     // The details endpoint answers a missing id with a 500, which errors.ts maps to
     // a generic instance error. Reporting that verbatim sends the user looking for
@@ -599,7 +623,7 @@ describe("a chore id that does not exist", () => {
       ...service,
       chores: async () => [],
       choreDetails: async () => {
-        throw new Error("The Donetick instance returned an error.");
+        throw new DonetickError("The Donetick instance returned an error.", { status: 500 });
       },
     };
     const tools = buildToolDefinitions({ ...deps, service: failing as never });
@@ -841,5 +865,81 @@ describe("delete_chore resolution", () => {
 
     expect(result.isError).toBe(true);
     expect(archivedConsulted).toBe(false);
+  });
+});
+
+describe("error reporting", () => {
+  function toolsWith(fail: () => never) {
+    return buildToolDefinitions({
+      ...deps,
+      service: { ...service, chores: fail } as never,
+    });
+  }
+
+  test("drops the cached list when the error says the cache disagrees with the server", async () => {
+    // guardWith reads invalidatesCache. Deleting that branch left all 486 tests
+    // green, because every fake in this file threw a plain Error and the
+    // instanceof check was false in every one of them.
+    let invalidated = 0;
+    const tools = buildToolDefinitions({
+      ...deps,
+      service: {
+        ...service,
+        invalidateChores: () => {
+          invalidated += 1;
+        },
+        chores: () => {
+          throw new DonetickError("gone", { status: 404, invalidatesCache: true });
+        },
+      } as never,
+    });
+
+    await tools.find((t) => t.name === "list_chores")!.handler({});
+
+    expect(invalidated).toBe(1);
+  });
+
+  test("keeps the cache when the error does not implicate it", async () => {
+    let invalidated = 0;
+    const tools = buildToolDefinitions({
+      ...deps,
+      service: {
+        ...service,
+        invalidateChores: () => {
+          invalidated += 1;
+        },
+        chores: () => {
+          throw new DonetickError("bad request", { status: 400 });
+        },
+      } as never,
+    });
+
+    await tools.find((t) => t.name === "list_chores")!.handler({});
+
+    expect(invalidated).toBe(0);
+  });
+
+  test("an indeterminate write warns against a blind retry", async () => {
+    const tools = toolsWith(() => {
+      throw new DonetickError("The request timed out after 15000ms.", {
+        status: 0,
+        indeterminate: true,
+      });
+    });
+
+    const result = await tools.find((t) => t.name === "complete_chore")!.handler({ chore_id: 1 });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toMatch(/may or may not have been applied/);
+  });
+
+  test("a determinate failure carries no such caveat, so a retry stays the obvious move", async () => {
+    const tools = toolsWith(() => {
+      throw new DonetickError("Donetick rejected the request: bad frequency", { status: 400 });
+    });
+
+    const result = await tools.find((t) => t.name === "complete_chore")!.handler({ chore_id: 1 });
+
+    expect(result.content[0]!.text).not.toMatch(/may or may not/);
   });
 });

@@ -12,6 +12,25 @@ function zoned(instant: Date, tz: string): Temporal.ZonedDateTime {
   return Temporal.Instant.fromEpochMilliseconds(instant.getTime()).toZonedDateTimeISO(tz);
 }
 
+/**
+ * The zone's UTC offset, formatted the way RFC3339 wants it. Read at the epoch
+ * rather than at a real instant on purpose: the only caller stamps a placeholder
+ * date whose offset must match the one it writes.
+ */
+export function utcOffsetFor(timezone: string): string {
+  return Temporal.Instant.fromEpochMilliseconds(0).toZonedDateTimeISO(timezone).offset;
+}
+
+/** A zone Temporal and Intl both recognize. Anything else throws at use time. */
+export function isValidTimezone(tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function zonedYmd(instant: Date, tz: string): { y: number; m: number; d: number } {
   const z = zoned(instant, tz);
   return { y: z.year, m: z.month, d: z.day };

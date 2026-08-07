@@ -570,3 +570,32 @@ describe("editChore when the read-back fails", () => {
     expect(fake.calls).toContain("PUT /api/v1/chores/");
   });
 });
+
+describe("editChore clearing the due date", () => {
+  test("issues the clear against /:id/dueDate, which is the endpoint that honours a null", async () => {
+    // Verified live on v0.1.76: PUT /chores/ with nextDueDate null keeps the stored
+    // date and answers 200, so edit_chore advertised a clear that silently did
+    // nothing and then reported success.
+    const fake = fakeService({
+      chores: [listRow],
+      put: () => undefined,
+      choreDetails: () => detailsShapedRow,
+    });
+
+    await editChore({ chore_id: 5, due_date: null }, ctxFor(fake.service));
+
+    expect(fake.calls).toContain("PUT /api/v1/chores/5/dueDate");
+  });
+
+  test("does not touch /dueDate when the edit leaves the date alone", async () => {
+    const fake = fakeService({
+      chores: [listRow],
+      put: () => undefined,
+      choreDetails: () => detailsShapedRow,
+    });
+
+    await editChore({ chore_id: 5, name: "Renamed" }, ctxFor(fake.service));
+
+    expect(fake.calls.some((c) => c.includes("/dueDate"))).toBe(false);
+  });
+});

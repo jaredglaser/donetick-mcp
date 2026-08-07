@@ -30,8 +30,29 @@ describe("projectChore", () => {
     expect(projectChore(chore(), members, projects, now).assigned_to).toBe("Jared Glaser");
   });
 
-  test("reports an unknown assignee as null rather than an id", () => {
-    expect(projectChore(chore({ assignedTo: 99 }), members, projects, now).assigned_to).toBeNull();
+  test("names an unnameable assignee as unknown, not as unassigned", () => {
+    // null here reads as "nobody is assigned", which is a different claim from
+    // "assigned to someone this server could not name". The member cache outlives
+    // the chore cache by minutes, so a newly added member hits this routinely.
+    expect(projectChore(chore({ assignedTo: 99 }), members, projects, now).assigned_to).toBe(
+      "member #99 (unknown)",
+    );
+  });
+
+  test("an actually unassigned chore is still null", () => {
+    expect(projectChore(chore({ assignedTo: null }), members, projects, now).assigned_to).toBeNull();
+  });
+
+  test("carries description, points and is_rolling, which write tools accept but nothing could read back", () => {
+    const projected = projectChore(
+      chore({ description: "curb by 7am", points: 5, isRolling: true }),
+      members,
+      projects,
+      now,
+    );
+    expect(projected.description).toBe("curb by 7am");
+    expect(projected.points).toBe(5);
+    expect(projected.is_rolling).toBe(true);
   });
 
   test("labels priority without re-bucketing the inverted scale", () => {

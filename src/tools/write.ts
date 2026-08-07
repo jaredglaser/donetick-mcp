@@ -1,5 +1,6 @@
 import {
   buildCreateRequest,
+  concurrencyToken,
   mergeEditRequest,
   type BuildContext,
   type ChoreRequestBody,
@@ -145,6 +146,20 @@ export async function editChore(
     ctx.service.invalidateChores();
     existing = await loadChoreById(input.chore_id, ctx);
     await put(existing);
+  }
+
+  // PUT /chores/ reads nextDueDate: null as "keep the current date" rather than as
+  // "clear it" (verified live on v0.1.76: the field is only assigned when non-nil,
+  // and the else branch reuses the old value). PUT /:id/dueDate does honour null, so
+  // a clear has to go there. Without this, edit_chore advertised a capability that
+  // silently did nothing and then reported success.
+  if (input.due_date === null) {
+    await ctx.service.write(() =>
+      ctx.service.client.put(endpoints.updateDueDate(existing.id), {
+        dueDate: null,
+        updatedAt: concurrencyToken(existing, ctx.now()),
+      }),
+    );
   }
 
   // The edit has already landed. A failure past this point is a reporting failure,

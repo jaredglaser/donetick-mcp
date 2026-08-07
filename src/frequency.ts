@@ -1,3 +1,5 @@
+import { utcOffsetFor } from "@/time";
+
 const FREQUENCY_TYPES_TUPLE = [
   "once",
   "daily",
@@ -81,7 +83,7 @@ export interface FrequencyOutput {
 export function buildFrequency(input: FrequencyInput, timezone: string): FrequencyOutput {
   const metadata: FrequencyMetadata = { timezone };
   if (input.time !== undefined) {
-    metadata.time = normalizeTime(input.time);
+    metadata.time = normalizeTime(input.time, timezone);
   }
 
   switch (input.type) {
@@ -183,9 +185,23 @@ function normalizeNames(
   });
 }
 
-function normalizeTime(time: string): string {
-  if (!TIME_RE.test(time)) {
+/**
+ * Callers give HH:MM; Donetick wants a full RFC3339 instant.
+ *
+ * Verified live on v0.1.76: the binding is datetime=2006-01-02T15:04:05Z07:00 and
+ * the scheduler parses with time.RFC3339, so "09:00" is a 400 on every create and
+ * edit that supplies one. Every value the old HH:MM check accepted was a value
+ * Donetick refused, which made the option unusable rather than merely wrong.
+ *
+ * The date is a placeholder: the scheduler reads only hour, minute and second. The
+ * offset has to be the chore's own zone, or the wall-clock time shifts.
+ */
+function normalizeTime(time: string, timezone: string): string {
+  const match = TIME_RE.exec(time);
+  if (!match) {
     throw new Error(`"time" must be in HH:MM 24-hour format, got "${time}"`);
   }
-  return time;
+  const offset = utcOffsetFor(timezone);
+  return `1970-01-01T${match[1]}:${match[2]}:00${offset}`;
 }
+

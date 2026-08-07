@@ -1,13 +1,6 @@
 import type { RawChore } from "@/types";
 import type { WriteContext } from "@/tools/write";
 
-/**
- * Every tool that acts on a chore resolves it through here, from the chores list
- * rather than GET /details. The details view omits assignStrategy, assignees,
- * frequency, frequencyMetadata, isRolling, isPrivate, labelsV2, notification,
- * notificationMetadata, points and requireApproval, which is every field a write
- * needs, so using it as a merge base destroys them.
- */
 function requireChoreId(chore_id: number | undefined): number {
   if (typeof chore_id !== "number") {
     throw new Error(
@@ -17,6 +10,7 @@ function requireChoreId(chore_id: number | undefined): number {
   return chore_id;
 }
 
+/** The chores list row, never GET /details: see assertListRowShape in chore-request.ts. */
 async function loadFrom(
   chore_id: number | undefined,
   fetchAll: () => Promise<RawChore[]>,

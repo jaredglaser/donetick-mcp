@@ -206,3 +206,41 @@ describe("mapHttpError", () => {
     }
   });
 });
+
+describe("archive and unarchive are creator-only, which a 500 cannot distinguish", () => {
+  // Donetick's archive repo matches on id AND created_by AND circle_id and reports a
+  // zero-row update identically for "absent" and "not yours". Both are 500. Saying
+  // only "the chore is gone" contradicts the list read that produced the id one call
+  // earlier, and sends the user looking for data that is still there.
+  test("names both possibilities rather than asserting the chore is gone", () => {
+    const error = mapHttpError({
+      status: 500,
+      body: "",
+      path: "/api/v1/chores/7/archive",
+      method: "PUT",
+    });
+    expect(error.message).toMatch(/creator-only/i);
+    expect(error.message).toMatch(/did not create it/);
+  });
+
+  test("unarchive says the same", () => {
+    const error = mapHttpError({
+      status: 500,
+      body: "",
+      path: "/api/v1/chores/7/unarchive",
+      method: "PUT",
+    });
+    expect(error.message).toMatch(/creator-only/i);
+  });
+
+  test("the other id-scoped writes still say the chore is gone, because they do look it up", () => {
+    const error = mapHttpError({
+      status: 500,
+      body: "",
+      path: "/api/v1/chores/7/do",
+      method: "POST",
+    });
+    expect(error.message).toMatch(/no longer exists/);
+    expect(error.message).not.toMatch(/creator-only/i);
+  });
+});

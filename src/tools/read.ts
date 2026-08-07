@@ -1,5 +1,5 @@
 import { projectChore } from "@/projection";
-import { bucket, type Scope } from "@/time";
+import { bucket, isValidTimezone, type Scope } from "@/time";
 import { normalizeName } from "@/resolve";
 import { CHORE_STATUS, PRIORITY_LABEL, type Member, type ProjectedChore, type Project, type RawChore } from "@/types";
 
@@ -37,7 +37,11 @@ export interface ListResult {
  */
 function zoneFor(chore: RawChore, fallback: string): string {
   const zone = chore.frequencyMetadata?.timezone;
-  return zone && zone.length > 0 ? zone : fallback;
+  // Validated, unlike DONETICK_TZ, because this one is client-supplied: any circle
+  // member can set it on create, and Temporal throws on an unrecognized zone. One
+  // bad row would otherwise fail every scope-filtered listing with a message about
+  // Temporal rather than about the chore.
+  return zone && zone.length > 0 && isValidTimezone(zone) ? zone : fallback;
 }
 
 /** Lists what does exist, so the caller can correct itself without another round trip. */
@@ -97,6 +101,16 @@ export function listChores(args: ListArgs, ctx: ListContext): ListResult {
 
   if (args.label !== undefined) {
     const wanted = normalizeName(args.label);
+    // Same reasoning as project and assignee above, and it matters most here: the
+    // label API needs session auth, so a caller has no other way to learn which
+    // labels exist and would read an empty list as "nothing is tagged that".
+    const inUse = [...new Set(ctx.chores.flatMap((c) => (c.labelsV2 ?? []).map((l) => l.name)))];
+    if (!inUse.some((name) => normalizeName(name) === wanted)) {
+      throw new Error(
+        `"${args.label}" is not on any chore this server can see.${describeKnown(inUse)} Donetick's ` +
+          "label API needs session auth, so a label attached to nothing is invisible here.",
+      );
+    }
     rows = rows.filter((chore) =>
       (chore.labelsV2 ?? []).some((label) => normalizeName(label.name) === wanted),
     );
