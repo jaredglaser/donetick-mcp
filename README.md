@@ -130,7 +130,7 @@ Donetick upgrade, run:
 bun run verify:live
 ```
 
-It exercises 18 contract facts against a real instance, creates scratch chores with a
+It exercises 24 contract facts against a real instance, creates scratch chores with a
 run-scoped name prefix, and deletes them in a `finally` so a mid-run failure leaves
 nothing behind. It exits non-zero if any check fails, and distinguishes a warning
 (something changed but nothing is broken) from a failure.
@@ -147,13 +147,15 @@ regardless. Archiving is the alternative and keeps the chore's history.
 
 These were verified against a live Donetick instance, not assumed from its source.
 
+- **A chore driven by a Donetick Thing cannot be edited here.** Donetick drops the Thing association on every edit and restores it only for a request naming the Thing, which this server cannot build, so `edit_chore` refuses rather than severing the link silently.
+- **A completion window requires a due date**, and so does an adaptive chore. Donetick reads the due date without checking whether it is there, so either combination produces a chore that can never be completed.
 - **Labels are read-only.** `/api/v1/labels` requires JWT session auth, which an API token cannot provide, so this server cannot list all labels that exist in the circle. Labels already attached to a chore are readable and filterable through `list_chores` and `get_chore`. A label attached to nothing is invisible to this server.
 - **Deleting a chore is creator-only.** Donetick's delete handler compares the chore's `CreatedBy` field directly and never checks edit permission, so a circle admin cannot delete a chore they did not create, even though they can edit one.
 - **The chore list and chore detail views are not supersets of each other.** `GET /chores/` returns rows that alone carry `assignStrategy`, `assignees`, `frequency`, `frequencyMetadata`, `isRolling`, `isPrivate`, `labelsV2`, `notification`, `notificationMetadata`, `points`, and `requireApproval`. `GET /chores/:id/details` alone carries `lastCompletedDate`, `lastCompletedBy`, `totalCompletedCount`, `notes`, `duration`, `startTime`, and `timerUpdatedAt`. `get_chore` merges both views so neither set of fields is lost.
 - **Priority is inverted.** P1 is the most urgent priority and P4 is the least; `0` means no priority is set. Filters and sorting in `list_chores` follow this scale rather than an ascending low/medium/high.
 - **Chore status has four values**, where `3` means the completion is pending approval rather than confirmed done.
 - **Activity history rows carry no chore name**, only a `choreId`. `list_activity` joins each row against the current chore list to recover a name, and reports a completion whose chore was later deleted rather than dropping it silently.
-- **Clock skew above 30 seconds will break rescheduling and reassigning** once those write tools exist, because Donetick rejects an `updatedAt` timestamp that is too far in the future.
+- **Clock skew breaks rescheduling and reassigning in both directions.** Those two endpoints take an `updatedAt` token and compare it against the stored row: older than stored is refused, and so is too far in the future (10 seconds ahead was accepted, 5 minutes was not). A machine whose clock trails the server would send a token already behind a row it just read, so `concurrencyToken` in `src/chore-request.ts` sends the later of the current time and the row's own stamp, passing that stamp through verbatim because it carries nanosecond precision a `Date` round trip truncates downward.
 - **Recurring chores drift by an hour across a daylight-saving boundary**, because Donetick advances daily and weekly recurrences in UTC rather than in the chore's local calendar day. This server reports that drift accurately; it does not cause it.
 
 ## Development

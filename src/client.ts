@@ -74,7 +74,17 @@ export class DonetickClient {
       accept: "application/json",
     };
 
-    const init: RequestInit = { method, headers, signal: AbortSignal.timeout(this.timeoutMs) };
+    // redirect: manual because fetch keeps a custom auth header across a cross-origin
+    // redirect. The spec strips Authorization, Cookie, Host and Proxy-Authorization;
+    // secretkey is none of those, so a 302 from a LAN host (plain http is allowed for
+    // those) would hand the token to whoever answered. Donetick's API has no reason
+    // to redirect, so refusing costs nothing and the error names the fix.
+    const init: RequestInit = {
+      method,
+      headers,
+      redirect: "manual",
+      signal: AbortSignal.timeout(this.timeoutMs),
+    };
 
     if (method !== "GET" && method !== "DELETE") {
       headers["content-type"] = "application/json";
@@ -88,7 +98,7 @@ export class DonetickClient {
       if (error instanceof Error && error.name === "TimeoutError") {
         throw new DonetickError(
           `The request to ${this.baseUrl} timed out after ${this.timeoutMs}ms.`,
-          { status: 0 },
+          { status: 0, indeterminate: method !== "GET" },
         );
       }
       const detail = error instanceof Error ? error.message : String(error);
@@ -96,20 +106,34 @@ export class DonetickClient {
       // A header the runtime refuses to build never leaves the process, so reporting
       // it as unreachable would send someone debugging the network instead of the
       // token. config.ts rejects control characters first; this is the backstop.
+      //
+      // detail is deliberately dropped here and nowhere else: Bun's message for this
+      // case is "Header 'secretkey' has invalid value: '<the whole value>'", so
+      // including it would print the token into a tool result the model reads and the
+      // client transcript stores. Nothing in it is actionable beyond what is said here.
       if (error instanceof TypeError && /header/i.test(detail)) {
         throw new DonetickError(
-          `The request could not be built, which usually means DONETICK_TOKEN contains an invalid character. ${detail}`,
+          "The request could not be built, which usually means DONETICK_TOKEN contains a character that cannot go in an HTTP header.",
           { status: 0 },
         );
       }
 
       throw new DonetickError(
         `Could not reach the Donetick instance at ${this.baseUrl}. ${detail}`,
-        { status: 0 },
+        { status: 0, indeterminate: method !== "GET" },
       );
     }
 
     const text = await response.text();
+
+    if (response.status >= 300 && response.status < 400) {
+      throw new DonetickError(
+        `${this.baseUrl}${path} redirected (${response.status}). This server does not follow redirects, ` +
+          "because the secretkey header would travel to the new origin. Point DONETICK_URL at the " +
+          "origin Donetick actually serves from.",
+        { status: response.status },
+      );
+    }
 
     if (!response.ok) {
       throw mapHttpError({ status: response.status, body: text, path, method });

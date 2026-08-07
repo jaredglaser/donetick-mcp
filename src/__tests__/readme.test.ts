@@ -41,6 +41,17 @@ describe("README", () => {
     expect(readme).not.toMatch(/planned but not implemented/i);
   });
 
+  test("its stated verify:live count matches the script", async () => {
+    // This one drifted while the tool-count guard above was passing: the guard
+    // only covered tools, so three checks were added and the prose stayed put.
+    const script = await Bun.file(new URL("../../scripts/verify-live.ts", import.meta.url)).text();
+    const checks = [...script.matchAll(/await check\(/g)].length;
+    const stated = readme.match(/exercises (\d+) contract facts/);
+    expect(stated).not.toBeNull();
+    // The cleanup pass runs as a check too but is not a contract fact.
+    expect(Number(stated![1])).toBe(checks - 1);
+  });
+
   test("its stated tool count matches the registry", () => {
     const stated = readme.match(/exposes (\w+) tools/);
     expect(stated).not.toBeNull();

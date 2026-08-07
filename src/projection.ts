@@ -77,7 +77,16 @@ export function projectChore(
     due_date: chore.nextDueDate,
     due_in: humanizeDueIn(dueDate, now),
     is_overdue: dueDate !== null && dueDate.getTime() < now.getTime(),
-    assigned_to: member?.displayName ?? null,
+    // An id this server cannot name is reported as an unknown member rather than as
+    // null, which reads as "nobody is assigned". enrichHistoryRow in tools/index.ts
+    // already made that distinction; these two disagreed about the same situation.
+    assigned_to:
+      chore.assignedTo === null || chore.assignedTo === undefined
+        ? null
+        : (member?.displayName ?? `member #${chore.assignedTo} (unknown)`),
+    description: chore.description ?? null,
+    points: chore.points ?? null,
+    is_rolling: chore.isRolling === true,
     labels: (chore.labelsV2 ?? []).map((label) => label.name),
     priority: PRIORITY_LABEL[chore.priority] ?? String(chore.priority),
     project: project?.name ?? null,
@@ -90,6 +99,9 @@ export function projectChore(
       done: Boolean(sub.completedAt),
     })),
     last_completed_at: chore.lastCompletedDate ?? null,
-    last_completed_by: lastBy?.displayName ?? null,
+    last_completed_by:
+      chore.lastCompletedBy === null || chore.lastCompletedBy === undefined
+        ? null
+        : (lastBy?.displayName ?? `member #${chore.lastCompletedBy} (unknown)`),
   };
 }

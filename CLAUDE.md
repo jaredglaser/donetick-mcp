@@ -45,7 +45,7 @@ bun run verify:live      # bun scripts/verify-live.ts, live check against a real
 - `src/client.ts` is the sole HTTP boundary: it sends the `secretkey` header, unwraps Donetick's `{"res": ...}` envelope, and turns HTTP failures into `DonetickError`.
 - `src/endpoints.ts` is the single source of truth for every Donetick path this server calls.
 - `src/errors.ts` maps an HTTP status and response body to a `DonetickError` with a human-readable message.
-- `src/cache.ts` holds a generic `TtlCache`, the only stateful piece in the codebase.
+- `src/cache.ts` holds a generic `TtlCache`. It and `src/probe.ts` are the only stateful modules.
 - `src/service.ts` wires the client and caches together into `DonetickService`.
 - `src/types.ts` holds the raw Donetick shapes, the projected shape returned to tools, and the `CHORE_STATUS` and `PRIORITY_LABEL` lookup tables.
 - `src/projection.ts` turns a raw chore into the trimmed `ProjectedChore` shape tools return.

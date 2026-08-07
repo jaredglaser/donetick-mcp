@@ -42,10 +42,21 @@ export const ID_SCOPED_WRITE_PATHS = [
   "/dueDate",
   "/assignee",
   "/priority",
-  "/archive",
-  "/unarchive",
   "/subtask",
 ] as const;
+
+/**
+ * Archive and unarchive are id-scoped writes too, but they never look the chore up:
+ * the repo matches on id AND created_by AND circle_id and reports a zero-row update
+ * the same way whether the chore is absent or belongs to someone else. Both cases
+ * surface as 500, so "the chore is gone" is only half the story, and it is the wrong
+ * half when the caller has just read the chore out of the list.
+ */
+export const CREATOR_ONLY_WRITE_PATHS = ["/archive", "/unarchive"] as const;
+
+export function isCreatorOnlyWrite(path: string, method: string): boolean {
+  return method !== "GET" && CREATOR_ONLY_WRITE_PATHS.some((suffix) => path.endsWith(suffix));
+}
 
 export function isIdScopedWrite(path: string, method: string): boolean {
   if (method === "GET") return false;

@@ -61,6 +61,8 @@ export interface BuildContext {
 
 export interface ChoreRequestBody {
   id?: number;
+  /** Create only. On edit Donetick carries the stored value forward, which is what preserves archived state. */
+  isActive?: boolean;
   /**
    * The version of the chore this body was merged onto, echoed back as an
    * optimistic-concurrency token. Verified on v0.1.76: sending the value the row
@@ -87,7 +89,13 @@ export interface ChoreRequestBody {
   assignStrategy: string;
   assignedTo: number | null;
   assignees: Array<{ userId: number }>;
-  labelsV2: Array<{ labelId: number }>;
+  /**
+   * Keyed `id`, matching Donetick's LabelReq. `labelId` is the join-row's name
+   * (ChoreLabels.LabelID) and is rejected by the request binding, which requires
+   * id > 0. Nothing caught it because the client only sends a non-empty list when
+   * the merge base already had labels, and no scratch chore in the suite has one.
+   */
+  labelsV2: Array<{ id: number }>;
   priority: number;
   points: number | null;
   projectId: number | null;
@@ -246,6 +254,30 @@ function carriedSubtasks(existing: RawChore): ChoreRequestBody["subTasks"] {
  * Applied identically on create and merge so a rolling chore never ends up with a
  * null nextDueDate regardless of which path produced isRolling: true.
  */
+/**
+ * Donetick's completion handler dereferences NextDueDate without a nil check when
+ * a chore has a completionWindow, and its adaptive scheduler does the same. Either
+ * combination with no due date panics the handler, so the chore can be created and
+ * then never completed: a 502 on every attempt, permanently. Verified live.
+ */
+function requireDueDateFor(
+  dueDate: Date | null,
+  frequencyType: string,
+  completionWindow: number | null,
+): void {
+  if (dueDate !== null) return;
+  if (completionWindow !== null && completionWindow !== undefined) {
+    throw new Error(
+      "A chore with a completion window needs a due date: Donetick measures the window against it and cannot complete a chore that has none.",
+    );
+  }
+  if (frequencyType === "adaptive") {
+    throw new Error(
+      "An adaptive chore needs a due date: Donetick learns its interval by comparing each completion against it and cannot complete a chore that has none.",
+    );
+  }
+}
+
 function ensureDueDateForRolling(dueDate: Date | null, isRolling: boolean, ctx: BuildContext): Date | null {
   if (isRolling && dueDate === null) {
     return parseDueDate("today", ctx.now, ctx.timezone);
@@ -260,6 +292,8 @@ export function buildCreateRequest(input: CreateInput, ctx: BuildContext): Chore
 
   const parsedDueDate = parseDueDate(input.due_date ?? null, ctx.now, ctx.timezone);
   const dueDate = ensureDueDateForRolling(parsedDueDate, isRolling, ctx);
+  const completionWindowValue = input.completion_window ?? null;
+  requireDueDateFor(dueDate, frequency.frequencyType, completionWindowValue);
 
   const strategy: AssignStrategy = input.assign_strategy
     ? validateAssignStrategy(input.assign_strategy)
@@ -269,6 +303,11 @@ export function buildCreateRequest(input: CreateInput, ctx: BuildContext): Chore
 
   return {
     name: input.name,
+    // Sent explicitly so warnings stays a signal. Donetick appends one for each of
+    // frequency, priority, isActive and isPrivate that arrives nil, and this was the
+    // only one never sent, so every create came back warning about it and a real
+    // warning was indistinguishable from the noise.
+    isActive: true,
     description: input.description ?? "",
     nextDueDate: dueDate === null ? null : dueDate.toISOString(),
     frequencyType: frequency.frequencyType,
@@ -284,7 +323,7 @@ export function buildCreateRequest(input: CreateInput, ctx: BuildContext): Chore
     isRolling,
     isPrivate: input.is_private ?? false,
     requireApproval: input.require_approval ?? false,
-    completionWindow: input.completion_window ?? null,
+    completionWindow: completionWindowValue,
     ...buildNotification(input.notify),
     ...(input.subtasks ? { subTasks: buildSubtasks(input.subtasks) } : {}),
   };
@@ -300,6 +339,21 @@ export function buildCreateRequest(input: CreateInput, ctx: BuildContext): Chore
  * absent is a stronger signal that this is genuinely the wrong shape, rather than a
  * list row that happens to omit one optional field for a legitimate reason.
  */
+/**
+ * Donetick's EditChore dissociates a chore's Thing on every edit and only puts it
+ * back when the request carries a thingTrigger. This server never sends one, and
+ * cannot: it refuses trigger recurrence at the frequency layer and has no endpoint
+ * to read a Thing's id from. So an edit would leave a trigger chore that never fires
+ * again, with a 200 and nothing in the read-back to show for it. Refusing is the
+ * only honest option until thingTrigger can be round-tripped.
+ */
+function assertNoThingTrigger(existing: RawChore): void {
+  if (existing.thingChore === undefined || existing.thingChore === null) return;
+  throw new Error(
+    `"${existing.name}" is driven by a Donetick Thing. Editing it through this server would sever that link permanently, because Donetick drops the association on every edit and only restores it for a request that names the Thing. Edit this chore in the Donetick web UI.`,
+  );
+}
+
 function assertListRowShape(existing: RawChore): void {
   const looksLikeDetailsView =
     existing.assignStrategy === undefined &&
@@ -325,6 +379,7 @@ function assertListRowShape(existing: RawChore): void {
  */
 export function mergeEditRequest(existing: RawChore, input: EditInput, ctx: BuildContext): ChoreRequestBody {
   assertListRowShape(existing);
+  assertNoThingTrigger(existing);
 
   if (!existing.id || existing.id <= 0) {
     throw new Error(`Cannot edit a chore with id ${existing.id}. The existing chore's id must be a positive number.`);
@@ -371,13 +426,19 @@ export function mergeEditRequest(existing: RawChore, input: EditInput, ctx: Buil
       ? input.reschedule_from === "completion_date"
       : existing.isRolling === true;
 
+  // A null due_date is not expressed here: PUT /chores/ ignores nextDueDate: null
+  // and keeps the stored value, so emitting null would describe an edit the server
+  // will not perform. editChore issues the clear against PUT /:id/dueDate instead,
+  // and this body carries the current date so the two agree about the interim state.
   const parsedDueDate =
-    input.due_date !== undefined
+    input.due_date !== undefined && input.due_date !== null
       ? parseDueDate(input.due_date, ctx.now, ctx.timezone)
       : existing.nextDueDate === null
         ? null
         : new Date(existing.nextDueDate);
   const dueDate = ensureDueDateForRolling(parsedDueDate, isRolling, ctx);
+  const completionWindowValue = input.completion_window ?? existing.completionWindow ?? null;
+  requireDueDateFor(dueDate, frequency.frequencyType, completionWindowValue);
 
   const subTasks = input.subtasks !== undefined ? buildSubtasks(input.subtasks) : carriedSubtasks(existing);
 
@@ -397,7 +458,7 @@ export function mergeEditRequest(existing: RawChore, input: EditInput, ctx: Buil
     assignStrategy: strategy,
     assignedTo: assigneeIds.includes(existing.assignedTo ?? -1) ? existing.assignedTo : (assigneeIds[0] ?? null),
     assignees: assigneeIds.map((userId) => ({ userId })),
-    labelsV2: (existing.labelsV2 ?? []).map((label) => ({ labelId: label.id })),
+    labelsV2: (existing.labelsV2 ?? []).map((label) => ({ id: label.id })),
     priority: priorityValue(input.priority, existing.priority),
     // Checked against undefined, not with ??, so an explicit null clears the value
     // instead of falling through to the existing one. The schema advertises points
@@ -408,7 +469,7 @@ export function mergeEditRequest(existing: RawChore, input: EditInput, ctx: Buil
     isRolling,
     isPrivate: input.is_private ?? existing.isPrivate ?? false,
     requireApproval: input.require_approval ?? existing.requireApproval ?? false,
-    completionWindow: input.completion_window ?? existing.completionWindow ?? null,
+    completionWindow: completionWindowValue,
     ...mergeNotification(input.notify, existing),
     ...(subTasks ? { subTasks } : {}),
   };

@@ -94,8 +94,25 @@ describe("buildFrequency", () => {
     expect(buildFrequency({ type: "daily" }, tz).frequencyMetadata.timezone).toBe(tz);
   });
 
-  test("a time of day is carried through", () => {
-    expect(buildFrequency({ type: "daily", time: "07:30" }, tz).frequencyMetadata.time).toBe("07:30");
+  test("a time of day is sent as RFC3339, which is what Donetick binds", () => {
+    // Verified live on v0.1.76: the binding is datetime=2006-01-02T15:04:05Z07:00
+    // and the scheduler parses with time.RFC3339, so "07:30" is a 400. Every value
+    // the old HH:MM passthrough produced was one Donetick refused, which made the
+    // option unusable rather than merely wrong. The date is a placeholder; only the
+    // clock time and the offset are read.
+    expect(buildFrequency({ type: "daily", time: "07:30" }, tz).frequencyMetadata.time).toBe(
+      "1970-01-01T07:30:00-05:00",
+    );
+  });
+
+  test("the offset follows the chore's own zone, so the wall-clock time does not shift", () => {
+    expect(
+      buildFrequency({ type: "daily", time: "07:30" }, "Asia/Kolkata").frequencyMetadata.time,
+    ).toBe("1970-01-01T07:30:00+05:30");
+  });
+
+  test("a caller still writes HH:MM, and a malformed one is still refused", () => {
+    expect(() => buildFrequency({ type: "daily", time: "7:30 am" }, tz)).toThrow(/time/);
   });
 
   test("trigger is accepted but flagged as unsupported here", () => {

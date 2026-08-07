@@ -1,3 +1,4 @@
+import { isValidTimezone } from "@/time";
 import { z } from "zod";
 
 export interface Config {
@@ -6,15 +7,6 @@ export interface Config {
   timezone: string;
   cacheTtlMs: number;
   timeoutMs: number;
-}
-
-function isValidTimezone(tz: string): boolean {
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: tz });
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function isValidDonetickUrl(value: string): boolean {

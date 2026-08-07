@@ -68,6 +68,9 @@ interface ChoreCreateBody {
   requireApproval: boolean;
   completionWindow: number | null;
   notification: boolean;
+  isActive?: boolean;
+  subTasks?: Array<{ name: string; orderId: number; completedAt: string | null }>;
+  notificationMetadata?: Record<string, unknown>;
 }
 
 async function main(): Promise<void> {
@@ -108,27 +111,21 @@ async function main(): Promise<void> {
   }
 
   /**
-   * Also stands in as the "create returns a bare number" check: the caller of
-   * this function gets the same shape assertion for free, so that check below
-   * just calls this and reports what it got.
+   * Recurrence, labels, points and the approval flag live only on the chores list
+   * row. GET /:id/details omits them, so reading a round-trip from there reports a
+   * regression that is this script's own bug.
    */
-  /**
- * Recurrence, labels, points and the approval flag live only on the chores list row.
- * GET /:id/details omits them, which the field-set check below proves. Reading a
- * round-trip from /details reports a false regression, so every shape assertion
- * about those fields must come from here.
- */
-async function listRowById(id: number): Promise<Record<string, unknown>> {
-  const rows = (await client.get(endpoints.listChores())) as Array<Record<string, unknown>>;
-  const row = rows.find((r) => r.id === id);
-  if (!row) throw new Error(`chore ${id} is not in the chores list`);
-  return row;
-}
+  async function listRowById(id: number): Promise<Record<string, unknown>> {
+    const rows = (await client.get(endpoints.listChores())) as Array<Record<string, unknown>>;
+    const row = rows.find((r) => r.id === id);
+    if (!row) throw new Error(`chore ${id} is not in the chores list`);
+    return row;
+  }
 
-/**
+  /**
    * Create answers with a bare id, or with {res, warnings} when Donetick defaulted
-   * something. Both shapes are the contract, and the check below pins that; this
-   * helper only needs the id out of either.
+   * a field. Both shapes are the contract, pinned by the check below; this helper
+   * only needs the id out of either.
    */
   function createdIdOf(response: unknown): number {
     const bare =
@@ -183,45 +180,40 @@ async function listRowById(id: number): Promise<Record<string, unknown>> {
 
     // Create and shape.
 
-    await check("POST /chores/ returns a bare id, or {res, warnings} when it defaults a field", async () => {
-      // Both shapes are real, and the warnings one only became visible once the
-      // client stopped unwrapping any envelope containing res: that stripped the
-      // siblings, so create_chore's warnings were permanently undefined while its
-      // type and tests both claimed otherwise. Omitting isActive is the reliable
-      // way to provoke one on v0.1.76.
-      const withDefault = await client.post(
+    await check("POST /chores/ answers {res: id}, with warnings alongside when it defaults a field", async () => {
+      // Measured 2026-08-06 on the raw body, not through unwrap: create always
+      // wraps, and adds warnings when it filled something in. The "bare number"
+      // shape extractCreatedId also accepts is what unwrap produces downstream, not
+      // anything Donetick sends. Omitting isActive reliably provokes a warning.
+      //
+      // postEnvelope, not post: post unwraps res and takes the siblings with it,
+      // which left an earlier version of this check reporting "Donetick returned no
+      // warnings" when it had returned some.
+      const withDefault = await client.postEnvelope(
         endpoints.createChore(),
         baseChoreBody(scoped("warns")),
       );
-      const warnedId = createdIdOf(withDefault);
-      createdChoreIds.push(warnedId);
+      createdChoreIds.push(createdIdOf(withDefault));
 
+      const siblings =
+        withDefault && typeof withDefault === "object" && !Array.isArray(withDefault)
+          ? Object.keys(withDefault).filter((key) => key !== "res")
+          : [];
       const warnings =
         withDefault && typeof withDefault === "object" && "warnings" in withDefault
           ? (withDefault as { warnings: unknown }).warnings
           : undefined;
 
-      const explicit = await client.post(endpoints.createChore(), {
-        ...baseChoreBody(scoped("bare-id")),
-        isActive: true,
-      } as ChoreCreateBody);
-      const bareId = createdIdOf(explicit);
-      createdChoreIds.push(bareId);
-
       if (warnings === undefined) {
         return {
           status: "warn",
           detail:
-            `chore ${warnedId} created with no isActive and Donetick returned no warnings. ` +
-            "Nothing breaks, but the envelope shape create_chore reports warnings from is no longer exercised here.",
+            "a create that omitted isActive drew no warnings, so create_chore's warnings field is " +
+            `no longer exercised here. Siblings of res seen: ${siblings.join(", ") || "none"}.`,
         };
       }
-      if (typeof explicit === "number") {
-        return { detail: `warned create returned {res, warnings: ${JSON.stringify(warnings)}}, clean create returned a bare ${bareId}` };
-      }
       return {
-        status: "warn",
-        detail: `even a create with every field set answered with an envelope (${JSON.stringify(explicit)}), so the bare-number shape may be gone`,
+        detail: `{res, ${siblings.join(", ")}}; warnings: ${JSON.stringify(warnings)}`,
       };
     });
 
@@ -336,6 +328,12 @@ async function listRowById(id: number): Promise<Record<string, unknown>> {
         // The body goes through the real mergeEditRequest rather than a hand-built
         // one, so a regression in Donetick's binding and a regression in the merge
         // are both in scope.
+        const [members, projects] = (await Promise.all([
+          client.get(endpoints.circleMembers()),
+          client.get(endpoints.projects()).then((p) => p ?? []),
+        ])) as [Member[], Project[]];
+        const someone = members[0]!.userId;
+
         const id = await createScratchChore(
           baseChoreBody(scoped("edit-preserve"), {
             frequencyType: "interval",
@@ -347,16 +345,26 @@ async function listRowById(id: number): Promise<Record<string, unknown>> {
             priority: 2,
             points: 5,
             requireApproval: true,
-            isRolling: true,
+            // Not rolling: ensureDueDateForRolling rewrites a lost due date to
+            // today, so a rolling fixture turns "the date was destroyed" into
+            // "the date is plausible" and the check cannot see the difference.
+            isRolling: false,
             completionWindow: 4,
+            // Populated on purpose. An empty assignee list cannot be emptied and a
+            // chore with no subtasks cannot lose them, so a bare fixture makes the
+            // destruction this check exists to catch impossible to observe.
+            assignedTo: someone,
+            assignees: [{ userId: someone }],
+            subTasks: [
+              { name: "first", orderId: 0, completedAt: new Date().toISOString() },
+              { name: "second", orderId: 1, completedAt: null },
+            ],
+            notification: true,
+            notificationMetadata: { dueDate: true, templates: [{ value: 1, unit: "h" }] },
           }),
         );
 
         const before = (await listRowById(id)) as unknown as RawChore;
-        const [members, projects] = (await Promise.all([
-          client.get(endpoints.circleMembers()),
-          client.get(endpoints.projects()).then((p) => p ?? []),
-        ])) as [Member[], Project[]];
 
         const body = mergeEditRequest(
           before,
@@ -372,6 +380,8 @@ async function listRowById(id: number): Promise<Record<string, unknown>> {
         }
 
         const preserved = [
+          "nextDueDate",
+          "assignedTo",
           "frequencyType",
           "frequency",
           "priority",
@@ -396,9 +406,15 @@ async function listRowById(id: number): Promise<Record<string, unknown>> {
           );
         }
 
-        if (JSON.stringify(before.frequencyMetadata) !== JSON.stringify(after.frequencyMetadata)) {
+        const deepFields = ["frequencyMetadata", "assignees", "subTasks", "notificationMetadata"] as const;
+        const changed = deepFields.filter(
+          (field) => JSON.stringify(before[field]) !== JSON.stringify(after[field]),
+        );
+        if (changed.length > 0) {
           throw new Error(
-            `a rename changed frequencyMetadata: ${JSON.stringify(before.frequencyMetadata)} -> ${JSON.stringify(after.frequencyMetadata)}`,
+            `a rename changed ${changed
+              .map((f) => `${f} ${JSON.stringify(before[f])} -> ${JSON.stringify(after[f])}`)
+              .join("; ")}`,
           );
         }
 
@@ -441,6 +457,91 @@ async function listRowById(id: number): Promise<Record<string, unknown>> {
             detail:
               'Donetick now accepts a null description on PUT /chores/. Nothing breaks, since both builders send "" regardless, but the coercion in chore-request.ts is no longer load-bearing.',
           };
+    });
+
+    await check("PUT /chores/ ignores nextDueDate: null, so a clear has to go to /:id/dueDate", async () => {
+      // edit_chore advertises due_date: null. The full edit assigns nextDueDate only
+      // when non-nil and otherwise keeps the stored value, so a null there is a 200
+      // that changes nothing. editChore routes the clear to /:id/dueDate because of
+      // this. If the full edit ever starts honouring null, that detour can go.
+      const id = await createScratchChore(baseChoreBody(scoped("cleardue"), { frequencyType: "daily" }));
+      const row = (await listRowById(id)) as unknown as RawChore;
+      await client.put(endpoints.editChore(), {
+        ...mergeEditRequest(row, {}, { members: [], projects: [], now: new Date(), timezone: config.timezone }),
+        nextDueDate: null,
+      });
+      const afterFullEdit = (await listRowById(id)) as unknown as RawChore;
+
+      await client.put(endpoints.updateDueDate(id), {
+        dueDate: null,
+        updatedAt: concurrencyToken(afterFullEdit, new Date()),
+      });
+      const afterTargeted = (await listRowById(id)) as unknown as RawChore;
+
+      if (afterTargeted.nextDueDate !== null) {
+        throw new Error("PUT /:id/dueDate no longer clears a due date, so edit_chore cannot clear one at all");
+      }
+      return afterFullEdit.nextDueDate === null
+        ? {
+            status: "warn",
+            detail: "the full edit now honours nextDueDate: null, so editChore's separate /dueDate call is redundant",
+          }
+        : { detail: "full edit kept the date, targeted update cleared it" };
+    });
+
+    await check("frequencyMetadata.time is RFC3339, not HH:MM", async () => {
+      // buildFrequency converts HH:MM because of this. Donetick binds
+      // datetime=2006-01-02T15:04:05Z07:00 and the scheduler parses time.RFC3339, so
+      // the HH:MM this server used to send was refused on every create that set one.
+      const withClock = {
+        frequencyType: "days_of_the_week",
+        frequencyMetadata: { days: ["monday"], time: "1970-01-01T09:00:00-05:00", timezone: config.timezone },
+      };
+      const id = await createScratchChore(baseChoreBody(scoped("time-rfc"), withClock));
+      const row = (await listRowById(id)) as unknown as RawChore;
+      const stored = (row.frequencyMetadata as Record<string, unknown> | null)?.time;
+
+      let hhmmRejected = false;
+      try {
+        const bad = await client.postEnvelope(
+          endpoints.createChore(),
+          baseChoreBody(scoped("time-hhmm"), {
+            frequencyType: "days_of_the_week",
+            frequencyMetadata: { days: ["monday"], time: "09:00", timezone: config.timezone },
+          }),
+        );
+        createdChoreIds.push(createdIdOf(bad));
+      } catch {
+        hhmmRejected = true;
+      }
+
+      if (!hhmmRejected) {
+        return {
+          status: "warn",
+          detail: `Donetick now accepts HH:MM for frequencyMetadata.time, so normalizeTime's conversion is no longer required. RFC3339 stored as ${JSON.stringify(stored)}.`,
+        };
+      }
+      return { detail: `HH:MM refused, RFC3339 stored as ${JSON.stringify(stored)}` };
+    });
+
+    await check("a completion window with no due date makes completion fail, so the client refuses to create one", async () => {
+      // Donetick dereferences NextDueDate without a nil check when a completion
+      // window is set, so the chore can be created and then never completed. Verified
+      // live: every /do answers 502. requireDueDateFor in chore-request.ts refuses the
+      // combination rather than letting a caller make an uncompletable chore.
+      const id = await createScratchChore(
+        baseChoreBody(scoped("window"), { frequencyType: "daily", completionWindow: 4, nextDueDate: null }),
+      );
+      try {
+        await client.post(endpoints.completeChore(id), {});
+      } catch {
+        return { detail: "completion refused as expected, which is why the client blocks the combination" };
+      }
+      return {
+        status: "warn",
+        detail:
+          "a chore with a completion window and no due date now completes cleanly, so requireDueDateFor could allow the combination again",
+      };
     });
 
     await check("PUT /:id/dueDate rejects a body that omits updatedAt", async () => {
@@ -669,6 +770,58 @@ async function listRowById(id: number): Promise<Record<string, unknown>> {
         throw new Error(`archived chore ${id} survived a DELETE that reported success`);
       }
       return { detail: `archived chore ${id} deleted and gone from both lists` };
+    });
+
+    await check("POST /:id/nudge answers a bare {message} with no res envelope", async () => {
+      // nudgeChore reads message off the top level. unwrap() discards every sibling
+      // of res, so if this endpoint ever starts answering {res, message} like
+      // /:id/do does, messageOf goes undefined, the "across 0 device(s)" detection
+      // stops firing, and every nudge reports as delivered. Measured 2026-08-06:
+      // bare {message}, no res.
+      const roster = (await client.get(endpoints.circleMembers())) as Member[];
+      if (roster.length < 2) {
+        return {
+          status: "warn",
+          detail:
+            "this circle has one member, and Donetick removes the caller from the nudge target list, " +
+            "so the nudge contract cannot be exercised here",
+        };
+      }
+      const other = roster.find((m) => m.userId !== roster[0]!.userId)!;
+      const id = await createScratchChore(
+        baseChoreBody(scoped("nudge"), {
+          frequencyType: "daily",
+          assignStrategy: "keep_last_assigned",
+          assignedTo: other.userId,
+          assignees: [{ userId: other.userId }],
+        }),
+      );
+
+      const response = await client.post(endpoints.nudgeChore(id), {
+        all_assignees: false,
+        message: "",
+      });
+
+      if (response === null || typeof response !== "object") {
+        throw new Error(`expected an object back, got ${JSON.stringify(response)}`);
+      }
+      if (!("message" in response)) {
+        throw new Error(
+          `the nudge response carries no readable message after unwrap: ${JSON.stringify(response)}. ` +
+            "nudgeChore derives delivery from that string, so it would report every nudge as delivered.",
+        );
+      }
+      const message = (response as { message: unknown }).message;
+      if (typeof message !== "string") {
+        throw new Error(`message is not a string: ${JSON.stringify(message)}`);
+      }
+      if (!/across \d+ device/i.test(message)) {
+        return {
+          status: "warn",
+          detail: `the message no longer carries an "across N device(s)" count (${JSON.stringify(message)}), so nudgeChore's delivery detection is now inert`,
+        };
+      }
+      return { detail: `bare {message}, no res envelope: ${JSON.stringify(message)}` };
     });
 
     // Run after the writes above (do, skip, complete) so there is fresh history to inspect.
