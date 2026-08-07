@@ -211,18 +211,15 @@ function buildNotification(
 }
 
 /**
- * Carries the existing notification settings forward when the edit does not touch
- * them. buildNotification alone cannot do this: notify === undefined there means
- * "turn notifications off", which is correct for a create (nothing to carry from)
- * but would silently strip an existing chore's reminders on every edit that does
- * not mention notify.
- */
-/**
- * Donetick's notification planner dereferences the metadata whenever notification is
- * true, in a bare goroutine whose panic would take the process down rather than
- * being recovered by the request middleware. A chore whose metadata column is null
- * comes back as notificationMetadata: null, so carrying notification true forward
- * without it is the shape that reaches that deref.
+ * Carries existing notification settings forward when the edit does not touch them.
+ * buildNotification cannot: notify === undefined there means "turn them off", which
+ * is right on a create and would strip an existing chore's reminders on an edit.
+ *
+ * Donetick's planner dereferences the metadata whenever notification is true, in a
+ * bare goroutine whose panic would take the process down rather than being recovered
+ * by the request middleware. A chore whose metadata column is null comes back as
+ * notificationMetadata: null, so carrying the flag forward without it is the shape
+ * that reaches that deref.
  */
 function mergeNotification(
   notify: NotifyInput | undefined,
@@ -268,8 +265,16 @@ export function requireDueDateFor(
   dueDate: Date | null,
   frequencyType: string,
   completionWindow: number | null,
+  isRolling = false,
 ): void {
   if (dueDate !== null) return;
+  if (isRolling) {
+    throw new Error(
+      "A rolling chore needs a due date: it reschedules from its completion date, and Donetick binds " +
+        'the two together. Turn rolling off first with reschedule_from: "due_date", or set a date ' +
+        "rather than clearing it.",
+    );
+  }
   // Any window at all, including 0. Donetick gates the due-date deref on the pointer
   // being non-nil rather than on the value, and 0 is not nullish, so it survives the
   // ?? chain and reaches the wire as a real window. Measured: a chore with
@@ -363,7 +368,7 @@ function assertNoThingTrigger(existing: RawChore): void {
   const hasThing = existing.thingChore !== undefined && existing.thingChore !== null;
   if (!isTrigger && !hasThing) return;
   throw new Error(
-    `"${existing.name}" is driven by a Donetick Thing. Editing it through this server would sever that link permanently, because Donetick drops the association on every edit and only restores it for a request that names the Thing. Edit this chore in the Donetick web UI.`,
+    `"${existing.name}" is driven by a Donetick Thing. Editing it through this server would sever that link permanently, because Donetick drops the association on every edit and only restores it for a request that names the Thing. Edit this chore in the Donetick web UI. Every tool that rewrites the whole chore is blocked until then, reassign_chore included.`,
   );
 }
 
@@ -391,7 +396,7 @@ function assertSchedulableFrequency(existing: RawChore): void {
       `"${existing.name}" is an hourly chore carrying a time of day, which Donetick cannot advance: ` +
         "it resets the clock to that time before adding the hours, so the chore freezes on its " +
         'second completion. Pass frequency: {type: "interval", every: N, unit: "hours"} with no ' +
-        "time to repair it.",
+        "time to repair it, through edit_chore. Every tool that rewrites the whole chore is blocked until then, reassign_chore included.",
     );
   }
 
@@ -407,7 +412,7 @@ function assertSchedulableFrequency(existing: RawChore): void {
       hasWeekdays ? "carrying weekday names" : "with no months"
     }, so every completion fails. This server used to build "the first saturday of every month" that ` +
       'way. Pass frequency: {type: "days_of_the_week", days: ["saturday"], week_pattern: ' +
-      '"week_of_month", occurrences: [1]} to repair it, or day_of_the_month with day_of_month and months.',
+      '"week_of_month", occurrences: [1]} to repair it through edit_chore, or day_of_the_month with day_of_month and months. Every tool that rewrites the whole chore is blocked until then, reassign_chore included.',
   );
 }
 

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { setSubtaskCompleted } from "../subtasks";
-import type { WriteContext } from "@/tools/write";
+import type { ToolContext } from "@/tools/context";
 import type { RawChore } from "@/types";
 
 const now = new Date("2026-08-06T16:00:00Z");
@@ -42,7 +42,7 @@ function fakeService(opts: FakeOptions = {}) {
   return { service, calls, bodies, invalidations: () => invalidations };
 }
 
-function ctxFor(service: ReturnType<typeof fakeService>["service"]): WriteContext {
+function ctxFor(service: ReturnType<typeof fakeService>["service"]): ToolContext {
   return { service: service as never, now: () => now, timezone: tz };
 }
 

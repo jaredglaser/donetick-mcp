@@ -101,15 +101,19 @@ export function buildFrequency(input: FrequencyInput, timezone: string, now: Dat
     // the chore actually was.
     if (input.type === "interval" && (input.unit ?? "days") === "hours") {
       throw new Error(
-        'An hourly interval cannot carry a time of day: Donetick resets the clock to that time ' +
+        "An hourly interval cannot carry a time of day: Donetick resets the clock to that time " +
           "before adding the hours, so the chore freezes on its second completion and stays " +
-          "overdue. Drop time, or use a daily or longer unit.",
+          "overdue. Drop time. To start the cycle at a particular hour, put that hour on due_date " +
+          "as a full timestamp with an offset; the interval then steps from there.",
       );
     }
     if (!TIME_AWARE_TYPES.includes(input.type)) {
+      const example = `2026-08-07T${input.time}:00${utcOffsetFor(timezone, now)}`;
       throw new Error(
         `Frequency type "${input.type}" ignores a time of day: Donetick reads it only for ` +
-          `${TIME_AWARE_TYPES.join(", ")}. Set the hour through due_date instead, which every type honors.`,
+          `${TIME_AWARE_TYPES.join(", ")}. Put the hour on due_date instead, as a full timestamp ` +
+          `carrying this circle's offset, for example "${example}". A bare date or a phrase like ` +
+          '"tomorrow" resolves to 09:00 local and will not carry the hour you asked for.',
       );
     }
     metadata.time = normalizeTime(input.time, timezone, now);

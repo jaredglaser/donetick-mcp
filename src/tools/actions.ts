@@ -3,7 +3,7 @@ import { zonedYmd } from "@/time";
 import { endpoints } from "@/endpoints";
 import { loadChoreById } from "@/tools/chore-lookup";
 import { resolveMember } from "@/resolve";
-import type { WriteContext } from "@/tools/write";
+import type { ToolContext } from "@/tools/context";
 
 /** Same day in the given zone, which is not the same question as "within 24 hours". */
 function isSameCalendarDay(a: Date, b: Date, tz: string): boolean {
@@ -56,7 +56,7 @@ export interface CompleteOutcome {
   message: string;
 }
 
-export async function completeChore(input: CompleteInput, ctx: WriteContext): Promise<CompleteOutcome> {
+export async function completeChore(input: CompleteInput, ctx: ToolContext): Promise<CompleteOutcome> {
   const chore = await loadChoreById(input.chore_id, ctx);
 
   const body: Record<string, unknown> = {};
@@ -139,8 +139,12 @@ export async function completeChore(input: CompleteInput, ctx: WriteContext): Pr
     name: chore.name,
     completed: true,
     pending_approval: false,
-    next_due_date: nextDue.present ? nextDue.value : chore.nextDueDate,
-    message: `Completed "${chore.name}".${rollingNote}`,
+    next_due_date: nextDue.present ? nextDue.value : null,
+    message: `Completed "${chore.name}".${rollingNote}${
+      nextDue.present
+        ? ""
+        : " Donetick did not report a new due date, so the next occurrence is unknown here; call get_chore to see it."
+    }`,
   };
 }
 
@@ -152,20 +156,27 @@ export interface SkipOutcome {
   id: number;
   name: string;
   next_due_date: string | null;
+  message: string;
 }
 
-export async function skipChore(input: SkipInput, ctx: WriteContext): Promise<SkipOutcome> {
+export async function skipChore(input: SkipInput, ctx: ToolContext): Promise<SkipOutcome> {
   const chore = await loadChoreById(input.chore_id, ctx);
 
   const response = await ctx.service.write(() =>
     ctx.service.client.post(endpoints.skipChore(chore.id), {}),
   );
 
+  // Null rather than the pre-skip date. The value read before the write is the
+  // occurrence that was just skipped, and reporting it under a field named
+  // next_due_date is indistinguishable from a verified answer.
   const nextDue = nextDueDateOf(response);
   return {
     id: chore.id,
     name: chore.name,
-    next_due_date: nextDue.present ? nextDue.value : chore.nextDueDate,
+    next_due_date: nextDue.present ? nextDue.value : null,
+    message: nextDue.present
+      ? `Skipped "${chore.name}".`
+      : `Skipped "${chore.name}". Donetick did not report the new due date; call get_chore to see it.`,
   };
 }
 
@@ -185,7 +196,7 @@ export interface UndoOutcome {
  * the active list name resolution searches, so name lookup could never find it.
  * complete_chore returns the id for exactly this reason.
  */
-export async function undoChore(input: UndoInput, ctx: WriteContext): Promise<UndoOutcome> {
+export async function undoChore(input: UndoInput, ctx: ToolContext): Promise<UndoOutcome> {
   if (typeof input.chore_id !== "number") {
     if (typeof input.name === "string") {
       throw new Error(
@@ -208,19 +219,31 @@ export interface ApprovalInput {
 export interface ApprovalOutcome {
   id: number;
   name: string;
-  approved: boolean;
+  /** Named rather than a boolean: approved false is what a failed approval looks like. */
+  decision: "approved" | "rejected";
+  message: string;
 }
 
-export async function approveChore(input: ApprovalInput, ctx: WriteContext): Promise<ApprovalOutcome> {
+export async function approveChore(input: ApprovalInput, ctx: ToolContext): Promise<ApprovalOutcome> {
   const chore = await loadChoreById(input.chore_id, ctx);
   await ctx.service.write(() => ctx.service.client.post(endpoints.approveChore(chore.id), {}));
-  return { id: chore.id, name: chore.name, approved: true };
+  return {
+    id: chore.id,
+    name: chore.name,
+    decision: "approved",
+    message: `The pending completion of "${chore.name}" was approved.`,
+  };
 }
 
-export async function rejectChore(input: ApprovalInput, ctx: WriteContext): Promise<ApprovalOutcome> {
+export async function rejectChore(input: ApprovalInput, ctx: ToolContext): Promise<ApprovalOutcome> {
   const chore = await loadChoreById(input.chore_id, ctx);
   await ctx.service.write(() => ctx.service.client.post(endpoints.rejectChore(chore.id), {}));
-  return { id: chore.id, name: chore.name, approved: false };
+  return {
+    id: chore.id,
+    name: chore.name,
+    decision: "rejected",
+    message: `The pending completion of "${chore.name}" was rejected. The chore is not marked done.`,
+  };
 }
 
 export interface NudgeInput {
@@ -236,7 +259,7 @@ export interface NudgeOutcome {
   message: string;
 }
 
-export async function nudgeChore(input: NudgeInput, ctx: WriteContext): Promise<NudgeOutcome> {
+export async function nudgeChore(input: NudgeInput, ctx: ToolContext): Promise<NudgeOutcome> {
   const chore = await loadChoreById(input.chore_id, ctx);
   const members = await ctx.service.members();
 

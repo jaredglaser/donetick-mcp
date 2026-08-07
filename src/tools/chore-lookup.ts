@@ -1,5 +1,5 @@
 import type { RawChore } from "@/types";
-import type { WriteContext } from "@/tools/write";
+import type { ToolContext } from "@/tools/context";
 
 function requireChoreId(chore_id: number | undefined): number {
   if (typeof chore_id !== "number") {
@@ -35,7 +35,7 @@ async function loadFrom(
  */
 export async function loadChoreById(
   chore_id: number | undefined,
-  ctx: WriteContext,
+  ctx: ToolContext,
 ): Promise<RawChore> {
   const id = requireChoreId(chore_id);
   const cached = (await ctx.service.chores()).find((chore) => chore.id === id);
@@ -55,7 +55,7 @@ export async function loadChoreById(
  */
 export function loadArchivedChoreById(
   chore_id: number | undefined,
-  ctx: WriteContext,
+  ctx: ToolContext,
 ): Promise<RawChore> {
   return loadFrom(chore_id, () => ctx.service.archivedChores(), "the archived chore list");
 }

@@ -4,6 +4,7 @@ import {
   buildCreateRequest,
   concurrencyToken,
   mergeEditRequest,
+  requireDueDateFor,
   type AssignStrategy,
   type BuildContext,
 } from "@/chore-request";
@@ -920,5 +921,22 @@ describe("an hourly chore already carrying a time", () => {
       frequencyMetadata: { unit: "hours", timezone: tz },
     } as unknown as RawChore;
     expect(() => mergeEditRequest(fine, { name: "Renamed" }, ctx())).not.toThrow();
+  });
+});
+
+describe("a rolling chore cannot be left without a due date", () => {
+  // ensureDueDateForRolling exists because Donetick binds the two together, but both
+  // clear paths write the date on a separate endpoint after the merge, so neither
+  // passed through it. The chore ended in exactly the state that helper prevents.
+  test("clearing is refused", () => {
+    expect(() => requireDueDateFor(null, "interval", null, true)).toThrow(/rolling/i);
+  });
+
+  test("the message names the way out", () => {
+    expect(() => requireDueDateFor(null, "interval", null, true)).toThrow(/reschedule_from/);
+  });
+
+  test("a chore that does not roll is unaffected", () => {
+    expect(() => requireDueDateFor(null, "interval", null, false)).not.toThrow();
   });
 });

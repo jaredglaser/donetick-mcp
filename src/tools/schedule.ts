@@ -8,7 +8,7 @@ import { parseDueDate } from "@/dates";
 import { endpoints } from "@/endpoints";
 import { loadArchivedChoreById, loadChoreById } from "@/tools/chore-lookup";
 import { resolveMember } from "@/resolve";
-import type { WriteContext } from "@/tools/write";
+import type { ToolContext } from "@/tools/context";
 import { PRIORITY_LABEL, PRIORITY_VALUE, type RawChore } from "@/types";
 
 export interface RescheduleInput {
@@ -56,7 +56,7 @@ export interface ArchiveOutcome {
   name: string;
 }
 
-function loadActiveChore(chore_id: number | undefined, ctx: WriteContext): Promise<RawChore> {
+function loadActiveChore(chore_id: number | undefined, ctx: ToolContext): Promise<RawChore> {
   return loadChoreById(chore_id, ctx);
 }
 
@@ -65,18 +65,23 @@ function loadActiveChore(chore_id: number | undefined, ctx: WriteContext): Promi
  * definition absent from it. Resolving against the active cache here would make every
  * unarchiveChore call fail with "not found" on exactly the chore it is meant to act on.
  */
-function loadArchivedChore(chore_id: number | undefined, ctx: WriteContext): Promise<RawChore> {
+function loadArchivedChore(chore_id: number | undefined, ctx: ToolContext): Promise<RawChore> {
   return loadArchivedChoreById(chore_id, ctx);
 }
 
-export async function rescheduleChore(input: RescheduleInput, ctx: WriteContext): Promise<RescheduleOutcome> {
+export async function rescheduleChore(input: RescheduleInput, ctx: ToolContext): Promise<RescheduleOutcome> {
   const existing = await loadActiveChore(input.chore_id, ctx);
   const parsed = parseDueDate(input.due_date, ctx.now(), ctx.timezone);
   const dueDate = parsed === null ? null : parsed.toISOString();
   // This endpoint writes the due date directly, so it never passes through the
   // builders where the guard normally runs. Clearing the date on a chore with a
   // completion window leaves it uncompletable, and an adaptive frequency unskippable.
-  requireDueDateFor(parsed, existing.frequencyType, existing.completionWindow ?? null);
+  requireDueDateFor(
+    parsed,
+    existing.frequencyType,
+    existing.completionWindow ?? null,
+    existing.isRolling === true,
+  );
   const updatedAt = concurrencyToken(existing, ctx.now());
 
   await ctx.service.write(() =>
@@ -94,7 +99,7 @@ function currentAssigneeIds(existing: RawChore): number[] {
   return [];
 }
 
-export async function reassignChore(input: ReassignInput, ctx: WriteContext): Promise<ReassignOutcome> {
+export async function reassignChore(input: ReassignInput, ctx: ToolContext): Promise<ReassignOutcome> {
   const existing = await loadActiveChore(input.chore_id, ctx);
   const members = await ctx.service.members();
   const target = resolveMember(input.assignee, members);
@@ -145,7 +150,7 @@ function resolvePriority(priority: string | number): number {
   return value;
 }
 
-export async function setPriority(input: SetPriorityInput, ctx: WriteContext): Promise<SetPriorityOutcome> {
+export async function setPriority(input: SetPriorityInput, ctx: ToolContext): Promise<SetPriorityOutcome> {
   const existing = await loadActiveChore(input.chore_id, ctx);
   const priority = resolvePriority(input.priority);
 
@@ -166,7 +171,7 @@ export async function setPriority(input: SetPriorityInput, ctx: WriteContext): P
   };
 }
 
-export async function archiveChore(input: ArchiveInput, ctx: WriteContext): Promise<ArchiveOutcome> {
+export async function archiveChore(input: ArchiveInput, ctx: ToolContext): Promise<ArchiveOutcome> {
   const existing = await loadActiveChore(input.chore_id, ctx);
 
   await ctx.service.write(() => ctx.service.client.put(endpoints.archiveChore(existing.id), {}));
@@ -174,7 +179,7 @@ export async function archiveChore(input: ArchiveInput, ctx: WriteContext): Prom
   return { kind: "archived", chore_id: existing.id, name: existing.name };
 }
 
-export async function unarchiveChore(input: ArchiveInput, ctx: WriteContext): Promise<ArchiveOutcome> {
+export async function unarchiveChore(input: ArchiveInput, ctx: ToolContext): Promise<ArchiveOutcome> {
   const existing = await loadArchivedChore(input.chore_id, ctx);
 
   await ctx.service.write(() => ctx.service.client.put(endpoints.unarchiveChore(existing.id), {}));

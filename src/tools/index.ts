@@ -32,7 +32,8 @@ import {
   type SetPriorityInput,
 } from "@/tools/schedule";
 import { setSubtaskCompleted, type SetSubtaskInput } from "@/tools/subtasks";
-import { createChore, deleteChore, editChore, type WriteContext } from "@/tools/write";
+import { createChore, deleteChore, editChore } from "@/tools/write";
+import type { ToolContext } from "@/tools/context";
 import { CHORE_HISTORY_STATUS, type Member, type RawChore } from "@/types";
 import { getChore, listChores, type ListArgs } from "@/tools/read";
 
@@ -62,11 +63,7 @@ export interface ToolDefinition {
   handler: (args: Record<string, unknown>, mcp?: McpExtras) => Promise<ToolResult>;
 }
 
-export interface ToolDeps {
-  service: DonetickService;
-  timezone: string;
-  now: () => Date;
-}
+export type { ToolContext as ToolDeps } from "@/tools/context";
 
 function ok(payload: unknown): ToolResult {
   return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
@@ -158,14 +155,17 @@ const frequencySchema = z.object({
     .optional()
     .describe(
       "For days_of_the_week: pick a particular occurrence of the weekday rather than every one. " +
-        "Use week_of_month with occurrences.",
+        "week_of_month and week_of_quarter both require occurrences, and Donetick answers 500 on " +
+        "every completion without them. every_week means every matching weekday and takes none.",
     ),
   occurrences: z
     .array(z.number())
     .optional()
     .describe(
-      "Which occurrence of the weekday. Needs week_pattern: Donetick ignores occurrences without " +
-        "one. 1 is the first, -1 the last, and several may be given.",
+      "Which occurrence of the weekday, counted inside the period week_pattern names. Requires " +
+        "week_pattern: Donetick ignores occurrences without one and refuses them alongside " +
+        "every_week. 1 is the first and -1 the last, and several may be given. The range is 1 to 5 " +
+        "for week_of_month and 1 to 14 for week_of_quarter, which counts across the whole quarter.",
     ),
   day_of_month: z
     .number()
@@ -265,9 +265,9 @@ function enrichHistoryRow(row: RawHistoryRow, chores: RawChore[], members: Membe
   };
 }
 
-export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
+export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
   const { service, timezone, now } = deps;
-  const writeCtx: WriteContext = { service, timezone, now };
+  const writeCtx: ToolContext = { service, timezone, now };
   const guard = guardWith(service);
 
   /**
@@ -306,8 +306,13 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
       // Reached only when the id is in neither list, so this is the not-found probe
       // rather than a data source. Its return value is a /details view and must not
       // be projected as though it were a list row.
+      // /details is the not-found probe here, never a data source: it omits every
+      // list-only field, and projectChore reports a default for each rather than
+      // saying it does not know. A successful read means the chore exists but is
+      // invisible to both lists, which is a state this server cannot describe
+      // truthfully, so it reports that rather than inventing one.
       try {
-        return await service.choreDetails(args.chore_id);
+        await service.choreDetails(args.chore_id);
       } catch (error) {
         // Only the statuses that actually mean "not there". A bare catch turned a
         // timeout, a revoked token, or a genuine instance fault into "that chore
@@ -320,6 +325,9 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
           `No chore with id ${args.chore_id} exists on this account. Use list_chores to see what is there.`,
         );
       }
+      throw new Error(
+        `Chore ${args.chore_id} exists but is not in this account's chore list, so this server cannot read the fields it needs to describe it. Use list_chores to find it by name.`,
+      );
     }
     if (typeof args.name !== "string") {
       throw new Error("Pass either chore_id or name to identify the chore.");
@@ -479,7 +487,7 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
           .nullable()
           .optional()
           .describe(
-            'An RFC3339 timestamp, YYYY-MM-DD, or a phrase like "tomorrow", "in 3 days", or "next monday". Omit for no due date.',
+            'An RFC3339 timestamp, YYYY-MM-DD, or a phrase like "tomorrow", "in 3 days", or "next monday". A bare date or a phrase carries no time of day and resolves to 09:00 local; to set a different hour pass a full timestamp with an offset, like "2026-08-07T07:00:00-04:00". Omit for no due date.',
           ),
         frequency: frequencySchema.optional().describe("Defaults to a one-time chore (type once) when omitted."),
         assign_strategy: z.enum(ASSIGN_STRATEGIES).optional(),
@@ -490,7 +498,15 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
         assignees: z.array(z.string()).optional().describe("Member names to assign to the chore."),
         project: z.string().optional(),
         priority: priorityEnumSchema.optional(),
-        points: z.number().optional(),
+        points: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe(
+            "Points awarded on completion, a positive whole number. Donetick's ledger never awards " +
+              "zero or a negative value, so a chore stored with one silently pays nothing.",
+          ),
         subtasks: z.array(z.string()).optional(),
         require_approval: z.boolean().optional(),
         is_private: z.boolean().optional(),
@@ -530,11 +546,18 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
           .string()
           .nullable()
           .optional()
-          .describe('An RFC3339 timestamp, YYYY-MM-DD, a phrase like "tomorrow", or null to clear it.'),
+          .describe('An RFC3339 timestamp, YYYY-MM-DD, a phrase like "tomorrow", or null to clear it. A bare date or a phrase resolves to 09:00 local; pass a full timestamp with an offset to set a different hour.'),
         frequency: frequencySchema.optional(),
         assign_strategy: z.enum(ASSIGN_STRATEGIES).optional(),
         reschedule_from: z.enum(["due_date", "completion_date"]).optional(),
-        assignees: z.array(z.string()).optional().describe("Replaces the full assignee list."),
+        assignees: z
+          .array(z.string())
+          .optional()
+          .describe(
+            "Replaces the full assignee list. To leave a chore with nobody on it pass [] together " +
+              'with assign_strategy: "no_assignee"; an empty list on its own leaves the old strategy ' +
+              "in place and Donetick picks someone again on the next completion.",
+          ),
         add_assignees: z.array(z.string()).optional().describe("Adds to the existing assignee list."),
         project: z
           .string()
@@ -542,7 +565,13 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
           .optional()
           .describe("The project to move the chore into, or null to take it out of its project."),
         priority: priorityEnumSchema.optional(),
-        points: z.number().nullable().optional(),
+        points: z
+          .number()
+          .int()
+          .positive()
+          .nullable()
+          .optional()
+          .describe("Points awarded on completion, a positive whole number, or null to remove them."),
         subtasks: z
           .array(z.string())
           .optional()
@@ -668,8 +697,8 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
         "Mark a chore complete. Pass completed_at (e.g. \"yesterday\") to backdate a completion for " +
         "something already done; a time in the future is rejected. If the chore's require_approval is " +
         "set, Donetick records this as a request awaiting sign-off rather than a completion, and the " +
-        "result reports pending_approval rather than claiming success. Returns the chore's id so " +
-        "undo_chore can reverse it. Backdating a rolling chore (one that reschedules from its completion " +
+        "result reports pending_approval rather than claiming success. Returns the chore's id. " +
+        "Backdating a rolling chore (one that reschedules from its completion " +
         "date rather than its due date) also moves its next occurrence earlier.",
       inputSchema: {
         chore_id: choreIdSchema,
@@ -695,8 +724,11 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
     {
       name: "undo_chore",
       description:
-        "Undo the most recent completion of a chore, but only your own, and only within five minutes of " +
-        "completing it. Takes chore_id only, never a name: a just-completed one-off chore drops out of " +
+        "Undo the most recent completion of a chore. Expect this to fail: on the Donetick version this " +
+        "server was verified against, the endpoint answers \"no recent action found\" immediately after " +
+        "both a completion and a skip, well inside its own five-minute window. To put a wrongly " +
+        "completed chore back, use reschedule_chore to restore the due date. Takes chore_id only, " +
+        "never a name: a just-completed one-off chore drops out of " +
         "the active list this server searches by name. Use the id complete_chore returned.",
       inputSchema: {
         chore_id: z.number().int().describe("The id complete_chore returned."),

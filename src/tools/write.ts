@@ -11,15 +11,11 @@ import {
 import { endpoints } from "@/endpoints";
 import { DonetickError } from "@/errors";
 import { loadChoreById } from "@/tools/chore-lookup";
+import type { ToolContext } from "@/tools/context";
 import { projectChore } from "@/projection";
-import type { DonetickService } from "@/service";
 import type { Member, Project, ProjectedChore, RawChore } from "@/types";
 
-export interface WriteContext {
-  service: DonetickService;
-  now: () => Date;
-  timezone: string;
-}
+export type { ToolContext as WriteContext } from "@/tools/context";
 
 export type CreateOutcome =
   | { kind: "created"; chore: ProjectedChore; warnings?: unknown }
@@ -34,7 +30,7 @@ export type DeleteOutcome =
   | { kind: "declined"; chore: string }
   | { kind: "deleted"; deleted: number; name: string };
 
-async function loadBuildContext(ctx: WriteContext): Promise<BuildContext> {
+async function loadBuildContext(ctx: ToolContext): Promise<BuildContext> {
   const [members, projects]: [Member[], Project[]] = await Promise.all([
     ctx.service.members(),
     ctx.service.projects(),
@@ -84,7 +80,7 @@ function bodyAsRawFields(body: ChoreRequestBody): Partial<RawChore> {
  * must happen even if extractCreatedId rejects the response, since a chore may
  * still exist despite an unreportable id.
  */
-export async function createChore(input: CreateInput, ctx: WriteContext): Promise<CreateOutcome> {
+export async function createChore(input: CreateInput, ctx: ToolContext): Promise<CreateOutcome> {
   if (typeof input.name !== "string" || input.name.trim().length === 0) {
     throw new Error("create_chore requires a name.");
   }
@@ -119,7 +115,7 @@ export async function createChore(input: CreateInput, ctx: WriteContext): Promis
 
 export async function editChore(
   input: EditInput & { chore_id?: number },
-  ctx: WriteContext,
+  ctx: ToolContext,
 ): Promise<EditOutcome> {
   let existing = await loadChoreById(input.chore_id, ctx);
   const buildCtx = await loadBuildContext(ctx);
@@ -136,7 +132,7 @@ export async function editChore(
     // retry re-reads and re-merges, and the row it re-reads can have acquired a
     // completion window or an adaptive frequency in the meantime.
     if (input.due_date === null) {
-      requireDueDateFor(null, body.frequencyType, body.completionWindow);
+      requireDueDateFor(null, body.frequencyType, body.completionWindow, body.isRolling);
     }
     await ctx.service.write(() => ctx.service.client.put(endpoints.editChore(), body));
   };
@@ -223,7 +219,7 @@ export async function editChore(
  */
 export async function deleteChore(
   existing: RawChore,
-  ctx: WriteContext,
+  ctx: ToolContext,
   answer: { confirm: boolean } | undefined,
 ): Promise<DeleteOutcome> {
   if (answer === undefined) {

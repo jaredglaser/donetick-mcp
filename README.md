@@ -102,7 +102,7 @@ Add an entry to your MCP configuration, using an absolute path to `src/index.ts`
 | --- | --- |
 | `complete_chore` | Mark a chore done, optionally backdated or on someone else's behalf. Reports a chore that needs approval as pending rather than done. |
 | `skip_chore` | Skip this occurrence and move to the next. |
-| `undo_chore` | Reverse your own completion, within Donetick's five-minute window. |
+| `undo_chore` | Reverse your own completion. Expect it to fail: see Known limitations. |
 | `approve_chore` | Approve a completion that is waiting on sign-off. |
 | `reject_chore` | Reject one. |
 | `nudge_chore` | Remind whoever the chore is assigned to. |

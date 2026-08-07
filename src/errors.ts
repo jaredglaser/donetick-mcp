@@ -98,8 +98,9 @@ export function mapHttpError(input: {
   if (status >= 500) {
     if (isCreatorOnlyWrite(path, method)) {
       return new DonetickError(
-        "Donetick refused that. Archiving is creator-only, and it reports 'not yours' and 'not there' " +
-          "identically, so either this chore was deleted or this account did not create it.",
+        "Donetick refused that. Archiving and deleting are creator-only, and both report 'not yours' " +
+          "and 'not there' identically, so either this chore is already gone or this account did not " +
+          "create it.",
         { status, retryable: true, invalidatesCache: true },
       );
     }

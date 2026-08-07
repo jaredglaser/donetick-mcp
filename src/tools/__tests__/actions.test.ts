@@ -7,7 +7,7 @@ import {
   skipChore,
   undoChore,
 } from "../actions";
-import type { WriteContext } from "@/tools/write";
+import type { ToolContext } from "@/tools/context";
 import type { Member, RawChore } from "@/types";
 
 const now = new Date("2026-08-06T16:00:00Z");
@@ -54,7 +54,7 @@ function fakeService(opts: FakeOptions = {}) {
   return { service, calls, invalidations: () => invalidations };
 }
 
-function ctxFor(service: ReturnType<typeof fakeService>["service"]): WriteContext {
+function ctxFor(service: ReturnType<typeof fakeService>["service"]): ToolContext {
   return { service: service as never, now: () => now, timezone: tz };
 }
 
@@ -180,15 +180,16 @@ describe("completeChore", () => {
     expect(result.next_due_date).toBe("2026-08-13T13:00:00Z");
   });
 
-  test("a completion response missing nextDueDate falls back to the chore's own value", async () => {
-    const fake = fakeService({
-      chores: [listRow],
-      post: () => ({}),
-    });
+  test("a completion response with no nextDueDate reports unknown, not the pre-completion date", async () => {
+    // The value read before the write is the occurrence that was just completed.
+    // Reporting it under a field named next_due_date is indistinguishable from a
+    // verified answer, and nextDueDateOf exists precisely to tell absent from null.
+    const fake = fakeService({ chores: [listRow], post: () => ({}) });
 
     const result = await completeChore({ chore_id: 7 }, ctxFor(fake.service));
 
-    expect(result.next_due_date).toBe(listRow.nextDueDate);
+    expect(result.next_due_date).toBeNull();
+    expect(result.message).toMatch(/unknown/);
   });
 
   test("returns the chore id so undo is reachable without a name lookup", async () => {
@@ -350,7 +351,7 @@ describe("approveChore", () => {
     const result = await approveChore({ chore_id: 7 }, ctxFor(fake.service));
 
     expect(fake.calls.find((c) => c.method === "POST")?.path).toBe("/api/v1/chores/7/approve");
-    expect(result).toEqual({ id: 7, name: "Take out trash", approved: true });
+    expect(result).toMatchObject({ id: 7, name: "Take out trash", decision: "approved" });
   });
 
   test("a chore that is not pending approval surfaces Donetick's 400 intelligibly rather than crashing", async () => {
@@ -389,7 +390,7 @@ describe("rejectChore", () => {
     const result = await rejectChore({ chore_id: 7 }, ctxFor(fake.service));
 
     expect(fake.calls.find((c) => c.method === "POST")?.path).toBe("/api/v1/chores/7/reject");
-    expect(result).toEqual({ id: 7, name: "Take out trash", approved: false });
+    expect(result).toMatchObject({ id: 7, name: "Take out trash", decision: "rejected" });
   });
 
   test("invalidates the cache on success and on failure", async () => {
@@ -517,5 +518,26 @@ describe("an approval-enabled chore whose completion actually landed", () => {
     expect(result.completed).toBe(true);
     expect(result.pending_approval).toBe(false);
     expect(result.next_due_date).toBe("2026-08-13T13:00:00Z");
+  });
+});
+
+describe("approve and reject report distinguishable outcomes", () => {
+  test("a rejection does not look like a failed approval", async () => {
+    // Both handlers shared one shape, so reject returned {approved: false}, which is
+    // character for character what a failed approval would look like.
+    const fake = fakeService({ chores: [listRow] });
+
+    const result = await rejectChore({ chore_id: 7 }, ctxFor(fake.service));
+
+    expect(result.decision).toBe("rejected");
+    expect(result.message).toMatch(/not marked done/);
+  });
+
+  test("an approval says so", async () => {
+    const fake = fakeService({ chores: [listRow] });
+
+    const result = await approveChore({ chore_id: 7 }, ctxFor(fake.service));
+
+    expect(result.decision).toBe("approved");
   });
 });

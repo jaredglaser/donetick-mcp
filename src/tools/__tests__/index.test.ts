@@ -774,9 +774,15 @@ describe("action tool registration", () => {
     expect(tool.description).toMatch(/another member/i);
   });
 
-  test("undo_chore's description mentions the five-minute window", () => {
+  test("undo_chore's description warns that the endpoint may refuse every attempt", () => {
+    // Measured: Donetick answers "no recent action found" immediately after both a
+    // completion and a skip on this instance. A description promising a working
+    // five-minute window would have a model offer undo and then report a failure it
+    // reads as a fault rather than as the normal outcome.
     const tool = buildToolDefinitions(deps).find((t) => t.name === "undo_chore")!;
-    expect(tool.description).toMatch(/five minutes/i);
+    expect(tool.description).toMatch(/five-minute window/);
+    expect(tool.description).toMatch(/no recent action found/);
+    expect(tool.description).toMatch(/reschedule_chore/);
   });
 
   test("skip_chore's description mentions advancing to the next occurrence", () => {

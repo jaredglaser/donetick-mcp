@@ -1,7 +1,7 @@
 import { endpoints } from "@/endpoints";
 import { loadChoreById } from "@/tools/chore-lookup";
 import { resolveOne } from "@/resolve";
-import type { WriteContext } from "@/tools/write";
+import type { ToolContext } from "@/tools/context";
 import type { RawSubTask } from "@/types";
 
 function isDone(sub: RawSubTask): boolean {
@@ -30,7 +30,7 @@ export interface SetSubtaskOutcome {
  */
 export async function setSubtaskCompleted(
   input: SetSubtaskInput,
-  ctx: WriteContext,
+  ctx: ToolContext,
 ): Promise<SetSubtaskOutcome> {
   const chore = await loadChoreById(input.chore_id, ctx);
 
