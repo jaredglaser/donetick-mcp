@@ -801,6 +801,22 @@ describe("combinations that would crash or silently revert on Donetick's side", 
   });
 });
 
+describe("a blank name", () => {
+  // create_chore guarded this in the tool, so the merge had no guard at all and
+  // reassign_chore, which routes through the same merge, never named one either.
+  test("is refused on create", () => {
+    expect(() => buildCreateRequest({ name: "   " }, ctx())).toThrow(/empty string/);
+  });
+
+  test("is refused on edit, where nothing checked it before", () => {
+    expect(() => mergeEditRequest(existing, { name: "" }, ctx())).toThrow(/empty string/);
+  });
+
+  test("an omitted name still keeps the stored one", () => {
+    expect(mergeEditRequest(existing, { description: "x" }, ctx()).name).toBe(existing.name);
+  });
+});
+
 describe("a stored recurrence Donetick cannot schedule", () => {
   // This server built "first saturday of every month" as day_of_the_month with
   // weekday names until the mapping was corrected, and such a chore answers 500 on

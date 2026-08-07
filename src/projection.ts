@@ -1,4 +1,4 @@
-import { humanizeDueIn } from "@/time";
+import { dueDateOf, humanizeDueIn } from "@/time";
 import {
   CHORE_STATUS,
   PRIORITY_LABEL,
@@ -81,7 +81,7 @@ export function projectChore(
   projects: Project[],
   now: Date,
 ): ProjectedChore {
-  const dueDate = chore.nextDueDate === null ? null : new Date(chore.nextDueDate);
+  const dueDate = dueDateOf(chore.nextDueDate);
   const member = members.find((m) => m.userId === chore.assignedTo);
   const project = projects.find((p) => p.id === chore.projectId);
   const lastBy = members.find((m) => m.userId === chore.lastCompletedBy);

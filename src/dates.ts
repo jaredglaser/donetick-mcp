@@ -30,7 +30,12 @@ export function parseDueDate(input: string | null, now: Date, tz: string): Date 
 export function parseDueDate(input: string | null, now: Date, tz: string): Date | null {
   if (input === null) return null;
   const trimmed = input.trim();
-  if (trimmed === "") return null;
+  // Null is the only way to say "no due date". An empty string used to mean it too,
+  // which made the same value mean opposite things in two tools: reschedule_chore
+  // read it as a clear, while edit_chore took the parse path, lost the stored date,
+  // and let ensureDueDateForRolling substitute today 09:00 on a rolling chore. It
+  // also broke the overload's promise, which types a string input as returning Date.
+  if (trimmed === "") throw new Error(FORMAT_HELP);
 
   const instant = tryInstant(trimmed);
   if (instant) return instant;

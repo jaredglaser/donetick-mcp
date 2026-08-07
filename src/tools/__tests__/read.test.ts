@@ -29,6 +29,26 @@ describe("listChores", () => {
     expect(listChores({ scope: "unscheduled" }, ctx).chores.map((c) => c.id)).toEqual([3]);
   });
 
+  test("a due date Donetick did not send is unscheduled, not invisible", () => {
+    // An unparseable or absent value used to become an Invalid Date, which is not
+    // null, so it was kept out of unscheduled, and every NaN comparison is false, so
+    // it fell out of every dated scope too. The chore was reachable only through
+    // `all`, where it rendered as "in NaN minutes".
+    const withBadDates: RawChore[] = [
+      ...chores,
+      { id: 4, name: "Unparseable", nextDueDate: "soon", assignedTo: null, priority: 0, status: 0, frequencyType: "once", createdBy: 1 } as unknown as RawChore,
+      { id: 5, name: "Absent", assignedTo: null, priority: 0, status: 0, frequencyType: "once", createdBy: 1 } as unknown as RawChore,
+    ];
+    const badCtx = { ...ctx, chores: withBadDates };
+
+    expect(listChores({ scope: "unscheduled" }, badCtx).chores.map((c) => c.id)).toEqual([3, 4, 5]);
+    for (const scope of ["overdue", "due_today", "due_this_week"] as const) {
+      expect(listChores({ scope }, badCtx).chores.map((c) => c.id)).not.toContain(4);
+    }
+    const all = listChores({ scope: "all" }, badCtx).chores;
+    expect(all.find((c) => c.id === 4)?.due_in).toBe("no due date");
+  });
+
   test("all scope returns everything", () => {
     expect(listChores({ scope: "all" }, ctx).chores.length).toBe(3);
   });

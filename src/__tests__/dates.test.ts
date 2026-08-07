@@ -120,12 +120,15 @@ describe("parseDueDate, additional coverage", () => {
     expect(parseDueDate("yesterday", now, NY)!.toISOString()).toBe("2026-06-14T13:00:00.000Z");
   });
 
-  test("an empty string returns null", () => {
-    expect(parseDueDate("", now, NY)).toBeNull();
+  // Null is the only clear. As null these two let edit_chore drop the stored date
+  // and reschedule a rolling chore to today 09:00, while reschedule_chore read the
+  // same string as a deliberate clear.
+  test("an empty string is a parse error, not a silent clear", () => {
+    expect(() => parseDueDate("", now, NY)).toThrow(/Could not parse/);
   });
 
-  test("a whitespace-only string returns null", () => {
-    expect(parseDueDate("   ", now, NY)).toBeNull();
+  test("a whitespace-only string is a parse error too", () => {
+    expect(() => parseDueDate("   ", now, NY)).toThrow(/Could not parse/);
   });
 
   test("in 1 day is singular and matches in 1 days worth of offset", () => {

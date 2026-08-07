@@ -5,7 +5,7 @@ import { endpoints } from "@/endpoints";
 import { DonetickError } from "@/errors";
 import { FREQUENCY_TYPES, WEEK_PATTERNS } from "@/frequency";
 import { resolveOne } from "@/resolve";
-import { DUE_SCOPES, humanizeDueIn } from "@/time";
+import { DUE_SCOPES, dueDateOf, humanizeDueIn } from "@/time";
 import type { DonetickService } from "@/service";
 import {
   approveChore,
@@ -329,7 +329,7 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
       all,
       (chore) => chore.name,
       (chore) => {
-        const due = chore.nextDueDate === null ? null : new Date(chore.nextDueDate);
+        const due = dueDateOf(chore.nextDueDate);
         const who = members.find((m) => m.userId === chore.assignedTo)?.displayName ?? "unassigned";
         return `${humanizeDueIn(due, now())}, ${who}`;
       },

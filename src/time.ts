@@ -72,6 +72,23 @@ export function addDays(instant: Date, n: number, tz: string): Date {
   return new Date(zoned(instant, tz).startOfDay().add({ days: n }).startOfDay().epochMilliseconds);
 }
 
+/**
+ * A chore's due date as an instant, or null when it has none Donetick can be held to.
+ *
+ * Shared because it was written three times, in the projection, in list_chores, and
+ * in the registry's own filter, and none of the three checked the result. A row whose
+ * nextDueDate was absent or unparseable became an Invalid Date, which is not null, so
+ * bucket kept it out of `unscheduled`, and every NaN comparison is false, so it fell
+ * out of `overdue`, `due_today`, and the rest as well. The chore was reachable only
+ * through scope `all`, where it rendered as "in NaN minutes". Keeping the three in
+ * agreement is the whole point of DUE_SCOPES being exhaustive.
+ */
+export function dueDateOf(nextDueDate: unknown): Date | null {
+  if (typeof nextDueDate !== "string") return null;
+  const parsed = new Date(nextDueDate);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
 export function bucket(
   dueDate: Date | null,
   scope: Scope,

@@ -78,7 +78,14 @@ describe("module boundaries", () => {
     for (const { path, text } of await readAll()) {
       const lines = text.split("\n");
       lines.forEach((line, index) => {
-        if (line.trim() !== "*/") return;
+        const trimmed = line.trim();
+        // A block ends either on its own closing line or, for the one-line form, on
+        // the same line it opened. Checking only the former let a seventh instance
+        // through: a helper inserted directly under a single-line /** ... */ left
+        // that comment describing the wrong function, and this test stayed green.
+        const endsDocBlock =
+          trimmed === "*/" || (trimmed.startsWith("/**") && trimmed.endsWith("*/"));
+        if (!endsDocBlock) return;
         const next = lines.slice(index + 1).find((l) => l.trim().length > 0);
         if (next !== undefined && next.trim().startsWith("/**")) {
           orphans.push(`${path}:${index + 1}`);

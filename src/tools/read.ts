@@ -1,5 +1,5 @@
 import { projectChore } from "@/projection";
-import { bucket, isValidTimezone, type Scope } from "@/time";
+import { bucket, dueDateOf, isValidTimezone, type Scope } from "@/time";
 import { findMember, normalizeName } from "@/resolve";
 import { CHORE_STATUS, PRIORITY_LABEL, type Member, type ProjectedChore, type Project, type RawChore } from "@/types";
 
@@ -53,7 +53,7 @@ export function listChores(args: ListArgs, ctx: ListContext): ListResult {
   const limit = args.limit ?? 50;
 
   let rows = ctx.chores.filter((chore) => {
-    const due = chore.nextDueDate === null ? null : new Date(chore.nextDueDate);
+    const due = dueDateOf(chore.nextDueDate);
     return bucket(due, scope, ctx.now, zoneFor(chore, ctx.timezone), args.days ?? 7);
   });
 

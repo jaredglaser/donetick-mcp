@@ -148,6 +148,17 @@ function resolveMemberIds(names: string[] | undefined, members: Member[]): numbe
   });
 }
 
+/**
+ * In the builders rather than in create_chore, which is where the create guard used
+ * to live alone. The merge had none, so edit_chore could rename a chore to "" or to
+ * spaces, and reassign_chore routes through the same merge without ever naming one.
+ */
+function requireNonBlankName(name: string | undefined, tool: string): void {
+  if (name !== undefined && name.trim().length === 0) {
+    throw new Error(`${tool} cannot set a chore's name to an empty string.`);
+  }
+}
+
 /** Null and undefined both mean "no project", so the one caller that clears can pass either. */
 function resolveProjectId(name: string | null | undefined, projects: Project[]): number | null {
   if (name === undefined || name === null) return null;
@@ -326,6 +337,8 @@ export function buildCreateRequest(input: CreateInput, ctx: BuildContext): Chore
     : assigneeIds.length > 0
       ? "keep_last_assigned"
       : "no_assignee";
+
+  requireNonBlankName(input.name, "create_chore");
 
   return {
     name: input.name,
@@ -598,6 +611,8 @@ export function mergeEditRequest(existing: RawChore, input: EditInput, ctx: Buil
             })),
           ]
         : carried;
+
+  requireNonBlankName(input.name, "edit_chore");
 
   return {
     id: existing.id,
