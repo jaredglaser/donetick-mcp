@@ -1,12 +1,12 @@
 # donetick-mcp
 
-A stdio MCP server that gives an AI assistant read access to a self-hosted [Donetick](https://donetick.com) instance: chores, activity history, circle members, and projects.
+A stdio MCP server that lets an AI assistant read and manage a self-hosted [Donetick](https://donetick.com) instance: chores, recurrence, assignment, completions, activity history, circle members, and projects.
 
 ## What this is
 
 `donetick-mcp` runs as a local process, speaks the Model Context Protocol over stdio, and calls your Donetick instance's HTTP API on your behalf. It targets MCP protocol revision `2026-07-28` using the v2 `@modelcontextprotocol/server` package, and its `serveStdio` transport defaults to `legacy: 'serve'`, so a client still speaking the older 2025-era `initialize` handshake works without any extra configuration.
 
-The server currently exposes five read-only tools. There are no write tools yet: creating, completing, or editing a chore through this server is planned but not implemented.
+The server exposes twenty tools: five that read, eight that write, and seven that act on a chore's lifecycle. Deleting is the only one that asks the user to confirm before it proceeds.
 
 ## Requirements
 
@@ -73,17 +73,40 @@ Add an entry to your MCP configuration, using an absolute path to `src/index.ts`
 
 ## Tools
 
-All five tools are read-only.
+### Reading
 
 | Tool | What it does |
 | --- | --- |
-| `list_chores` | List chores with filters for scope (all, overdue, due today, due this week, due within N days, unscheduled), project, priority, label, assignee, status, a name search, sorting, and a result limit. |
+| `list_chores` | List chores with filters for scope (all, overdue, due today, due this week, due within N days, unscheduled, archived), project, priority, label, assignee, status, a name search, sorting, and a result limit. |
 | `get_chore` | Fetch one chore in full, by id or by name, including subtasks and last-completion detail. |
 | `list_activity` | Recent chore completions across the circle, defaulting to the last 7 days and capped at 90. |
 | `list_members` | Circle members with their roles and point totals. |
 | `list_projects` | Projects used to group chores. |
 
-Write tools (creating, editing, deleting) and action tools (completing, skipping, approving) are not implemented yet.
+### Writing
+
+| Tool | What it does |
+| --- | --- |
+| `create_chore` | Create a chore, with recurrence, due date, assignees, priority, points, subtasks, and notification settings. |
+| `edit_chore` | Change any subset of a chore's fields. Everything not passed is preserved. |
+| `delete_chore` | Permanently remove a chore and its history, after confirming with the user. Works on archived chores too. |
+| `reschedule_chore` | Move a chore's due date, or clear it. |
+| `reassign_chore` | Change who a chore is assigned to. |
+| `set_priority` | Set or clear a chore's priority. |
+| `archive_chore` | Take a chore out of active lists while keeping its history. |
+| `unarchive_chore` | Put an archived chore back. |
+
+### Acting
+
+| Tool | What it does |
+| --- | --- |
+| `complete_chore` | Mark a chore done, optionally backdated or on someone else's behalf. Reports a chore that needs approval as pending rather than done. |
+| `skip_chore` | Skip this occurrence and move to the next. |
+| `undo_chore` | Reverse your own completion, within Donetick's five-minute window. |
+| `approve_chore` | Approve a completion that is waiting on sign-off. |
+| `reject_chore` | Reject one. |
+| `nudge_chore` | Remind whoever the chore is assigned to. |
+| `set_subtask_completed` | Tick or untick one subtask. |
 
 ## Which Donetick API this uses, and why
 

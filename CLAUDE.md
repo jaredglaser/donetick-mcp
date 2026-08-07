@@ -49,9 +49,13 @@ bun run verify:live      # bun scripts/verify-live.ts, live check against a real
 - `src/service.ts` wires the client and caches together into `DonetickService`.
 - `src/types.ts` holds the raw Donetick shapes, the projected shape returned to tools, and the `CHORE_STATUS` and `PRIORITY_LABEL` lookup tables.
 - `src/projection.ts` turns a raw chore into the trimmed `ProjectedChore` shape tools return.
-- `src/resolve.ts` resolves a free-text name to one entity, or raises an ambiguity or no-match error with suggestions.
+- `src/resolve.ts` resolves a free-text name to one entity, or raises an ambiguity or no-match error with suggestions. `resolveMember` lives here so that every tool matches a person's name the same way.
 - `src/time.ts` has DST-safe calendar arithmetic (day boundaries, "due in" phrasing) built on `Temporal`.
-- `src/tools/read.ts` and `src/tools/index.ts` implement and register the five read tools.
+- `src/dates.ts` parses what a caller may write for a date: RFC3339, `YYYY-MM-DD`, and phrases like "tomorrow" or "in 3 days".
+- `src/frequency.ts` maps a recurrence description onto Donetick's eleven `frequencyType` values and their metadata.
+- `src/chore-request.ts` builds the create body and merges the edit body. The merge is the highest-risk code in the repo: Donetick has no partial update, so every field absent from the merge base is destroyed on write.
+- `src/confirm.ts` holds the elicitation key and the pure decision that turns an elicitation response into consent, refusal, or "not asked yet". It is separate from `src/index.ts` only so it can be tested, since the suite cannot import the entry point.
+- `src/tools/read.ts`, `write.ts`, `schedule.ts`, `actions.ts` and `subtasks.ts` implement the twenty tools; `src/tools/chore-lookup.ts` is the single loader they all resolve a chore id through; `src/tools/index.ts` declares them as plain data.
 
 ## Design spec
 
