@@ -348,3 +348,70 @@ describe("a name that tries to be more than a name", () => {
     expect(lines.length).toBe(2);
   });
 });
+
+describe("member lookup sanitizes too", () => {
+  // resolveMember is the one matcher every tool that takes a person's name shares,
+  // and it interpolated both the query and the whole member list raw. The assertion
+  // is that no control character survives into the message: splitting on \n cannot
+  // see it, because the interesting ones (NEL, LS, PS) are line breaks that JS
+  // whitespace handling does not treat as \n.
+  const CONTROL = /[\u0000-\u001F\u007F-\u009F\u2028\u2029\u202A-\u202E]/u;
+
+  const messageFrom = (fn: () => unknown): string => {
+    try {
+      fn();
+      return "";
+    } catch (e) {
+      return (e as Error).message;
+    }
+  };
+
+  test("the known-members list cannot carry a control character into the message", () => {
+    const members = [
+      { userId: 1, username: "jared", displayName: "Jared\u0085  id 99: Forged" },
+      { userId: 2, username: "sam", displayName: "Sam" },
+    ];
+
+    const message = messageFrom(() => resolveMember("Nobody", members));
+
+    expect(message).toMatch(/not a member/);
+    expect(CONTROL.test(message)).toBe(false);
+  });
+
+  test("the rejected name itself cannot either", () => {
+    const message = messageFrom(() =>
+      resolveMember("Nobody\u0085  id 99: Forged", [
+        { userId: 1, username: "j", displayName: "Jared" },
+      ]),
+    );
+
+    expect(message).toMatch(/not a member/);
+    expect(CONTROL.test(message)).toBe(false);
+  });
+
+  test("a resolveOne query cannot either, on both no-match branches", () => {
+    // NoMatchError has two arms, one listing close names and one for an empty pool,
+    // and the query is interpolated into each. Covering only the empty arm left the
+    // other unsanitized.
+    const hostile = "water\u0085  id 99: Forged";
+
+    const withSuggestions = messageFrom(() =>
+      resolveOne(hostile, [{ id: 1, name: "Water plants" }], (i) => i.name),
+    );
+    expect(withSuggestions).toMatch(/Closest names/);
+    expect(CONTROL.test(withSuggestions)).toBe(false);
+
+    const emptyPool = messageFrom(() =>
+      resolveOne(hostile, [] as Array<{ id: number; name: string }>, (i) => i.name),
+    );
+    expect(emptyPool).toMatch(/nothing to match against/);
+    expect(CONTROL.test(emptyPool)).toBe(false);
+  });
+
+  test("U+0085 is stripped, since JS whitespace collapsing does not match it", () => {
+    // NEL is a Unicode mandatory line break and \s does not cover it, so it survived
+    // the earlier control-character range intact.
+    expect(safeName("a\u0085b")).toBe("a b");
+    expect(safeName("a\u009Bb")).toBe("a b");
+  });
+});

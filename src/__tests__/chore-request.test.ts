@@ -8,7 +8,7 @@ import {
   type AssignStrategy,
   type BuildContext,
 } from "@/chore-request";
-import type { Member, Project, RawChore } from "@/types";
+import type { ChoreDetails, ChoreListRow, Member, Project } from "@/types";
 
 const tz = "America/New_York";
 const now = new Date("2026-06-15T16:00:00Z");
@@ -227,7 +227,7 @@ describe("buildCreateRequest", () => {
   });
 });
 
-const existing: RawChore = {
+const existing: ChoreListRow = {
   id: 7,
   name: "Take out trash",
   description: "curb by 7am",
@@ -307,7 +307,7 @@ expect(body.labelsV2).toEqual([{ id: 3 }]);
   });
 
   test("add_assignees appends someone genuinely new", () => {
-    const soloRow = { ...existing, assignees: [{ userId: 1 }], assignedTo: 1 } as unknown as RawChore;
+    const soloRow = { ...existing, assignees: [{ userId: 1 }], assignedTo: 1 } as unknown as ChoreListRow;
     expect(mergeEditRequest(soloRow, { add_assignees: ["Sam"] }, ctx()).assignees).toEqual([
       { userId: 1 },
       { userId: 2 },
@@ -325,7 +325,7 @@ expect(body.labelsV2).toEqual([{ id: 3 }]);
   });
 
   test("rejects an existing chore with a zero id rather than emitting an invalid write", () => {
-    const zeroId: RawChore = { ...existing, id: 0 };
+    const zeroId: ChoreListRow = { ...existing, id: 0 };
     expect(() => mergeEditRequest(zeroId, {}, ctx())).toThrow(/id/i);
   });
 
@@ -370,7 +370,10 @@ expect(body.labelsV2).toEqual([{ id: 3 }]);
   });
 
   describe("merging when the existing chore has no assignees array, only assignedTo", () => {
-    const legacy: RawChore = { ...existing, assignees: undefined, assignedTo: 1 };
+    // Cast, because ChoreListRow requires assignees: this is the shape the type says
+    // cannot arrive, and the merge keeps a runtime fallback for it anyway, since the
+    // type is a cast over wire JSON rather than a checked fact.
+    const legacy = { ...existing, assignees: undefined, assignedTo: 1 } as unknown as ChoreListRow;
 
     test("assignedTo is preserved rather than dropped", () => {
       const body = mergeEditRequest(legacy, {}, ctx());
@@ -440,13 +443,17 @@ expect(body.labelsV2).toEqual([{ id: 3 }]);
   });
 
   describe("merging from a /details-shaped object", () => {
-    // GET /chores/:id/details omits assignStrategy, assignees, frequency,
-    // frequencyMetadata, isRolling, isPrivate, labelsV2, notification,
-    // notificationMetadata, points, requireApproval: every field a write requires.
-    // Merging onto it would silently destroy recurrence, labels, points, assignees,
-    // and the approval flag on every edit, so this is rejected outright rather than
-    // degraded, to catch a caller wiring the wrong source in before it reaches Donetick.
-    const detailsShaped: RawChore = {
+    // GET /chores/:id/details omits assignStrategy, assignees, frequencyMetadata and
+    // labelsV2, along with frequency, isRolling, isPrivate, notification,
+    // notificationMetadata, points, requireApproval, circleId, createdAt, thingChore,
+    // updatedAt and updatedBy. Merging onto it would silently destroy recurrence,
+    // labels, points, assignees and the approval flag on every edit.
+    //
+    // This is now refused by the parameter type rather than by a runtime heuristic
+    // that guessed at the shape once the object was already in hand, so there is
+    // nothing left to assert at run time: the assertion is the @ts-expect-error
+    // below, and `bun run typecheck` is what fails if it ever starts compiling.
+    const detailsShaped: ChoreDetails = {
       id: 7,
       name: "Take out trash",
       description: "curb by 7am",
@@ -456,17 +463,14 @@ expect(body.labelsV2).toEqual([{ id: 3 }]);
       status: 0,
       frequencyType: "interval",
       createdBy: 1,
-      completionWindow: 120,
       lastCompletedDate: "2026-06-11T13:00:00Z",
       totalCompletedCount: 4,
     };
 
-    test("is rejected rather than silently degraded", () => {
-      expect(() => mergeEditRequest(detailsShaped, {}, ctx())).toThrow();
-    });
-
-    test("the error explains what went wrong", () => {
-      expect(() => mergeEditRequest(detailsShaped, {}, ctx())).toThrow(/details/i);
+    test("cannot be passed as a merge base", () => {
+      // @ts-expect-error a ChoreDetails carries none of the four fields ChoreListRow requires.
+      const asMergeBase: ChoreListRow = detailsShaped;
+      expect(asMergeBase.id).toBe(7);
     });
   });
 });
@@ -484,7 +488,7 @@ describe("the due date survives an unrelated edit", () => {
   });
 
   test("keeps it on a chore that does not roll, where nothing would rewrite a lost value", () => {
-    const notRolling = { ...existing, isRolling: false } as RawChore;
+    const notRolling = { ...existing, isRolling: false } as ChoreListRow;
     expect(mergeEditRequest(notRolling, { priority: "P1" }, ctx()).nextDueDate).toBe(
       "2026-06-18T13:00:00.000Z",
     );
@@ -498,7 +502,7 @@ describe("the due date survives an unrelated edit", () => {
 
   test("due_date null leaves the body carrying the current date, since the server ignores a null here", () => {
     // null means "keep" here; editChore clears via PUT /:id/dueDate.
-    const notRolling = { ...existing, isRolling: false } as RawChore;
+    const notRolling = { ...existing, isRolling: false } as ChoreListRow;
     expect(mergeEditRequest(notRolling, { due_date: null }, ctx()).nextDueDate).toBe(
       "2026-06-18T13:00:00.000Z",
     );
@@ -519,13 +523,13 @@ describe("description is never null on the wire", () => {
   });
 
   test("an edit of a chore with a null description sends an empty string", () => {
-    const noDescription = { ...existing, description: null } as unknown as RawChore;
+    const noDescription = { ...existing, description: null } as unknown as ChoreListRow;
     expect(mergeEditRequest(noDescription, {}, ctx()).description).toBe("");
   });
 
   test("an edit of a chore whose description field is absent sends an empty string", () => {
     const { description: _omitted, ...withoutDescription } = existing;
-    expect(mergeEditRequest(withoutDescription as RawChore, {}, ctx()).description).toBe("");
+    expect(mergeEditRequest(withoutDescription as ChoreListRow, {}, ctx()).description).toBe("");
   });
 
   test("an existing description still survives an unrelated edit", () => {
@@ -542,7 +546,7 @@ describe("description is never null on the wire", () => {
 describe("concurrencyToken", () => {
   const now = new Date("2026-08-06T16:00:00.500Z");
   const withStamp = (updatedAt: string | undefined) =>
-    ({ ...existing, updatedAt }) as unknown as RawChore;
+    ({ ...existing, updatedAt }) as unknown as ChoreListRow;
 
   test("sends the row's stamp even when it is older than the clock", () => {
     // Sending now instead looks equivalent and is not: PUT /:id/assignee writes the
@@ -583,7 +587,7 @@ describe("a chore driven by a Donetick Thing", () => {
   // request carrying thingTrigger, which this server never sends and cannot build.
   // The edit would answer 200, the read-back would look normal, and the chore would
   // simply never fire again.
-  const thingDriven = { ...existing, thingChore: { thingId: 3 } } as unknown as RawChore;
+  const thingDriven = { ...existing, thingChore: { thingId: 3 } } as unknown as ChoreListRow;
 
   test("is refused rather than silently severed", () => {
     expect(() => mergeEditRequest(thingDriven, { name: "Renamed" }, ctx())).toThrow(/Thing/);
@@ -595,7 +599,7 @@ describe("a chore driven by a Donetick Thing", () => {
 
   test("an ordinary chore is unaffected, including one whose thingChore is null", () => {
     expect(() => mergeEditRequest(existing, { name: "Renamed" }, ctx())).not.toThrow();
-    const nulled = { ...existing, thingChore: null } as unknown as RawChore;
+    const nulled = { ...existing, thingChore: null } as unknown as ChoreListRow;
     expect(() => mergeEditRequest(nulled, { name: "Renamed" }, ctx())).not.toThrow();
   });
 });
@@ -651,7 +655,7 @@ describe("adding a checklist item without destroying the checklist", () => {
       { id: 1, choreId: 7, name: "Bins to curb", completedAt: "2026-06-14T10:00:00Z" },
       { id: 2, choreId: 7, name: "Replace bag", completedAt: null },
     ],
-  } as unknown as RawChore;
+  } as unknown as ChoreListRow;
 
   test("add_subtasks keeps the existing items, their ids, and their ticked state", () => {
     // subtasks alone replaces the list, and buildSubtasks emits no ids and a null
@@ -690,7 +694,7 @@ describe("a chore's own timezone survives an edit", () => {
     const tokyo = {
       ...existing,
       frequencyMetadata: { unit: "days", timezone: "Asia/Tokyo" },
-    } as unknown as RawChore;
+    } as unknown as ChoreListRow;
 
     expect(mergeEditRequest(tokyo, { name: "Renamed" }, ctx()).frequencyMetadata.timezone).toBe(
       "Asia/Tokyo",
@@ -698,7 +702,7 @@ describe("a chore's own timezone survives an edit", () => {
   });
 
   test("the server default fills in when the chore carries no zone", () => {
-    const zoneless = { ...existing, frequencyMetadata: { unit: "days" } } as unknown as RawChore;
+    const zoneless = { ...existing, frequencyMetadata: { unit: "days" } } as unknown as ChoreListRow;
 
     expect(mergeEditRequest(zoneless, { name: "Renamed" }, ctx()).frequencyMetadata.timezone).toBe(tz);
   });
@@ -715,7 +719,7 @@ describe("a stored subtask order survives an edit", () => {
         { id: 1, choreId: 7, name: "first", completedAt: null, orderId: 3 },
         { id: 2, choreId: 7, name: "second", completedAt: null, orderId: 7 },
       ],
-    } as unknown as RawChore;
+    } as unknown as ChoreListRow;
 
     expect(mergeEditRequest(gapped, { name: "Renamed" }, ctx()).subTasks?.map((t) => t.orderId)).toEqual(
       [3, 7],
@@ -732,7 +736,7 @@ describe("the Thing guard's live half", () => {
       ...existing,
       frequencyType: "trigger",
       thingChore: null,
-    } as unknown as RawChore;
+    } as unknown as ChoreListRow;
 
     expect(() => mergeEditRequest(trigger, { name: "Renamed" }, ctx())).toThrow(/Thing/);
   });
@@ -742,7 +746,7 @@ describe("add_subtasks on a chore that genuinely has no checklist", () => {
   test("creates one rather than throwing", () => {
     // The test that claimed to cover this used a fixture with two subtasks, so the
     // empty case was never exercised and a missing null guard would have crashed.
-    const bare = { ...existing, subTasks: [] } as unknown as RawChore;
+    const bare = { ...existing, subTasks: [] } as unknown as ChoreListRow;
 
     expect(mergeEditRequest(bare, { add_subtasks: ["First"] }, ctx()).subTasks).toEqual([
       { name: "First", orderId: 0, completedAt: null },
@@ -760,7 +764,7 @@ describe("combinations that would crash or silently revert on Donetick's side", 
       assignStrategy: "no_assignee",
       assignees: [],
       assignedTo: null,
-    } as unknown as RawChore;
+    } as unknown as ChoreListRow;
 
     const body = mergeEditRequest(unassigned, { add_assignees: ["Sam"] }, ctx());
 
@@ -774,7 +778,7 @@ describe("combinations that would crash or silently revert on Donetick's side", 
       assignStrategy: "no_assignee",
       assignees: [],
       assignedTo: null,
-    } as unknown as RawChore;
+    } as unknown as ChoreListRow;
 
     expect(mergeEditRequest(unassigned, { name: "Renamed" }, ctx()).assignStrategy).toBe(
       "no_assignee",
@@ -790,7 +794,7 @@ describe("combinations that would crash or silently revert on Donetick's side", 
       ...existing,
       notification: true,
       notificationMetadata: null,
-    } as unknown as RawChore;
+    } as unknown as ChoreListRow;
 
     const body = mergeEditRequest(noMetadata, { name: "Renamed" }, ctx());
 
@@ -806,7 +810,7 @@ describe("combinations that would crash or silently revert on Donetick's side", 
 });
 
 describe("clearing a completion window", () => {
-  const windowed = { ...existing, completionWindow: 4, nextDueDate: "2026-08-10T13:00:00.000Z" } as unknown as RawChore;
+  const windowed = { ...existing, completionWindow: 4, nextDueDate: "2026-08-10T13:00:00.000Z" } as unknown as ChoreListRow;
 
   test("null removes it, where ?? used to fall through to the stored value", () => {
     // Under ?? an explicit null is nullish, so the window could be set and never
@@ -850,7 +854,7 @@ describe("a stored recurrence Donetick cannot schedule", () => {
     ...existing,
     frequencyType: "day_of_the_month",
     frequencyMetadata: { days: ["saturday"], weekPattern: "week_of_month", occurrences: [1] },
-  } as unknown as RawChore;
+  } as unknown as ChoreListRow;
 
   test("an unrelated edit is refused rather than re-sending it", () => {
     expect(() => mergeEditRequest(broken, { name: "Renamed" }, ctx())).toThrow(/cannot schedule/);
@@ -889,7 +893,7 @@ describe("a stored recurrence Donetick cannot schedule", () => {
       frequencyType: "day_of_the_month",
       frequency: 15,
       frequencyMetadata: { timezone: tz },
-    } as unknown as RawChore;
+    } as unknown as ChoreListRow;
     expect(() => mergeEditRequest(noMonths, { name: "Renamed" }, ctx())).toThrow(/cannot schedule/);
   });
 
@@ -899,7 +903,7 @@ describe("a stored recurrence Donetick cannot schedule", () => {
       frequencyType: "day_of_the_month",
       frequency: 15,
       frequencyMetadata: { months: ["october"], timezone: tz },
-    } as unknown as RawChore;
+    } as unknown as ChoreListRow;
     expect(() => mergeEditRequest(fine, { name: "Renamed" }, ctx())).not.toThrow();
   });
 
@@ -919,7 +923,7 @@ describe("a stored recurrence Donetick cannot schedule", () => {
       frequencyType: "day_of_the_month",
       frequency: 15,
       frequencyMetadata: { days: ["saturday"], months: ["october"], timezone: tz },
-    } as unknown as RawChore;
+    } as unknown as ChoreListRow;
     expect(() => mergeEditRequest(weekdayNames, { name: "Renamed" }, ctx())).not.toThrow();
   });
 
@@ -932,7 +936,7 @@ describe("a stored recurrence Donetick cannot schedule", () => {
       frequencyType: "interval",
       frequency: 0,
       frequencyMetadata: { unit: "days", timezone: tz },
-    } as unknown as RawChore;
+    } as unknown as ChoreListRow;
     expect(() => mergeEditRequest(frozen, { name: "Renamed" }, ctx())).toThrow(/cannot schedule/);
     expect(() =>
       mergeEditRequest(frozen, { frequency: { type: "interval", every: 3, unit: "days" } }, ctx()),
@@ -945,7 +949,7 @@ describe("a stored recurrence Donetick cannot schedule", () => {
       frequencyType: "interval",
       frequency: -3,
       frequencyMetadata: { unit: "days", timezone: tz },
-    } as unknown as RawChore;
+    } as unknown as ChoreListRow;
     expect(() => mergeEditRequest(backwards, { name: "Renamed" }, ctx())).toThrow(/cannot schedule/);
   });
 
@@ -955,7 +959,7 @@ describe("a stored recurrence Donetick cannot schedule", () => {
       frequencyType: "interval",
       frequency: 3,
       frequencyMetadata: { timezone: tz },
-    } as unknown as RawChore;
+    } as unknown as ChoreListRow;
     expect(() => mergeEditRequest(noUnit, { name: "Renamed" }, ctx())).toThrow(/cannot schedule/);
     expect(() =>
       mergeEditRequest(noUnit, { frequency: { type: "interval", every: 3, unit: "days" } }, ctx()),
@@ -967,7 +971,7 @@ describe("a stored recurrence Donetick cannot schedule", () => {
       ...existing,
       frequencyType: "days_of_the_week",
       frequencyMetadata: { days: [], timezone: tz },
-    } as unknown as RawChore;
+    } as unknown as ChoreListRow;
     expect(() => mergeEditRequest(noDays, { name: "Renamed" }, ctx())).toThrow(/cannot schedule/);
     expect(() =>
       mergeEditRequest(
@@ -983,7 +987,7 @@ describe("a stored recurrence Donetick cannot schedule", () => {
       ...existing,
       frequencyType: "days_of_the_week",
       frequencyMetadata: { days: ["saturday"], weekPattern: "week_of_month", timezone: tz },
-    } as unknown as RawChore;
+    } as unknown as ChoreListRow;
     expect(() => mergeEditRequest(noOccurrences, { name: "Renamed" }, ctx())).toThrow(
       /cannot schedule/,
     );
@@ -999,7 +1003,7 @@ describe("a stored recurrence Donetick cannot schedule", () => {
         weekNumbers: [1],
         timezone: tz,
       },
-    } as unknown as RawChore;
+    } as unknown as ChoreListRow;
     expect(() => mergeEditRequest(deprecatedField, { name: "Renamed" }, ctx())).not.toThrow();
   });
 
@@ -1008,7 +1012,7 @@ describe("a stored recurrence Donetick cannot schedule", () => {
       ...existing,
       frequencyType: "days_of_the_week",
       frequencyMetadata: { days: ["saturday"], weekPattern: "every_week", timezone: tz },
-    } as unknown as RawChore;
+    } as unknown as ChoreListRow;
     expect(() => mergeEditRequest(everyWeek, { name: "Renamed" }, ctx())).not.toThrow();
   });
 
@@ -1020,7 +1024,7 @@ describe("a stored recurrence Donetick cannot schedule", () => {
       frequencyType: "day_of_the_month",
       frequency: 0,
       frequencyMetadata: { months: ["october"], timezone: tz },
-    } as unknown as RawChore;
+    } as unknown as ChoreListRow;
     expect(() => mergeEditRequest(zeroDay, { name: "Renamed" }, ctx())).toThrow(/cannot schedule/);
   });
 
@@ -1030,7 +1034,7 @@ describe("a stored recurrence Donetick cannot schedule", () => {
       frequencyType: "day_of_the_month",
       frequency: 32,
       frequencyMetadata: { months: ["october"], timezone: tz },
-    } as unknown as RawChore;
+    } as unknown as ChoreListRow;
     expect(() => mergeEditRequest(tooHigh, { name: "Renamed" }, ctx())).toThrow(/cannot schedule/);
   });
 
@@ -1041,7 +1045,7 @@ describe("a stored recurrence Donetick cannot schedule", () => {
         frequencyType: "day_of_the_month",
         frequency,
         frequencyMetadata: { months: ["october"], timezone: tz },
-      } as unknown as RawChore;
+      } as unknown as ChoreListRow;
       expect(() => mergeEditRequest(row, { name: "Renamed" }, ctx())).not.toThrow();
     }
   });
@@ -1052,7 +1056,7 @@ describe("settings an unrelated edit must not change", () => {
     // Donetick keeps the metadata when notifications are switched off, so
     // notification false with non-null metadata is a real stored shape. Reading only
     // the metadata would turn every unrelated edit into a re-enable.
-    const off = { ...existing, notification: false } as unknown as RawChore;
+    const off = { ...existing, notification: false } as unknown as ChoreListRow;
 
     expect(mergeEditRequest(off, { name: "Renamed" }, ctx()).notification).toBe(false);
   });
@@ -1065,7 +1069,7 @@ describe("settings an unrelated edit must not change", () => {
       assignStrategy: "no_assignee",
       assignees: [],
       assignedTo: null,
-    } as unknown as RawChore;
+    } as unknown as ChoreListRow;
 
     expect(
       mergeEditRequest(
@@ -1099,7 +1103,7 @@ describe("an hourly chore already carrying a time", () => {
     frequencyType: "interval",
     frequency: 4,
     frequencyMetadata: { unit: "hours", time: "1970-01-01T07:00:00-04:00", timezone: tz },
-  } as unknown as RawChore;
+  } as unknown as ChoreListRow;
 
   test("an unrelated edit is refused rather than keeping it stuck", () => {
     // It reschedules to the instant it is already at from the second completion, so
@@ -1118,7 +1122,7 @@ describe("an hourly chore already carrying a time", () => {
       ...existing,
       frequencyType: "interval",
       frequencyMetadata: { unit: "hours", timezone: tz },
-    } as unknown as RawChore;
+    } as unknown as ChoreListRow;
     expect(() => mergeEditRequest(fine, { name: "Renamed" }, ctx())).not.toThrow();
   });
 });
@@ -1150,7 +1154,7 @@ describe("the hourly guard's boundaries", () => {
   // unit: "days", a schedule buildFrequency permits and Donetick honors. Dropping the
   // length check locks out any chore stored with time: "", which is a real shape.
   const interval = (fm: Record<string, unknown>) =>
-    ({ ...existing, frequencyType: "interval", frequencyMetadata: fm }) as unknown as RawChore;
+    ({ ...existing, frequencyType: "interval", frequencyMetadata: fm }) as unknown as ChoreListRow;
 
   test("a daily interval carrying a time still edits", () => {
     expect(() =>

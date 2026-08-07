@@ -169,41 +169,72 @@ describe("notification settings, which used to be write-only", () => {
   test("renders the direction, because the sign is the whole meaning", () => {
     // Donetick adds the offset to the due date: negative is a reminder before,
     // positive is an overdue nag after. Rendering the absolute value erased exactly
-    // the distinction this server negates offsets to get right, so a nag set in the
-    // web UI read back as a reminder half an hour early.
+    // the distinction this server negates offsets to get right.
     expect(
       notif({
         notification: true,
+        nextDueDate: "2026-07-01T12:00:00Z",
         notificationMetadata: { templates: [{ value: -30, unit: "m" }, { value: 2, unit: "h" }, { value: 0, unit: "m" }] },
       }).reminders,
     ).toEqual(["30m before", "2h after", "at the due date"]);
   });
 
-  test("reports the four flags, so a configured chore is not confused with an empty one", () => {
-    // Both of these used to project identically, and one of them is the shape any
-    // edit silently switches off, which is what this exists to expose.
-    const configured = notif({
+  test("reports no flags, because Donetick never reads them", () => {
+    // Traced through GenerateNotifications (planner.go:27-72): it reads Templates,
+    // CircleGroup and CircleGroupID. dueDate, predue, nagging and completion are on
+    // the struct and read nowhere in the notifier package. An earlier version
+    // reported them as configuration, which told the caller a chore was set up when
+    // nothing had been.
+    const projected = notif({
       notification: true,
-      notificationMetadata: { dueDate: true, predue: true },
+      nextDueDate: "2026-07-01T12:00:00Z",
+      notificationMetadata: { dueDate: true, predue: true, nagging: true, completion: true },
     });
-    const empty = notif({ notification: true, notificationMetadata: null });
-
-    expect(configured).not.toEqual(empty);
-    expect(configured.on_due_date).toBe(true);
-    expect(configured.before_due).toBe(true);
-    expect(configured.when_overdue).toBe(false);
-    expect(empty.on_due_date).toBe(false);
+    expect(Object.keys(projected).sort()).toEqual(["enabled", "note", "reminders"]);
+    expect(projected.reminders).toEqual([]);
   });
 
-  test("a chore with notifications off reports nothing set", () => {
-    expect(notif({ notification: false })).toEqual({
-      enabled: false,
-      reminders: [],
-      on_due_date: false,
-      before_due: false,
-      when_overdue: false,
-      on_completion: false,
+  test("says so when notifications are on but nothing will be sent", () => {
+    expect(
+      notif({ notification: true, nextDueDate: "2026-07-01T12:00:00Z", notificationMetadata: { dueDate: true } }).note,
+    ).toMatch(/no reminders are set/);
+  });
+
+  test("a chore with reminders but no due date is told the planner skips it", () => {
+    // GenerateNotifications returns early on a nil NextDueDate, so the reminders are
+    // stored and never fire.
+    expect(
+      notif({
+        notification: true,
+        nextDueDate: null,
+        notificationMetadata: { templates: [{ value: -30, unit: "m" }] },
+      }).note,
+    ).toMatch(/no due date/);
+  });
+
+  test("a trigger recurrence is told the same", () => {
+    expect(
+      notif({
+        notification: true,
+        frequencyType: "trigger",
+        nextDueDate: "2026-07-01T12:00:00Z",
+        notificationMetadata: { templates: [{ value: -30, unit: "m" }] },
+      }).note,
+    ).toMatch(/trigger recurrence/);
+  });
+
+  test("a working setup carries no note at all", () => {
+    const projected = notif({
+      notification: true,
+      nextDueDate: "2026-07-01T12:00:00Z",
+      notificationMetadata: { templates: [{ value: -30, unit: "m" }] },
     });
+    expect(projected.note).toBeUndefined();
+    expect(projected.reminders).toEqual(["30m before"]);
+  });
+
+  test("notifications off reports nothing set and no note", () => {
+    expect(notif({ notification: false })).toEqual({ enabled: false, reminders: [] });
   });
 });
 

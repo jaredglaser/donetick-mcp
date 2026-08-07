@@ -26,7 +26,13 @@ export interface RawFrequencyMetadata {
   weekNumbers?: number[] | null;
 }
 
-/** The list-row shape. Detail-only fields are optional so a merged object types cleanly. */
+/**
+ * A chore in whatever shape it arrived in: the /chores list row, the
+ * GET /chores/:id/details view, or a merge of the two. Every field either view
+ * omits is optional here, which makes this the right parameter type for the
+ * projection and for the read-back merges, and the wrong one for a whole-chore
+ * write. ChoreListRow below is what those take.
+ */
 export interface RawChore {
   id: number;
   name: string;
@@ -66,6 +72,52 @@ export interface RawChore {
    * sever the link permanently and silently.
    */
   thingChore?: unknown | null;
+  subTasks?: RawSubTask[] | null;
+  lastCompletedDate?: string | null;
+  lastCompletedBy?: number | null;
+  totalCompletedCount?: number | null;
+}
+
+/**
+ * The GET /chores/ row, and the only shape a whole-chore write may merge onto.
+ *
+ * Measured on v0.1.76: every list row carries these four, empty rather than absent
+ * (an unlabelled chore has labelsV2: [], an unassigned one assignees: []), and the
+ * /details view carries none of them. Requiring them is what makes mergeEditRequest
+ * refuse that view at the call site rather than by guessing at the shape once the
+ * object is already in hand. Donetick has no partial update, so every field the
+ * merge base does not carry is destroyed on write.
+ */
+export interface ChoreListRow extends RawChore {
+  assignStrategy: string;
+  assignees: Array<{ userId: number }>;
+  frequencyMetadata: RawFrequencyMetadata | null;
+  labelsV2: RawLabel[] | null;
+}
+
+/**
+ * GET /chores/:id/details, which is not a subset of the list row and not a superset
+ * of it either. Measured on v0.1.76 it omits assignStrategy, assignees, circleId,
+ * completionWindow, createdAt, frequency, frequencyMetadata, isPrivate, isRolling,
+ * labelsV2, notification, notificationMetadata, points, requireApproval, thingChore,
+ * updatedAt and updatedBy, and it is the only view carrying lastCompletedDate,
+ * lastCompletedBy and totalCompletedCount.
+ *
+ * Assignable to RawChore and never to ChoreListRow, which is the whole reason it has
+ * a name of its own.
+ */
+export interface ChoreDetails {
+  id: number;
+  name: string;
+  description?: string | null;
+  nextDueDate: string | null;
+  assignedTo: number | null;
+  priority: number;
+  status: number;
+  frequencyType: string;
+  isActive?: boolean;
+  createdBy: number;
+  syncVersion?: number;
   subTasks?: RawSubTask[] | null;
   lastCompletedDate?: string | null;
   lastCompletedBy?: number | null;
@@ -155,21 +207,20 @@ export interface ProjectedChore {
   completion_window: number | null;
   subtasks: Array<{ name: string; done: boolean }>;
   /**
-   * Notifications were write-only: they could be set through create_chore and
-   * edit_chore and read back nowhere, so "does the trash chore have a reminder on
-   * it" had no answer. That also hid the one documented data loss in this server,
-   * since an edit that switches notifications off is invisible in the result.
+   * Notifications were write-only: settable through create_chore and edit_chore and
+   * readable nowhere, so "does the trash chore have a reminder on it" had no answer.
+   * That also hid the one documented data loss in this server, since an edit that
+   * switches notifications off is invisible in the result.
    *
-   * Offsets are rendered the way a caller states them, as time before the due date,
-   * rather than as the negative values the wire carries.
+   * Reminders only. Donetick's planner reads Templates, CircleGroup and
+   * CircleGroupID and nothing else, so the four booleans it also stores are inert.
    */
   notifications: {
     enabled: boolean;
+    /** Signed on the wire, rendered with direction: "30m before", "2h after", "at the due date". */
     reminders: string[];
-    on_due_date: boolean;
-    before_due: boolean;
-    when_overdue: boolean;
-    on_completion: boolean;
+    /** Present when notifications are on but Donetick will send nothing anyway. */
+    note?: string;
   };
   last_completed_at: string | null;
   last_completed_by: string | null;

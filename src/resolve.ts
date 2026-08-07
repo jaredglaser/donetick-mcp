@@ -1,6 +1,10 @@
 export class AmbiguousMatchError extends Error {
   constructor(query: string, candidates: string[]) {
     super(
+      // Defensive rather than reachable: a query carrying a control character cannot
+      // reach this branch, because a mid-string one breaks the substring match and a
+      // trailing one is trimmed by normalizeName before matching. Kept so the three
+      // interpolation sites read the same way.
       `"${safeName(query)}" matches ${candidates.length} items. Ask which one is meant, then call again with the id.\n${candidates.join("\n")}`,
     );
     this.name = "AmbiguousMatchError";
@@ -30,9 +34,11 @@ export class NoMatchError extends Error {
 // controls: ZWJ builds emoji sequences and ZWNJ is required orthography in Persian,
 // Hindi and others, so stripping them turned "👨‍👩‍👧 Family movie night" into three
 // separate people and broke Persian words. Nothing they can do reorders a line. What
-// is stripped is the set that can: C0 and DEL, the zero-width space, the bidi marks
-// and overrides, and the line and paragraph separators.
-const CONTROL_CHARS = /[\u0000-\u001F\u007F\u200B\u200E\u200F\u2028\u2029\u202A-\u202E\u2066-\u2069]/gu;
+// is stripped is the set that can: C0, DEL and C1, the zero-width space, the bidi
+// marks and overrides, and the line and paragraph separators. C1 is in there because
+// U+0085 is a Unicode mandatory line break that JS \s does not match, so it survived
+// the collapse-whitespace pass intact and kept the forged-line attack open.
+const CONTROL_CHARS = /[\u0000-\u001F\u007F-\u009F\u200B\u200E\u200F\u2028\u2029\u202A-\u202E\u2066-\u2069]/gu;
 const MAX_NAME_IN_MESSAGE = 120;
 
 export function safeName(value: string): string {

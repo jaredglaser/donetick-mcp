@@ -59,16 +59,8 @@ export interface ArchiveOutcome {
   message?: string;
 }
 
-function loadActiveChore(chore_id: number | undefined, ctx: ToolContext): Promise<RawChore> {
-  return loadChoreById(chore_id, ctx);
-}
-
-function loadArchivedChore(chore_id: number | undefined, ctx: ToolContext): Promise<RawChore> {
-  return loadArchivedChoreById(chore_id, ctx);
-}
-
 export async function rescheduleChore(input: RescheduleInput, ctx: ToolContext): Promise<RescheduleOutcome> {
-  const existing = await loadActiveChore(input.chore_id, ctx);
+  const existing = await loadChoreById(input.chore_id, ctx);
   const parsed = parseDueDate(input.due_date, ctx.now(), ctx.timezone);
   const dueDate = parsed === null ? null : parsed.toISOString();
   // This endpoint writes the due date directly, so it never passes through the
@@ -93,7 +85,7 @@ function currentAssigneeIds(existing: RawChore): number[] {
 }
 
 export async function reassignChore(input: ReassignInput, ctx: ToolContext): Promise<ReassignOutcome> {
-  const existing = await loadActiveChore(input.chore_id, ctx);
+  const existing = await loadChoreById(input.chore_id, ctx);
   const members = await ctx.service.members();
   const target = resolveMember(input.assignee, members);
 
@@ -167,7 +159,7 @@ function resolvePriority(priority: string | number): number {
 }
 
 export async function setPriority(input: SetPriorityInput, ctx: ToolContext): Promise<SetPriorityOutcome> {
-  const existing = await loadActiveChore(input.chore_id, ctx);
+  const existing = await loadChoreById(input.chore_id, ctx);
   const priority = resolvePriority(input.priority);
 
   await ctx.service.write(() => ctx.service.client.put(endpoints.updatePriority(existing.id), { priority }));
@@ -188,8 +180,7 @@ export async function setPriority(input: SetPriorityInput, ctx: ToolContext): Pr
 }
 
 export async function archiveChore(input: ArchiveInput, ctx: ToolContext): Promise<ArchiveOutcome> {
-  const existing = await loadActiveChore(input.chore_id, ctx);
-
+  const existing = await loadChoreById(input.chore_id, ctx);
 
   await ctx.service.write(() => ctx.service.client.put(endpoints.archiveChore(existing.id), {}));
 
@@ -212,7 +203,7 @@ export async function archiveChore(input: ArchiveInput, ctx: ToolContext): Promi
 }
 
 export async function unarchiveChore(input: ArchiveInput, ctx: ToolContext): Promise<ArchiveOutcome> {
-  const existing = await loadArchivedChore(input.chore_id, ctx);
+  const existing = await loadArchivedChoreById(input.chore_id, ctx);
 
   await ctx.service.write(() => ctx.service.client.put(endpoints.unarchiveChore(existing.id), {}));
 

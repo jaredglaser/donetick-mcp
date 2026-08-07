@@ -33,8 +33,9 @@ import {
 } from "@/tools/schedule";
 import { setSubtaskCompleted, type SetSubtaskInput } from "@/tools/subtasks";
 import { createChore, deleteChore, editChore } from "@/tools/write";
+import { loadChoreById } from "@/tools/chore-lookup";
 import type { ToolContext } from "@/tools/context";
-import { CHORE_HISTORY_STATUS, type Member, type RawChore } from "@/types";
+import { CHORE_HISTORY_STATUS, type ChoreListRow, type Member, type RawChore } from "@/types";
 import { getChore, listChores, type ListArgs } from "@/tools/read";
 
 export interface McpExtras {
@@ -235,19 +236,25 @@ const frequencySchema = z.object({
     ),
 });
 
+const INERT_FLAG =
+  "Stored by Donetick and read by nothing. Its notification planner reads only the reminder " +
+  "templates, so setting this alone sends nothing. Kept because Donetick's own web UI writes it.";
+
 const notifySchema = z.object({
-  due_date: z.boolean().optional(),
-  completion: z.boolean().optional(),
-  predue: z.boolean().optional(),
-  nagging: z.boolean().optional(),
+  due_date: z.boolean().optional().describe(INERT_FLAG),
+  completion: z.boolean().optional().describe(INERT_FLAG),
+  predue: z.boolean().optional().describe(INERT_FLAG),
+  nagging: z.boolean().optional().describe(INERT_FLAG),
   reminders: z
     .array(z.string())
     .max(5)
     .optional()
     .describe(
       'Reminder offsets before the due date, like "30m", "1h", "2d". Donetick accepts at most 5, ' +
-        "and this is the only field here that produces a notification: the flags above are stored " +
-        "but never read, so notify without reminders sends nothing.",
+        "and this is the only field here that produces a notification: the four flags above are " +
+        "stored but never read, so notify without reminders sends nothing. Two more cases send " +
+        "nothing whatever you set here, because the planner returns early on both: a chore with no " +
+        "due date, and a trigger recurrence. get_chore reports when a chore is in one of them.",
     ),
 });
 
@@ -265,7 +272,8 @@ interface RawHistoryRow {
   assignedTo: number | null;
   completedBy: number | null;
   dueDate: string | null;
-  performedAt: string;
+  /** Null on a timer-start row, which Donetick writes before anything is performed. */
+  performedAt: string | null;
   notes: string | null;
   status: number;
   createdAt: string;
@@ -275,20 +283,6 @@ interface RawHistoryRow {
 
 const MAX_HISTORY_DAYS = 90;
 const DEFAULT_HISTORY_DAYS = 7;
-
-/**
- * The zod schema caps this too, but that boundary is the MCP transport rather than
- * this function's caller. Clamped rather than thrown so a slightly-too-wide ask
- * still returns as much history as is reasonable.
- */
-function clampHistoryDays(value: unknown): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return DEFAULT_HISTORY_DAYS;
-  }
-  // Floor before the lower bound, not after. Ordered the other way, anything in
-  // (0, 1) passed the `<= 0` guard and then floored to 0, producing ?limit=0.
-  return Math.min(Math.max(1, Math.floor(value)), MAX_HISTORY_DAYS);
-}
 
 function enrichHistoryRow(row: RawHistoryRow, chores: RawChore[], members: Member[]) {
   const chore = chores.find((c) => c.id === row.choreId);
@@ -323,63 +317,33 @@ function enrichHistoryRow(row: RawHistoryRow, chores: RawChore[], members: Membe
 
 export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
   const { service, timezone, now } = deps;
-  const writeCtx: ToolContext = { service, timezone, now };
   const guard = guardWith(service);
 
   /**
-   * includeArchived widens both the id and the name path. It is off by default
-   * because an archived chore should not compete for a name with an active one,
-   * and on for delete_chore, whose whole job reaches chores in either state.
+   * The name path only. An id goes to loadChoreById, which is the single loader
+   * every other tool uses and which already reaches archived chores through the
+   * unfiltered list, so includeArchived says nothing about it.
+   *
+   * includeArchived is off by default because an archived chore should not compete
+   * for a name with an active one, and on for delete_chore, whose whole job reaches
+   * chores in either state.
    */
   async function resolveChore(
     args: Record<string, unknown>,
     { includeArchived = false }: { includeArchived?: boolean } = {},
-  ): Promise<RawChore> {
-    const pool = async (): Promise<RawChore[]> => {
+  ): Promise<ChoreListRow> {
+    if (typeof args.chore_id === "number") {
+      return loadChoreById(args.chore_id, deps);
+    }
+    if (typeof args.name !== "string") {
+      throw new Error("Pass either chore_id or name to identify the chore.");
+    }
+    const pool = async (): Promise<ChoreListRow[]> => {
       const active = await service.chores();
       if (!includeArchived) return active;
       const archived = await service.archivedChores();
       return [...active, ...archived];
     };
-
-    if (typeof args.chore_id === "number") {
-      const all = await pool();
-      const found = all.find((chore) => chore.id === args.chore_id);
-      if (found) return found;
-
-      // Unfiltered, because a chore can be missing from the cached active list
-      // without being archived: anything created or edited elsewhere within the
-      // cache TTL. Searching only the archived subset left that case falling through
-      // to /details, which omits every list-only field, and projectChore has no way
-      // to say "unknown", so get_chore answered "every 1 days" for a three-weekly
-      // chore and false for every flag.
-      const anywhere = (await service.allChores()).find((chore) => chore.id === args.chore_id);
-      if (anywhere) return anywhere;
-      // /details is the not-found probe here, never a data source: it omits every
-      // list-only field, and projectChore reports a default for each rather than
-      // saying it does not know. A successful read means the chore exists but is
-      // invisible to both lists, which this server cannot describe truthfully.
-      try {
-        await service.choreDetails(args.chore_id);
-      } catch (error) {
-        // Only the statuses that actually mean "not there". A bare catch turned a
-        // timeout, a revoked token, or a genuine instance fault into "that chore
-        // does not exist", which sends the user looking for data they were told was
-        // gone. The 500 is in here because /details answers a missing id with one.
-        const missing =
-          error instanceof DonetickError && (error.status === 404 || error.status >= 500);
-        if (!missing) throw error;
-        throw new Error(
-          `No chore with id ${args.chore_id} exists on this account. Use list_chores to see what is there.`,
-        );
-      }
-      throw new Error(
-        `Chore ${args.chore_id} exists but is not in this account's chore list, so this server cannot read the fields it needs to describe it. Use list_chores to find it by name.`,
-      );
-    }
-    if (typeof args.name !== "string") {
-      throw new Error("Pass either chore_id or name to identify the chore.");
-    }
     const [all, members] = await Promise.all([pool(), service.members()]);
     return resolveOne(
       args.name,
@@ -453,14 +417,11 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
           service.members(),
           service.projects(),
         ]);
-        // The chore list and GET /details are different views of a chore, and neither is
-        // a superset: assignStrategy, assignees, frequency(Metadata), isRolling,
-        // isPrivate, labelsV2, notification(Metadata), points, and requireApproval live
-        // only on the list row, while lastCompletedDate, lastCompletedBy,
-        // totalCompletedCount, notes, duration, startTime, and timerUpdatedAt live only
-        // on /details. Detail spreads last so its fields win, but since /details never
-        // sets the list-only keys at all, the spread cannot clobber them with undefined.
-        const merged: RawChore = { ...resolved, ...(detail as Partial<RawChore>) };
+        // ChoreListRow and ChoreDetails are different views of a chore, and neither is
+        // a superset of the other; the two types spell out which field lives where.
+        // Detail spreads last so its fields win, but since /details never sets the
+        // list-only keys at all, the spread cannot clobber them with undefined.
+        const merged: RawChore = { ...resolved, ...detail };
         return ok(getChore(merged, members, projects, now()));
       }),
     },
@@ -491,13 +452,25 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
           ),
       },
       handler: guard(async (args) => {
-        const days = clampHistoryDays(args.days);
+        // The schema is the only bound: days is int().positive().max(90) there, and
+        // the SDK validates before the handler runs, so a second clamp here could
+        // only ever disagree with it.
+        const days = typeof args.days === "number" ? args.days : DEFAULT_HISTORY_DAYS;
         const [raw, chores, members] = await Promise.all([
           service.rawGet(endpoints.choreHistory(days, true)),
           service.chores(),
           service.members(),
         ]);
-        const all = Array.isArray(raw) ? (raw as RawHistoryRow[]) : [];
+        // Refused rather than defaulted to an empty list, which is the same rule
+        // src/time.ts holds for a scope and src/service.ts for every other array:
+        // "nothing happened this week" is an answer, and a proxy rewriting the
+        // response must not be able to produce it. Worded as service.ts words it.
+        if (!Array.isArray(raw)) {
+          throw new Error(
+            "Donetick answered the chore history request but did not return an array. The instance may be behind a proxy that is rewriting responses.",
+          );
+        }
+        const all = raw as RawHistoryRow[];
 
         // Filtered here because Donetick does not filter. Measured on v0.1.76: the
         // history endpoint ignores every query parameter it is given. limit=1,
@@ -607,7 +580,7 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
           ),
         notify: notifySchema.optional(),
       },
-      handler: guard(async (args) => ok(await createChore(args as unknown as CreateInput, writeCtx))),
+      handler: guard(async (args) => ok(await createChore(args as unknown as CreateInput, deps))),
     },
     {
       name: "edit_chore",
@@ -706,7 +679,7 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
               "reminder offset left out is dropped, so pass every flag and reminder you want kept.",
           ),
       },
-      handler: guard(async (args) => ok(await editChore(args as unknown as EditInput & { chore_id?: number }, writeCtx))),
+      handler: guard(async (args) => ok(await editChore(args as unknown as EditInput & { chore_id?: number }, deps))),
     },
     {
       name: "delete_chore",
@@ -727,7 +700,7 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
         // deleteChore look the same chore up a second time, and across the two
         // elicitation rounds that doubled again.
         const resolved = await resolveChore(args, { includeArchived: true });
-        const outcome = await deleteChore(resolved, writeCtx, mcp?.confirmation);
+        const outcome = await deleteChore(resolved, deps, mcp?.confirmation);
         if (outcome.kind === "confirm_required") {
           return {
             content: [{ type: "text", text: outcome.message }],
@@ -750,7 +723,7 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
             'An RFC3339 timestamp, YYYY-MM-DD, a phrase like "tomorrow" or "next monday", or null to clear the due date.',
           ),
       },
-      handler: guard(async (args) => ok(await rescheduleChore(args as unknown as RescheduleInput, writeCtx))),
+      handler: guard(async (args) => ok(await rescheduleChore(args as unknown as RescheduleInput, deps))),
     },
     {
       name: "reassign_chore",
@@ -766,7 +739,7 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
         chore_id: choreIdSchema,
         assignee: z.string().describe("The member's name."),
       },
-      handler: guard(async (args) => ok(await reassignChore(args as unknown as ReassignInput, writeCtx))),
+      handler: guard(async (args) => ok(await reassignChore(args as unknown as ReassignInput, deps))),
     },
     {
       name: "set_priority",
@@ -780,7 +753,7 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
           .union([priorityEnumSchema, z.number().int().min(0).max(4)])
           .describe("A P-label or the equivalent 0-4 integer."),
       },
-      handler: guard(async (args) => ok(await setPriority(args as unknown as SetPriorityInput, writeCtx))),
+      handler: guard(async (args) => ok(await setPriority(args as unknown as SetPriorityInput, deps))),
     },
     {
       name: "archive_chore",
@@ -792,7 +765,7 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
       inputSchema: {
         chore_id: choreIdSchema,
       },
-      handler: guard(async (args) => ok(await archiveChore(args as unknown as ArchiveInput, writeCtx))),
+      handler: guard(async (args) => ok(await archiveChore(args as unknown as ArchiveInput, deps))),
     },
     {
       name: "unarchive_chore",
@@ -801,7 +774,7 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
       inputSchema: {
         chore_id: choreIdSchema,
       },
-      handler: guard(async (args) => ok(await unarchiveChore(args as unknown as ArchiveInput, writeCtx))),
+      handler: guard(async (args) => ok(await unarchiveChore(args as unknown as ArchiveInput, deps))),
     },
     {
       name: "complete_chore",
@@ -822,7 +795,7 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
         note: z.string().optional(),
         completed_by: z.string().optional().describe("A member name, if completing on someone else's behalf."),
       },
-      handler: guard(async (args) => ok(await completeChore(args as unknown as CompleteInput, writeCtx))),
+      handler: guard(async (args) => ok(await completeChore(args as unknown as CompleteInput, deps))),
     },
     {
       name: "skip_chore",
@@ -833,7 +806,7 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
       inputSchema: {
         chore_id: choreIdSchema,
       },
-      handler: guard(async (args) => ok(await skipChore(args as unknown as SkipInput, writeCtx))),
+      handler: guard(async (args) => ok(await skipChore(args as unknown as SkipInput, deps))),
     },
     {
       name: "undo_chore",
@@ -855,7 +828,7 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
               "chore has isActive false and is absent from the list this server searches by name.",
           ),
       },
-      handler: guard(async (args) => ok(await undoChore(args as unknown as UndoInput, writeCtx))),
+      handler: guard(async (args) => ok(await undoChore(args as unknown as UndoInput, deps))),
     },
     {
       name: "approve_chore",
@@ -866,7 +839,7 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
       inputSchema: {
         chore_id: choreIdSchema,
       },
-      handler: guard(async (args) => ok(await approveChore(args as unknown as ApprovalInput, writeCtx))),
+      handler: guard(async (args) => ok(await approveChore(args as unknown as ApprovalInput, deps))),
     },
     {
       name: "reject_chore",
@@ -877,7 +850,7 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
       inputSchema: {
         chore_id: choreIdSchema,
       },
-      handler: guard(async (args) => ok(await rejectChore(args as unknown as ApprovalInput, writeCtx))),
+      handler: guard(async (args) => ok(await rejectChore(args as unknown as ApprovalInput, deps))),
     },
     {
       name: "nudge_chore",
@@ -891,7 +864,7 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
         message: z.string().optional(),
         all_assignees: z.boolean().optional().describe("Nudge every assignee rather than just one."),
       },
-      handler: guard(async (args) => ok(await nudgeChore(args as unknown as NudgeInput, writeCtx))),
+      handler: guard(async (args) => ok(await nudgeChore(args as unknown as NudgeInput, deps))),
     },
     {
       name: "set_subtask_completed",
@@ -905,7 +878,7 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
         subtask: z.string().describe("The checklist item's name, or a distinguishing substring of it."),
         completed: z.boolean().describe("true to check the item, false to uncheck it."),
       },
-      handler: guard(async (args) => ok(await setSubtaskCompleted(args as unknown as SetSubtaskInput, writeCtx))),
+      handler: guard(async (args) => ok(await setSubtaskCompleted(args as unknown as SetSubtaskInput, deps))),
     },
   ];
 }

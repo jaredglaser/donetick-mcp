@@ -14,7 +14,14 @@ import { loadChoreById } from "@/tools/chore-lookup";
 import type { ToolContext } from "@/tools/context";
 import { projectChore } from "@/projection";
 import { safeName } from "@/resolve";
-import type { Member, Project, ProjectedChore, RawChore } from "@/types";
+import type {
+  ChoreDetails,
+  ChoreListRow,
+  Member,
+  Project,
+  ProjectedChore,
+  RawChore,
+} from "@/types";
 
 export type { ToolContext as WriteContext } from "@/tools/context";
 
@@ -70,7 +77,7 @@ function extractCreatedId(response: unknown): { id: number; warnings?: unknown }
  * The write body already carries every field this module computed for the write
  * (frequency, labels-for-write, assign strategy, and so on), so it is a better
  * source for the just-written state than a fresh GET, which is missing exactly
- * the fields a write requires (see loadChoreById). The cast goes through unknown
+ * the fields a write requires (see ChoreDetails). The cast goes through unknown
  * because ChoreRequestBody's write-shaped fields (labelsV2 carries no name on
  * write, for example) are not structurally RawChore's read-shaped fields; callers layer a
  * read-shaped source over this to correct the fields that differ.
@@ -99,7 +106,7 @@ export async function createChore(input: CreateInput, ctx: ToolContext): Promise
     return extractCreatedId(response);
   });
 
-  let detail: RawChore;
+  let detail: ChoreDetails;
   try {
     detail = await ctx.service.choreDetails(id);
   } catch (error) {
@@ -113,7 +120,7 @@ export async function createChore(input: CreateInput, ctx: ToolContext): Promise
     };
   }
 
-  const merged = { ...bodyAsRawFields(body), ...(detail as Partial<RawChore>) } as RawChore;
+  const merged = { ...bodyAsRawFields(body), ...detail } as RawChore;
   const chore = projectChore(merged, buildCtx.members, buildCtx.projects, buildCtx.now);
   return warnings !== undefined ? { kind: "created", chore, warnings } : { kind: "created", chore };
 }
@@ -129,7 +136,7 @@ export async function editChore(
   // write-shaped fields /details omits, and after a retry it is the second one.
   let body: ChoreRequestBody;
 
-  const put = async (base: RawChore): Promise<void> => {
+  const put = async (base: ChoreListRow): Promise<void> => {
     body = mergeEditRequest(base, input, buildCtx);
     // Inside put, so the retry re-checks. The clear lands on a separate endpoint
     // after this write, so the merged body still carries the old date and the guard
@@ -168,7 +175,7 @@ export async function editChore(
     // behind the row and this endpoint refuses anything older. The only place two
     // writes hit one chore in sequence.
     ctx.service.invalidateChores();
-    let written: RawChore;
+    let written: ChoreListRow;
     try {
       written = await loadChoreById(existing.id, ctx);
     } catch (error) {
@@ -206,7 +213,7 @@ export async function editChore(
   // The edit has already landed. A failure past this point is a reporting failure,
   // not a write failure, and saying otherwise would invite the caller to retry a
   // change that already succeeded.
-  let detail: unknown;
+  let detail: ChoreDetails;
   try {
     detail = await ctx.service.choreDetails(existing.id);
   } catch (error) {
@@ -225,7 +232,7 @@ export async function editChore(
   const merged = {
     ...existing,
     ...bodyAsRawFields(body!),
-    ...(detail as Partial<RawChore>),
+    ...detail,
     labelsV2: existing.labelsV2 ?? null,
   } as RawChore;
   // The one field an unrelated edit can change on its own. mergeNotification turns

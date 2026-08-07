@@ -53,7 +53,6 @@ export function summarizeFrequency(chore: RawChore): string {
     }
     case "day_of_the_month": {
       // Donetick carries the calendar day in frequency, not in the metadata.
-      // Donetick carries the calendar day in frequency, not in the metadata.
       return `the ${ordinal(chore.frequency as number)} of ${(meta.months ?? []).join(", ")}`;
     }
     case "adaptive":
@@ -80,11 +79,19 @@ function ordinal(n: number): string {
 }
 
 /**
- * Reminder offsets are carried on the wire as signed values, because Donetick adds
- * them to the due date: negative is before, positive is an overdue nag after, zero is
- * at the due date. The direction is rendered rather than dropped, and the four flags
- * come with it, so a chore with notifications genuinely configured is distinguishable
- * from one holding the metadata-less shape that any edit silently switches off.
+ * Traced through Donetick v0.1.76's NotificationPlanner.GenerateNotifications
+ * (internal/notifier/service/planner.go:27-72). It reads exactly three things off
+ * notificationMetadata: Templates, CircleGroup and CircleGroupID. The four booleans
+ * dueDate, predue, nagging and completion are declared on the struct
+ * (internal/chore/model/model.go:145-148) and read nowhere in the notifier package.
+ *
+ * So they are not settings, and an earlier version of this reporting them as
+ * on_due_date, before_due, when_overdue and on_completion told the caller a chore was
+ * configured when nothing had been configured. Reminders are the whole of it.
+ *
+ * Offsets are signed on the wire because Donetick adds them to the due date: negative
+ * is before, positive is an overdue nag after, zero is at the due date. The direction
+ * is rendered rather than dropped.
  */
 function summarizeNotifications(chore: RawChore): ProjectedChore["notifications"] {
   const raw = chore.notificationMetadata?.templates;
@@ -97,27 +104,31 @@ function summarizeNotifications(chore: RawChore): ProjectedChore["notifications"
           typeof (t as { unit?: unknown }).unit === "string",
       )
     : [];
-  const meta = chore.notificationMetadata ?? {};
-  const flagged = (key: string): boolean => meta[key] === true;
+
+  const reminders = templates.map((t) => {
+    if (t.value === 0) return "at the due date";
+    return `${Math.abs(t.value)}${t.unit} ${t.value < 0 ? "before" : "after"}`;
+  });
+
+  // The planner returns early on a chore with no due date and on a trigger
+  // recurrence, so reminders on either send nothing at all.
+  const silent =
+    chore.notification === true &&
+    (reminders.length === 0 || chore.nextDueDate === null || chore.frequencyType === "trigger");
 
   return {
     enabled: chore.notification === true,
-    // The sign is the whole meaning: Donetick adds the value to the due date, so
-    // negative is a reminder before, positive is an overdue nag after, and 0 is at
-    // the due date. Rendering Math.abs erased exactly the distinction this server
-    // negates offsets to get right, so an overdue nag set in the web UI read back as
-    // a reminder half an hour early.
-    reminders: templates.map((t) => {
-      if (t.value === 0) return `at the due date`;
-      return `${Math.abs(t.value)}${t.unit} ${t.value < 0 ? "before" : "after"}`;
-    }),
-    // Without these a due-date-only notification read as "enabled, nothing
-    // configured", identical to the metadata-less shape an edit silently switches
-    // off. The two need to be tellable apart, since that is what this exists for.
-    on_due_date: flagged("dueDate"),
-    before_due: flagged("predue"),
-    when_overdue: flagged("nagging"),
-    on_completion: flagged("completion"),
+    reminders,
+    ...(silent
+      ? {
+          note:
+            reminders.length === 0
+              ? "Notifications are on but no reminders are set, so nothing is sent."
+              : chore.frequencyType === "trigger"
+                ? "Donetick sends no notifications for a trigger recurrence, so these reminders do nothing."
+                : "Donetick sends no notifications for a chore with no due date, so these reminders do nothing.",
+        }
+      : {}),
   };
 }
 

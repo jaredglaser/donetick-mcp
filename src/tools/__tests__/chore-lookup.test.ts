@@ -19,17 +19,28 @@ const row = (id: number, name: string): RawChore =>
  * "someone added a chore in the web UI while our cache was warm" story, and it is
  * reached by nine tools.
  */
-function ctxFor(cached: RawChore[], everywhere: RawChore[]) {
+function ctxFor(
+  cached: RawChore[],
+  everywhere: RawChore[],
+  details: () => Promise<unknown> = async () => {
+    throw new DonetickError("chore not found", { status: 404 });
+  },
+) {
   let allChoresCalls = 0;
+  let detailsCalls = 0;
   const service = {
     chores: async () => cached,
     allChores: async () => {
       allChoresCalls += 1;
       return everywhere;
     },
+    choreDetails: async () => {
+      detailsCalls += 1;
+      return details();
+    },
   };
   const ctx: ToolContext = { service: service as never, now: () => now, timezone: "America/New_York" };
-  return { ctx, allChoresCalls: () => allChoresCalls };
+  return { ctx, allChoresCalls: () => allChoresCalls, detailsCalls: () => detailsCalls };
 }
 
 describe("loadChoreById", () => {
@@ -56,9 +67,41 @@ describe("loadChoreById", () => {
   });
 
   test("reports a genuinely missing id rather than returning the wrong chore", async () => {
-    const { ctx } = ctxFor([row(7, "Cached")], [row(9, "Elsewhere")]);
+    const { ctx, detailsCalls } = ctxFor([row(7, "Cached")], [row(9, "Elsewhere")]);
 
     await expect(loadChoreById(404, ctx)).rejects.toThrow(/No chore with id 404/);
+    expect(detailsCalls()).toBe(1);
+  });
+
+  test("a 500 from /details still reads as not found, since that is how it answers a missing id", async () => {
+    const { ctx } = ctxFor([], [], async () => {
+      throw new DonetickError("The Donetick instance returned an error.", { status: 500 });
+    });
+
+    await expect(loadChoreById(404, ctx)).rejects.toThrow(/No chore with id 404/);
+  });
+
+  test("a chore neither list carries but /details can read is called undescribable, not missing", async () => {
+    // /details omits every list-only field and projectChore reports a default for
+    // each rather than saying it does not know, so this server cannot describe the
+    // chore truthfully. Saying it does not exist would send the user looking for
+    // data that is there.
+    const { ctx } = ctxFor([], [], async () => ({ id: 404, name: "Invisible" }));
+
+    await expect(loadChoreById(404, ctx)).rejects.toThrow(/exists but is not in this account's chore list/);
+  });
+
+  test("a timeout keeps its own reason instead of becoming a missing chore", async () => {
+    // A bare catch turned a timeout, a revoked token, or a genuine instance fault
+    // into "that chore does not exist". This used to hold only for get_chore and
+    // delete_chore, which had their own copy of the id path.
+    const { ctx } = ctxFor([], [], async () => {
+      throw new DonetickError("The request to https://donetick.test timed out after 15000ms.", { status: 0 });
+    });
+
+    const error = await loadChoreById(404, ctx).catch((e: unknown) => e);
+    expect((error as Error).message).toMatch(/timed out/);
+    expect((error as Error).message).not.toMatch(/No chore with id/);
   });
 
   test("an absent id is refused before either list is read", async () => {

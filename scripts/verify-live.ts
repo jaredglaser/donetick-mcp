@@ -34,7 +34,7 @@ import { ensureLocalInstance } from "./local-instance";
 import { endpoints } from "@/endpoints";
 import { DonetickError } from "@/errors";
 import { concurrencyToken, mergeEditRequest } from "@/chore-request";
-import type { Member, Project, RawChore } from "@/types";
+import type { ChoreListRow, Member, Project } from "@/types";
 
 type Status = "pass" | "warn" | "fail";
 
@@ -507,7 +507,7 @@ async function main(): Promise<void> {
           }),
         );
 
-        const before = (await listRowById(id)) as unknown as RawChore;
+        const before = (await listRowById(id)) as unknown as ChoreListRow;
 
         const body = mergeEditRequest(
           before,
@@ -516,7 +516,7 @@ async function main(): Promise<void> {
         );
         await client.put(endpoints.editChore(), body);
 
-        const after = (await listRowById(id)) as unknown as RawChore;
+        const after = (await listRowById(id)) as unknown as ChoreListRow;
 
         if (after.name === before.name) {
           throw new Error("the rename did not land, so this check proves nothing about the rest");
@@ -571,7 +571,7 @@ async function main(): Promise<void> {
       // it starts failing for "" as well, every edit in this server is broken and
       // this check is where that becomes visible.
       const id = await createScratchChore(baseChoreBody(scoped("null-desc"), { frequencyType: "daily" }));
-      const row = (await listRowById(id)) as unknown as RawChore;
+      const row = (await listRowById(id)) as unknown as ChoreListRow;
       const body = mergeEditRequest(
         row,
         { name: scoped("null-desc-renamed") },
@@ -588,7 +588,7 @@ async function main(): Promise<void> {
 
       body.description = "";
       await client.put(endpoints.editChore(), body);
-      const after = (await listRowById(id)) as unknown as RawChore;
+      const after = (await listRowById(id)) as unknown as ChoreListRow;
       if (after.name === row.name) {
         throw new Error('the edit with description "" did not land, so every edit in this server is broken');
       }
@@ -608,18 +608,18 @@ async function main(): Promise<void> {
       // that changes nothing. editChore routes the clear to /:id/dueDate because of
       // this. If the full edit ever starts honouring null, that detour can go.
       const id = await createScratchChore(baseChoreBody(scoped("cleardue"), { frequencyType: "daily" }));
-      const row = (await listRowById(id)) as unknown as RawChore;
+      const row = (await listRowById(id)) as unknown as ChoreListRow;
       await client.put(endpoints.editChore(), {
         ...mergeEditRequest(row, {}, { members: [], projects: [], now: new Date(), timezone: timezone }),
         nextDueDate: null,
       });
-      const afterFullEdit = (await listRowById(id)) as unknown as RawChore;
+      const afterFullEdit = (await listRowById(id)) as unknown as ChoreListRow;
 
       await client.put(endpoints.updateDueDate(id), {
         dueDate: null,
         updatedAt: concurrencyToken(afterFullEdit, new Date()),
       });
-      const afterTargeted = (await listRowById(id)) as unknown as RawChore;
+      const afterTargeted = (await listRowById(id)) as unknown as ChoreListRow;
 
       if (afterTargeted.nextDueDate !== null) {
         throw new Error("PUT /:id/dueDate no longer clears a due date, so edit_chore cannot clear one at all");
@@ -648,7 +648,7 @@ async function main(): Promise<void> {
         throw new Error(`edit_chore reported ${outcome.kind}: ${JSON.stringify(outcome)}`);
       }
 
-      const after = (await listRowById(id)) as unknown as RawChore;
+      const after = (await listRowById(id)) as unknown as ChoreListRow;
       if (after.nextDueDate !== null) {
         throw new Error(`the due date was not cleared: still ${JSON.stringify(after.nextDueDate)}`);
       }
@@ -672,7 +672,7 @@ async function main(): Promise<void> {
         frequencyMetadata: { days: ["monday"], time: "1970-01-01T09:00:00-05:00", timezone: timezone },
       };
       const id = await createScratchChore(baseChoreBody(scoped("time-rfc"), withClock));
-      const row = (await listRowById(id)) as unknown as RawChore;
+      const row = (await listRowById(id)) as unknown as ChoreListRow;
       const stored = (row.frequencyMetadata as Record<string, unknown> | null)?.time;
 
       let hhmmRejected = false;
@@ -740,7 +740,7 @@ async function main(): Promise<void> {
           subTasks: [{ name: "tick me", orderId: 0, completedAt: null }],
         }),
       );
-      const created = (await listRowById(id)) as unknown as RawChore;
+      const created = (await listRowById(id)) as unknown as ChoreListRow;
       const item = created.subTasks?.[0];
       if (item === undefined) throw new Error("the created chore came back with no subtasks");
 
@@ -749,7 +749,7 @@ async function main(): Promise<void> {
         choreId: id,
         completedAt: new Date().toISOString(),
       });
-      const ticked = (await listRowById(id)) as unknown as RawChore;
+      const ticked = (await listRowById(id)) as unknown as ChoreListRow;
       const tickedItem = ticked.subTasks?.[0];
       if (!tickedItem?.completedAt) {
         throw new Error(
@@ -766,7 +766,7 @@ async function main(): Promise<void> {
           timezone: timezone,
         }),
       );
-      const after = (await listRowById(id)) as unknown as RawChore;
+      const after = (await listRowById(id)) as unknown as ChoreListRow;
       const afterItem = after.subTasks?.[0];
 
       if (afterItem?.completedAt !== tickedItem.completedAt) {
@@ -799,7 +799,7 @@ async function main(): Promise<void> {
         }),
       );
 
-      const before = (await listRowById(id)) as unknown as RawChore;
+      const before = (await listRowById(id)) as unknown as ChoreListRow;
       if (before.updatedAt === undefined) {
         return { status: "warn", detail: "the list row no longer carries updatedAt" };
       }
@@ -807,7 +807,7 @@ async function main(): Promise<void> {
         assignee: target.userId,
         updatedAt: concurrencyToken(before, new Date()),
       });
-      const after = (await listRowById(id)) as unknown as RawChore;
+      const after = (await listRowById(id)) as unknown as ChoreListRow;
 
       if (after.updatedAt !== before.updatedAt) {
         return {
@@ -883,7 +883,7 @@ async function main(): Promise<void> {
       // the server's clock runs ahead of the client's, which it did by a few
       // milliseconds here. concurrencyToken() in chore-request.ts exists for both.
       const id = await createScratchChore(baseChoreBody(scoped("token"), { frequencyType: "daily" }));
-      const row = (await listRowById(id)) as unknown as RawChore;
+      const row = (await listRowById(id)) as unknown as ChoreListRow;
       const stored = row.updatedAt;
       if (stored === undefined) {
         return {
@@ -931,7 +931,7 @@ async function main(): Promise<void> {
     await check("PUT /:id/dueDate with updatedAt succeeds and returns the pre-update chore", async () => {
       const id = await createScratchChore(baseChoreBody(scoped("duedate-echo"), { frequencyType: "daily" }));
       const before = (await client.get(endpoints.choreDetails(id))) as Record<string, unknown>;
-      const row = (await listRowById(id)) as unknown as RawChore;
+      const row = (await listRowById(id)) as unknown as ChoreListRow;
       const sentDueDate = new Date(Date.now() + 86_400_000).toISOString();
       const response = (await client.put(endpoints.updateDueDate(id), {
         dueDate: sentDueDate,
@@ -1093,7 +1093,7 @@ async function main(): Promise<void> {
       // unnoticed until a smoke test showed active chores listed as archived.
       const id = await createScratchChore(baseChoreBody(scoped("archive"), { frequencyType: "daily" }));
       const rowById = async (path: string) =>
-        ((await client.get(path)) as RawChore[]).find((row) => row.id === id);
+        ((await client.get(path)) as ChoreListRow[]).find((row) => row.id === id);
 
       await client.put(endpoints.archiveChore(id), {});
       const archivedInPlain = await rowById(endpoints.listChores());
@@ -1124,7 +1124,7 @@ async function main(): Promise<void> {
       // chore as archived.
       const id = await createScratchChore(baseChoreBody(scoped("union"), { frequencyType: "daily" }));
       await client.put(endpoints.archiveChore(id), {});
-      const union = (await client.get(endpoints.listChoresWithArchived())) as RawChore[];
+      const union = (await client.get(endpoints.listChoresWithArchived())) as ChoreListRow[];
       const active = union.filter((row) => row.isActive !== false);
       if (active.length === 0) {
         throw new Error(
@@ -1148,7 +1148,7 @@ async function main(): Promise<void> {
       // the second delete reports a cleanup failure for a chore already gone.
       createdChoreIds.splice(createdChoreIds.indexOf(id), 1);
 
-      const union = (await client.get(endpoints.listChoresWithArchived())) as RawChore[];
+      const union = (await client.get(endpoints.listChoresWithArchived())) as ChoreListRow[];
       if (union.some((row) => row.id === id)) {
         throw new Error(`archived chore ${id} survived a DELETE that reported success`);
       }

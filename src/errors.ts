@@ -87,8 +87,12 @@ export function mapHttpError(input: {
 }
 
 /**
- * The whole-chore create and edit endpoint. Everything else this server writes to is
- * id-scoped and either matched no row or failed before persisting anything.
+ * A negation, so it is whatever the three path sets do not cover rather than a named
+ * list. Today that is the whole-chore create and edit endpoint, the one measured to
+ * persist before it can fail, plus POST /:id/nudge, which sits outside
+ * ID_SCOPED_WRITE_PATHS on purpose because it answers 404 rather than 500 on a
+ * missing chore. Nudge reaches this only on a genuine instance fault, where "may have
+ * been applied" is true of a notification anyway.
  */
 function writesBeforeItCanFail(input: { path: string; method: string }): boolean {
   return (

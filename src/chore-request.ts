@@ -3,7 +3,14 @@ import { dueDateOf } from "@/time";
 import { frequencyHealth } from "@/frequency-health";
 import { buildFrequency, type FrequencyInput } from "@/frequency";
 import { findMember, normalizeName, safeName } from "@/resolve";
-import { PRIORITY_VALUE, type Member, type Project, type RawChore, type RawSubTask } from "@/types";
+import {
+  PRIORITY_VALUE,
+  type ChoreListRow,
+  type Member,
+  type Project,
+  type RawChore,
+  type RawSubTask,
+} from "@/types";
 
 const ASSIGN_STRATEGIES_TUPLE = [
   "no_assignee",
@@ -272,11 +279,19 @@ function carriedSubtasks(existing: RawChore): ChoreRequestBody["subTasks"] {
 }
 
 /**
- * Donetick dereferences NextDueDate without a nil check in two places: the
- * completion handler when a chore has a completionWindow, and the skip scheduler's
- * adaptive arm. Either combination with no due date means the chore can be created
- * and then never completed or skipped, a 502 on every attempt, permanently.
- * Measured live for the completion-window case, including a window of 0.
+ * Donetick dereferences NextDueDate without a nil check in two places: the completion
+ * handler when a chore has a completionWindow, and the skip scheduler's adaptive arm.
+ *
+ * The two are disjoint, which is why the messages below name one operation each
+ * rather than both. Measured on v0.1.76 against a chore with no due date: a
+ * completion window kills the connection on every completion, with a window of 0 or
+ * of 4, and skips fine; an adaptive recurrence kills it on every skip and completes
+ * fine. Either way the chore can be created and then permanently lose one of the two,
+ * so both combinations are refused.
+ *
+ * Measure the crashing operation first if this is ever re-checked. Skipping the
+ * completion-window chore gives it a due date, and the completion then answers a
+ * plain "out of completion window" rather than the crash.
  */
 export function requireDueDateFor(
   dueDate: Date | null,
@@ -393,40 +408,17 @@ function assertSchedulableFrequency(existing: RawChore): void {
 }
 
 /**
- * GET /chores/:id/details omits assignStrategy, assignees, frequency,
- * frequencyMetadata, isRolling, isPrivate, labelsV2, notification,
- * notificationMetadata, points, and requireApproval, which is every field a write
- * requires. Merging onto it would silently drop recurrence, labels, points,
- * assignees, and the approval flag on every edit. Checking assignStrategy alone
- * would catch it, but three independent list-only fields being simultaneously
- * absent is a stronger signal that this is genuinely the wrong shape, rather than a
- * list row that happens to omit one optional field for a legitimate reason.
- */
-function assertListRowShape(existing: RawChore): void {
-  const looksLikeDetailsView =
-    existing.assignStrategy === undefined &&
-    existing.frequencyMetadata === undefined &&
-    existing.labelsV2 === undefined;
-
-  if (looksLikeDetailsView) {
-    throw new Error(
-      "mergeEditRequest received an object missing assignStrategy, frequencyMetadata, and " +
-        "labelsV2 all at once. That is the shape of GET /chores/:id/details, not the " +
-        "GET /chores/ list row. Merging onto /details would silently destroy recurrence, " +
-        "labels, points, assignees, and the approval flag on this edit. Pass the list row " +
-        "as `existing` instead.",
-    );
-  }
-}
-
-/**
  * Donetick has no partial update for most fields; PUT /api/v1/chores/ replaces the
  * whole object. The merge base must therefore be the /chores list row, never the
  * /details view or the trimmed ProjectedChore, or every field either of those drops
  * is destroyed on write.
+ *
+ * ChoreListRow rather than RawChore is what enforces that. The /details view carries
+ * none of the four fields ChoreListRow requires, so it is not assignable here and no
+ * call site can reach this function with one. A runtime guard used to stand in for
+ * that, guessing at the shape from three optional fields being absent at once.
  */
-export function mergeEditRequest(existing: RawChore, input: EditInput, ctx: BuildContext): ChoreRequestBody {
-  assertListRowShape(existing);
+export function mergeEditRequest(existing: ChoreListRow, input: EditInput, ctx: BuildContext): ChoreRequestBody {
   assertNoThingTrigger(existing);
 
   if (!existing.id || existing.id <= 0) {
@@ -450,14 +442,16 @@ export function mergeEditRequest(existing: RawChore, input: EditInput, ctx: Buil
           },
         };
 
-  // A list row always carries assignees, but assignedTo is treated as the
-  // fallback source of truth here too: it is the field /details also has, so a
-  // caller that hands in a single-assignee row missing the assignees array
-  // (rather than a full /details object, which assertListRowShape above already
-  // rejects) still keeps its one assignee instead of losing it.
+  // Widened deliberately. ChoreListRow requires assignStrategy and assignees because
+  // every measured list row carries them, but that type is a cast over wire JSON
+  // rather than a checked fact, and this merge is the one place a dropped field is
+  // unrecoverable. So both are still read as if they might be absent: assignedTo is
+  // the fallback for one, the assignee count for the other.
+  const row = existing as RawChore;
+
   const existingAssignees =
-    existing.assignees !== undefined
-      ? existing.assignees.map((a) => a.userId)
+    row.assignees !== undefined
+      ? row.assignees.map((a) => a.userId)
       : existing.assignedTo !== null && existing.assignedTo !== undefined
         ? [existing.assignedTo]
         : [];
@@ -468,8 +462,8 @@ export function mergeEditRequest(existing: RawChore, input: EditInput, ctx: Buil
 
   const carriedStrategy: AssignStrategy = input.assign_strategy
     ? validateAssignStrategy(input.assign_strategy)
-    : existing.assignStrategy !== undefined
-      ? validateAssignStrategy(existing.assignStrategy)
+    : row.assignStrategy !== undefined
+      ? validateAssignStrategy(row.assignStrategy)
       : assigneeIds.length > 0
         ? "keep_last_assigned"
         : "no_assignee";

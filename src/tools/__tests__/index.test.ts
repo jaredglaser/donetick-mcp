@@ -386,7 +386,26 @@ describe("list_activity", () => {
     expect(parsed[1]?.completed_by).toMatch(/999/);
   });
 
-  test("clamps days over 90 rather than sending an unbounded window to Donetick", async () => {
+  test("the schema is the only bound on days, and it is a real one", () => {
+    // The handler used to clamp as well, on the claim that the schema boundary was
+    // "the MCP transport rather than this function's caller". It is the caller: the
+    // SDK validates against the schema before the handler runs, and list_activity is
+    // the only call site. Two bounds that can drift apart are worse than one that
+    // cannot, so the assertion moved here rather than being dropped.
+    const tools = buildToolDefinitions(deps);
+    const days = tools.find((t) => t.name === "list_activity")!.inputSchema.days as z.ZodType;
+
+    expect(days.safeParse(500).success).toBe(false);
+    expect(days.safeParse(0).success).toBe(false);
+    expect(days.safeParse(-1).success).toBe(false);
+    // The floor-before-lower-bound bug the deleted clamp was written for: anything in
+    // (0, 1) has to be refused rather than rounded to a limit of zero.
+    expect(days.safeParse(0.5).success).toBe(false);
+    expect(days.safeParse(90).success).toBe(true);
+    expect(days.safeParse(undefined).success).toBe(true);
+  });
+
+  test("defaults to a seven day window when days is omitted", async () => {
     let requestedPath = "";
     const fakeService = {
       ...service,
@@ -398,9 +417,9 @@ describe("list_activity", () => {
     const tools = buildToolDefinitions({ ...deps, service: fakeService as never });
     const tool = tools.find((t) => t.name === "list_activity")!;
 
-    const result = await tool.handler({ days: 500 });
+    const result = await tool.handler({});
     expect(result.isError).toBeUndefined();
-    expect(requestedPath).toMatch(/limit=90/);
+    expect(requestedPath).toMatch(/limit=7(&|$)/);
   });
 
   test("filters by days itself, since Donetick returns its whole history regardless", async () => {
@@ -437,26 +456,18 @@ describe("list_activity", () => {
     expect(out[0]!.performed_at).toBeNull();
   });
 
-  test("a fractional day count never floors to a limit of zero", async () => {
-    // The lower-bound check ran before the floor, so anything in (0, 1) passed the
-    // `<= 0` guard and then floored to 0, asking Donetick for limit=0. The zod cap
-    // is the MCP transport rather than this function's only caller, which is why the
-    // clamp is asserted here rather than left to the schema.
-    let requestedPath = "";
-    const fakeService = {
-      ...service,
-      rawGet: async (path: string) => {
-        requestedPath = path;
-        return [];
-      },
-    };
+  test("a response that is not an array is an error, not an empty week", async () => {
+    // "Nothing happened" is an answer, and a proxy rewriting the response must not be
+    // able to produce it. Same rule src/time.ts holds for a scope and src/service.ts
+    // for every other array this server reads.
+    const fakeService = { ...service, rawGet: async () => ({ res: [] }) };
     const tools = buildToolDefinitions({ ...deps, service: fakeService as never });
     const tool = tools.find((t) => t.name === "list_activity")!;
 
-    for (const days of [0.5, 0.001, 1.9]) {
-      await tool.handler({ days });
-      expect(requestedPath).toMatch(/limit=1(&|$)/);
-    }
+    const result = await tool.handler({});
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toMatch(/did not return an array/);
   });
 });
 
@@ -1072,8 +1083,12 @@ describe("delete_chore resolution", () => {
   });
 
   test("finds an archived chore by id", async () => {
+    // allChores is the includeArchived fetch, which returns active and archived
+    // together; loadChoreById is what the id path resolves through, and that is the
+    // list it falls back to. archivedChores below is the name path's pool.
     const tools = toolsFor({
       chores: async () => [active],
+      allChores: async () => [active, archived],
       archivedChores: async () => [archived],
     });
     const tool = tools.find((t) => t.name === "delete_chore")!;

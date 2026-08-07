@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { setSubtaskCompleted } from "../subtasks";
+import { DonetickError } from "@/errors";
 import type { ToolContext } from "@/tools/context";
 import type { RawChore } from "@/types";
 
@@ -22,6 +23,11 @@ function fakeService(opts: FakeOptions = {}) {
       return opts.chores ?? [];
     },
     allChores: async () => opts.chores ?? [],
+    // loadChoreById probes /details before it reports an id as missing, so a fake
+    // without one turns "no such chore" into a TypeError.
+    choreDetails: async () => {
+      throw new DonetickError("chore not found", { status: 404 });
+    },
     write: async <T>(operation: () => Promise<T>): Promise<T> => {
       try {
         return await operation();

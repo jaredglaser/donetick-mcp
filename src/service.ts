@@ -1,7 +1,7 @@
 import { TtlCache } from "@/cache";
 import type { DonetickClient } from "@/client";
 import { endpoints } from "@/endpoints";
-import type { Member, Project, RawChore } from "@/types";
+import type { ChoreDetails, ChoreListRow, Member, Project } from "@/types";
 
 interface RawMember {
   id: number;
@@ -35,7 +35,7 @@ function expectArray<T>(value: unknown, what: string): T[] {
 }
 
 export class DonetickService {
-  private readonly choreCache: TtlCache<RawChore[]>;
+  private readonly choreCache: TtlCache<ChoreListRow[]>;
   private readonly memberCache: TtlCache<Member[]>;
   private readonly projectCache: TtlCache<Project[]>;
 
@@ -45,7 +45,7 @@ export class DonetickService {
   ) {
     const now = options.now;
     this.choreCache = new TtlCache(
-      async () => expectArray<RawChore>(await this.client.get(endpoints.listChores()), "chore list"),
+      async () => expectArray<ChoreListRow>(await this.client.get(endpoints.listChores()), "chore list"),
       options.cacheTtlMs,
       now,
     );
@@ -82,7 +82,7 @@ export class DonetickService {
     );
   }
 
-  chores(): Promise<RawChore[]> {
+  chores(): Promise<ChoreListRow[]> {
     return this.choreCache.get();
   }
 
@@ -93,13 +93,13 @@ export class DonetickService {
    * falling through to GET /:id/details for one produces a row with none of the
    * fields a projection reads.
    */
-  async allChores(): Promise<RawChore[]> {
+  async allChores(): Promise<ChoreListRow[]> {
     // The fourth loader, and the one whose failure produced the message the guard was
     // written for: archivedChores() filters this result, so a non-array here reached
     // the model as "(await this.allChores()).filter is not a function", quoting the
     // whole arrow function. Reached by unarchive_chore, delete_chore's resolve,
     // list_chores scope=archived, and every id fallback in loadChoreById.
-    return expectArray<RawChore>(
+    return expectArray<ChoreListRow>(
       await this.client.get(endpoints.listChoresWithArchived()),
       "archived chore list",
     );
@@ -111,7 +111,7 @@ export class DonetickService {
    * The test is isActive === false rather than !isActive: the field is optional,
    * and a row that omits it must not be reported as archived.
    */
-  async archivedChores(): Promise<RawChore[]> {
+  async archivedChores(): Promise<ChoreListRow[]> {
     return (await this.allChores()).filter((chore) => chore.isActive === false);
   }
 
@@ -123,8 +123,8 @@ export class DonetickService {
     return this.projectCache.get();
   }
 
-  choreDetails(id: number): Promise<RawChore> {
-    return this.client.get(endpoints.choreDetails(id)) as Promise<RawChore>;
+  choreDetails(id: number): Promise<ChoreDetails> {
+    return this.client.get(endpoints.choreDetails(id)) as Promise<ChoreDetails>;
   }
 
   rawGet(path: string): Promise<unknown> {

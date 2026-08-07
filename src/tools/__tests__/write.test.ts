@@ -48,7 +48,12 @@ function fakeService(opts: FakeOptions = {}) {
     projects: async () => opts.projects ?? projects,
     choreDetails: async (id: number) => {
       calls.push(`GET details ${id}`);
-      if (!opts.choreDetails) throw new Error("no choreDetails handler configured for this test");
+      // A 404, because loadChoreById probes /details before it reports an id as
+      // missing and only treats a 404 or a 5xx as "not there". The message still
+      // names the unconfigured fake, so a test that meant to stub one says so.
+      if (!opts.choreDetails) {
+        throw new DonetickError("no choreDetails handler configured for this test", { status: 404 });
+      }
       return opts.choreDetails(id);
     },
     write: async <T>(operation: () => Promise<T>): Promise<T> => {
@@ -294,8 +299,9 @@ describe("editChore", () => {
       choreDetails: () => detailsShapedRow,
     });
 
-    // If editChore merged onto choreDetails' return instead of the list row,
-    // mergeEditRequest's assertListRowShape guard would throw here.
+    // If editChore merged onto choreDetails' return instead of the list row, the
+    // ChoreListRow parameter on mergeEditRequest would refuse it at compile time;
+    // this holds the runtime half, that the list is what it actually reads.
     await expect(
       editChore({ chore_id: 5, description: "updated" }, ctxFor(fake.service)),
     ).resolves.toBeDefined();

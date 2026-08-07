@@ -97,6 +97,24 @@ export function frequencyHealth(chore: RawChore): FrequencyHealth {
       );
     }
 
+    // The stored side of the bound frequency.ts enforces on input. Checked here too
+    // because this server wrote rows with an occurrence of 14 before that bound was
+    // corrected, and nothing else notices them: measured, a week_of_quarter chore
+    // with [14] answers 500 on every completion for monday, tuesday, saturday and
+    // sunday, and the split moves with the calendar year, so the three that work
+    // today are not safe either.
+    if (picksAnOccurrence) {
+      const stored = [...(meta.occurrences ?? []), ...(meta.weekNumbers ?? [])];
+      const limit = meta.weekPattern === "week_of_quarter" ? 13 : 5;
+      const outOfRange = stored.filter((n) => typeof n === "number" && n !== -1 && (n < 1 || n > limit));
+      if (outOfRange.length > 0) {
+        return broken(
+          `a ${meta.weekPattern} pattern with an occurrence of ${outOfRange.join(", ")}, outside the 1 to ${limit} its scheduler can reach`,
+          `Pass frequency: {type: "days_of_the_week", days: ["saturday"], week_pattern: "${meta.weekPattern}", occurrences: [1]}, or -1 for the last.`,
+        );
+      }
+    }
+
     return { ok: true };
   }
 

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { frequencyHealth } from "@/frequency-health";
 import { mergeEditRequest, type BuildContext } from "@/chore-request";
 import { summarizeFrequency } from "@/projection";
-import type { RawChore } from "@/types";
+import type { ChoreListRow } from "@/types";
 
 const tz = "America/New_York";
 const ctx = (): BuildContext => ({ members: [], projects: [], now: new Date("2026-06-15T16:00:00Z"), timezone: tz });
@@ -29,17 +29,17 @@ const base = {
   labelsV2: [],
   createdBy: 1,
   subTasks: [],
-} as unknown as RawChore;
+} as unknown as ChoreListRow;
 
-const row = (overrides: Record<string, unknown>): RawChore =>
-  ({ ...base, ...overrides }) as unknown as RawChore;
+const row = (overrides: Record<string, unknown>): ChoreListRow =>
+  ({ ...base, ...overrides }) as unknown as ChoreListRow;
 
 /**
  * The shapes Donetick accepts and then cannot schedule, each measured against a live
  * v0.1.76 container, alongside the healthy neighbour that is easiest to confuse it
  * with.
  */
-const BROKEN: Array<[string, RawChore]> = [
+const BROKEN: Array<[string, ChoreListRow]> = [
   ["interval, no unit", row({ frequencyType: "interval", frequency: 3, frequencyMetadata: {} })],
   [
     "interval, hourly with a time",
@@ -52,7 +52,19 @@ const BROKEN: Array<[string, RawChore]> = [
     "week_of_month, no occurrences",
     row({ frequencyType: "days_of_the_week", frequencyMetadata: { days: ["saturday"], weekPattern: "week_of_month" } }),
   ],
-  ["day_of_the_month, no months", row({ frequencyType: "day_of_the_month", frequency: 15, frequencyMetadata: {} })],
+  [
+    "week_of_quarter, stored occurrence of 14",
+    row({ frequencyType: "days_of_the_week", frequencyMetadata: { days: ["monday"], weekPattern: "week_of_quarter", occurrences: [14] } }),
+  ],
+  [
+    "week_of_month, stored occurrence of 6",
+    row({ frequencyType: "days_of_the_week", frequencyMetadata: { days: ["monday"], weekPattern: "week_of_month", occurrences: [6] } }),
+  ],
+  [
+    "week_of_quarter, stored weekNumbers of 14",
+    row({ frequencyType: "days_of_the_week", frequencyMetadata: { days: ["monday"], weekPattern: "week_of_quarter", weekNumbers: [14] } }),
+  ],
+    ["day_of_the_month, no months", row({ frequencyType: "day_of_the_month", frequency: 15, frequencyMetadata: {} })],
   [
     "day_of_the_month, day 0",
     row({ frequencyType: "day_of_the_month", frequency: 0, frequencyMetadata: { months: ["october"] } }),
@@ -63,7 +75,7 @@ const BROKEN: Array<[string, RawChore]> = [
   ],
 ];
 
-const HEALTHY: Array<[string, RawChore]> = [
+const HEALTHY: Array<[string, ChoreListRow]> = [
   ["daily", row({ frequencyType: "daily", frequency: 1, frequencyMetadata: {} })],
   ["once", row({ frequencyType: "once", frequency: 1, frequencyMetadata: {} })],
   ["interval, 3 days", row({ frequencyType: "interval", frequency: 3, frequencyMetadata: { unit: "days" } })],
@@ -87,6 +99,18 @@ const HEALTHY: Array<[string, RawChore]> = [
   [
     "every_week needs no occurrences",
     row({ frequencyType: "days_of_the_week", frequencyMetadata: { days: ["saturday"], weekPattern: "every_week" } }),
+  ],
+  [
+    "week_of_quarter, occurrence 13 is the ceiling and works",
+    row({ frequencyType: "days_of_the_week", frequencyMetadata: { days: ["monday"], weekPattern: "week_of_quarter", occurrences: [13] } }),
+  ],
+  [
+    "week_of_month, occurrence 5 is the ceiling and works",
+    row({ frequencyType: "days_of_the_week", frequencyMetadata: { days: ["monday"], weekPattern: "week_of_month", occurrences: [5] } }),
+  ],
+  [
+    "an occurrence of -1 means the last and is always in range",
+    row({ frequencyType: "days_of_the_week", frequencyMetadata: { days: ["monday"], weekPattern: "week_of_month", occurrences: [-1] } }),
   ],
   [
     "day_of_the_month, day 15",

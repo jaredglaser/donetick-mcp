@@ -415,6 +415,51 @@ describe("a next occurrence that lands in the past", () => {
     expect(result.message).toMatch(/does not recover on its own/);
   });
 
+  test("a rolling adaptive chore gets the adaptive reason, not the rolling one", async () => {
+    // Measured: adaptive scheduling ignores isRolling entirely, and a rolling
+    // adaptive chore completed early lands in the past exactly as a non-rolling one
+    // does. Testing isRolling first gave it the wrong mechanism and dropped the
+    // adaptive sentence's actionable half, that it does not recover on its own.
+    const fake = fakeService({
+      chores: [{ ...listRow, frequencyType: "adaptive", isRolling: true }],
+      post: () => ({ ...listRow, nextDueDate: "2026-08-01T13:00:00Z" }),
+    });
+
+    const result = await completeChore({ chore_id: 7 }, ctxFor(fake.service));
+
+    expect(result.message).toMatch(/adaptive recurrence/i);
+    expect(result.message).toMatch(/does not recover on its own/);
+    expect(result.message).not.toMatch(/completion date you gave it/);
+  });
+
+  test("a rolling chore completed at the present time is not told about a date it did not give", async () => {
+    // rollingNote is gated on isPastCompletion; this branch was not, so it said "the
+    // completion date you gave it" when no completed_at was passed at all.
+    const fake = fakeService({
+      chores: [{ ...listRow, frequencyType: "daily", isRolling: true }],
+      post: () => ({ ...listRow, nextDueDate: "2026-08-01T13:00:00Z" }),
+    });
+
+    const result = await completeChore({ chore_id: 7 }, ctxFor(fake.service));
+
+    expect(result.message).toMatch(/in the past/);
+    expect(result.message).not.toMatch(/completion date you gave it/);
+  });
+
+  test("a rolling chore backdated does get the completion-date wording", async () => {
+    const fake = fakeService({
+      chores: [{ ...listRow, frequencyType: "daily", isRolling: true }],
+      post: () => ({ ...listRow, nextDueDate: "2026-08-01T13:00:00Z" }),
+    });
+
+    const result = await completeChore(
+      { chore_id: 7, completed_at: "yesterday" },
+      ctxFor(fake.service),
+    );
+
+    expect(result.message).toMatch(/completion date you gave it/);
+  });
+
   test("an ordinary completion says nothing about it", async () => {
     const fake = fakeService({
       chores: [listRow],

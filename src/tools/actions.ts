@@ -167,18 +167,22 @@ export async function completeChore(input: CompleteInput, ctx: ToolContext): Pro
   // previous due date rather than from the completion, so any chore finished more
   // than one period late lands in the past: being a day late on a daily chore is
   // enough. Adaptive is the case where it happens on an early completion instead.
-  const pastNote = !scheduledIntoThePast
+  // Adaptive first. Measured: adaptive scheduling ignores isRolling entirely, and a
+  // rolling adaptive chore completed early lands in the past exactly as a
+  // non-rolling one does. Testing isRolling first gave that chore the rolling
+  // mechanism, which is the wrong one, and dropped the adaptive sentence's
+  // actionable half, that it does not recover on its own.
+  //
+  // The rolling arm also requires isPastCompletion, matching rollingNote above. On
+  // its own it said "the completion date you gave it" about a date the caller never
+  // gave, and adaptive is the case that reaches it on a present-time completion.
+  const pastNote = !scheduledIntoThePast || nextDueInstant === null
     ? ""
-    : chore.isRolling === true
-      // rollingNote above already explains that a rolling chore steps from the
-      // completion date. Adding "it steps from the previous due date" after it put
-      // two contradictory mechanisms in one message, and the second one is false
-      // here: measured, a rolling daily chore backdated five days landed at the
-      // completion plus one day.
-      ? ` Donetick set the next occurrence to ${nextDueInstant.toISOString()}, which is already in the past, so the chore is overdue again immediately. That follows from the completion date you gave it. reschedule_chore sets a date directly.`
-      : chore.frequencyType === "adaptive"
+    : chore.frequencyType === "adaptive"
       ? ` Donetick set the next occurrence to ${nextDueInstant.toISOString()}, which is already in the past. An adaptive recurrence does this when a chore is completed earlier than its learned interval, and it does not recover on its own; reschedule_chore sets a real next date.`
-      : ` Donetick set the next occurrence to ${nextDueInstant.toISOString()}, which is already in the past, so the chore is overdue again immediately. It steps from the previous due date rather than from the completion, so a chore finished more than one period late lands behind. Completing it again walks it forward, or reschedule_chore sets a date directly.`;
+      : chore.isRolling === true && isPastCompletion
+        ? ` Donetick set the next occurrence to ${nextDueInstant.toISOString()}, which is already in the past, so the chore is overdue again immediately. That follows from the completion date you gave it. reschedule_chore sets a date directly.`
+        : ` Donetick set the next occurrence to ${nextDueInstant.toISOString()}, which is already in the past, so the chore is overdue again immediately. It steps from the previous due date rather than from the completion, so a chore finished more than one period late lands behind. Completing it again walks it forward, or reschedule_chore sets a date directly.`;
 
   // An inactive chore is in no active list, so a completion or skip advances a due
   // date nobody will see. Donetick allows it and says nothing.

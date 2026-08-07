@@ -1,4 +1,4 @@
-import type { RawChore } from "@/types";
+import type { ChoreListRow } from "@/types";
 import { DonetickError } from "@/errors";
 import type { ToolContext } from "@/tools/context";
 
@@ -11,12 +11,12 @@ function requireChoreId(chore_id: number | undefined): number {
   return chore_id;
 }
 
-/** The chores list row, never GET /details: see assertListRowShape in chore-request.ts. */
+/** The chores list row, never GET /details: see ChoreListRow in types.ts. */
 async function loadFrom(
   chore_id: number | undefined,
-  fetchAll: () => Promise<RawChore[]>,
+  fetchAll: () => Promise<ChoreListRow[]>,
   whichList: string,
-): Promise<RawChore> {
+): Promise<ChoreListRow> {
   const id = requireChoreId(chore_id);
   const all = await fetchAll();
   const found = all.find((chore) => chore.id === id);
@@ -29,15 +29,22 @@ async function loadFrom(
 }
 
 /**
+ * The single loader every tool resolves a chore id through.
+ *
  * Falls back to the unfiltered list on a miss. A chore can be absent from the cached
  * active one without being archived, which is any chore created or edited elsewhere
- * inside the cache TTL. get_chore already resolves those; without this the nine tools
- * that act on what it returns would report the chore does not exist.
+ * inside the cache TTL. Without that fallback every tool that acts on an id would
+ * report the chore does not exist.
+ *
+ * The /details probe below is what separates the three ways a lookup can come up
+ * empty: genuinely absent, present but undescribable, and a read that failed for
+ * some other reason. It used to live in tools/index.ts and serve get_chore and
+ * delete_chore alone, so the eleven id-only tools got one flat message for all three.
  */
 export async function loadChoreById(
   chore_id: number | undefined,
   ctx: ToolContext,
-): Promise<RawChore> {
+): Promise<ChoreListRow> {
   const id = requireChoreId(chore_id);
   const cached = (await ctx.service.chores()).find((chore) => chore.id === id);
   if (cached) return cached;
@@ -45,8 +52,25 @@ export async function loadChoreById(
   const anywhere = (await ctx.service.allChores()).find((chore) => chore.id === id);
   if (anywhere) return anywhere;
 
+  // /details is the not-found probe here, never a data source: it omits every
+  // list-only field, and projectChore reports a default for each rather than saying
+  // it does not know. A successful read means the chore exists but is invisible to
+  // both lists, which this server cannot describe truthfully.
+  try {
+    await ctx.service.choreDetails(id);
+  } catch (error) {
+    // Only the statuses that actually mean "not there". A bare catch turned a
+    // timeout, a revoked token, or a genuine instance fault into "that chore does
+    // not exist", which sends the user looking for data they were told was gone.
+    // The 500 is in here because /details answers a missing id with one.
+    const missing = error instanceof DonetickError && (error.status === 404 || error.status >= 500);
+    if (!missing) throw error;
+    throw new Error(
+      `No chore with id ${id} exists on this account. Use list_chores to see what is there.`,
+    );
+  }
   throw new Error(
-    `No chore with id ${id} exists on this account. Use list_chores to see what is there.`,
+    `Chore ${id} exists but is not in this account's chore list, so this server cannot read the fields it needs to describe it. Use list_chores to find it by name.`,
   );
 }
 
@@ -57,7 +81,7 @@ export async function loadChoreById(
 export async function loadArchivedChoreById(
   chore_id: number | undefined,
   ctx: ToolContext,
-): Promise<RawChore> {
+): Promise<ChoreListRow> {
   try {
     return await loadFrom(chore_id, () => ctx.service.archivedChores(), "the archived chore list");
   } catch (error) {
@@ -77,4 +101,3 @@ export async function loadArchivedChoreById(
     );
   }
 }
-
