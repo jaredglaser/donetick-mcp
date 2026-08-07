@@ -1,4 +1,4 @@
-import { isCreatorOnlyWrite, isIdScopedWrite } from "@/endpoints";
+import { isCreatorOnlyWrite, isIdScopedWrite, isSchedulingWrite } from "@/endpoints";
 
 const MAX_DETAIL_LENGTH = 200;
 
@@ -100,6 +100,14 @@ export function mapHttpError(input: {
       return new DonetickError(
         "Donetick refused that. Archiving is creator-only, and it reports 'not yours' and 'not there' " +
           "identically, so either this chore was deleted or this account did not create it.",
+        { status, retryable: true, invalidatesCache: true },
+      );
+    }
+    if (isSchedulingWrite(path, method)) {
+      return new DonetickError(
+        "Donetick could not complete that. Either the chore no longer exists, or its recurrence " +
+          "is one Donetick cannot compute a next date for, which it reports the same way. Check " +
+          "with get_chore: if the chore is there, the recurrence needs changing.",
         { status, retryable: true, invalidatesCache: true },
       );
     }

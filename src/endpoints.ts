@@ -54,6 +54,18 @@ export const ID_SCOPED_WRITE_PATHS = [
  */
 export const CREATOR_ONLY_WRITE_PATHS = ["/archive", "/unarchive"] as const;
 
+/**
+ * The two writes that also fail with a 500 when Donetick cannot compute the next
+ * occurrence, which has nothing to do with whether the chore exists. Measured on
+ * v0.1.76: a day_of_the_month chore with no months, or one shaped as a weekday
+ * pattern, is created happily and then answers 500 on every completion.
+ */
+export const SCHEDULING_WRITE_PATHS = ["/do", "/skip"] as const;
+
+export function isSchedulingWrite(path: string, method: string): boolean {
+  return method !== "GET" && SCHEDULING_WRITE_PATHS.some((suffix) => path.endsWith(suffix));
+}
+
 export function isCreatorOnlyWrite(path: string, method: string): boolean {
   return method !== "GET" && CREATOR_ONLY_WRITE_PATHS.some((suffix) => path.endsWith(suffix));
 }

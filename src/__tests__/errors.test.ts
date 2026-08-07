@@ -244,3 +244,38 @@ describe("archive and unarchive are creator-only, which a 500 cannot distinguish
     expect(error.message).not.toMatch(/creator-only/i);
   });
 });
+
+describe("a 500 on complete or skip is not proof the chore is gone", () => {
+  // Measured on v0.1.76: a chore whose recurrence Donetick cannot compute a next
+  // date for is created happily and then answers 500 on every completion. Saying
+  // "that chore no longer exists" sends the user looking for data that is right
+  // there, and hides the thing they can actually fix.
+  test("names the recurrence as the other possibility", () => {
+    const error = mapHttpError({ status: 500, body: "", path: "/api/v1/chores/7/do", method: "POST" });
+    expect(error.message).toMatch(/recurrence/);
+    expect(error.message).toMatch(/get_chore/);
+  });
+
+  test("skip says the same, since it schedules the next date too", () => {
+    expect(
+      mapHttpError({ status: 500, body: "", path: "/api/v1/chores/7/skip", method: "POST" }).message,
+    ).toMatch(/recurrence/);
+  });
+
+  test("a write that does not schedule still says the chore is gone", () => {
+    const error = mapHttpError({
+      status: 500,
+      body: "",
+      path: "/api/v1/chores/7/priority",
+      method: "PUT",
+    });
+    expect(error.message).toMatch(/no longer exists/);
+    expect(error.message).not.toMatch(/recurrence/);
+  });
+
+  test("both still drop the cache and stay retryable", () => {
+    const error = mapHttpError({ status: 500, body: "", path: "/api/v1/chores/7/do", method: "POST" });
+    expect(error.invalidatesCache).toBe(true);
+    expect(error.retryable).toBe(true);
+  });
+});
