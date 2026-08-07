@@ -50,6 +50,7 @@ export interface EditInput extends Partial<Omit<CreateInput, "name" | "points">>
   // and would fall through to the existing value exactly like an omitted field.
   points?: number | null;
   add_assignees?: string[];
+  add_subtasks?: string[];
 }
 
 export interface BuildContext {
@@ -115,28 +116,23 @@ export interface ChoreRequestBody {
 }
 
 /**
- * The optimistic-concurrency token for the id-scoped writes, which compare it
- * against the stored row and refuse anything older.
+ * The optimistic-concurrency token for the id-scoped writes: the version the caller
+ * read, sent back untouched.
  *
- * Not simply the current instant. Measured against a live instance: the rule is
- * sent >= stored, and the server's clock ran a few milliseconds ahead of the
- * client's, so a write issued right after another one sent a "now" that was
- * already behind the row it was editing and drew a 403 that read as a permission
- * problem. The stored value also carries nanosecond precision, which a Date round
- * trip truncates downward and turns into the same failure, so when it wins it is
- * passed through as the original string rather than reformatted.
+ * Measured on v0.1.76. The comparison is sent >= stored, and the stored value
+ * carries nanosecond precision a Date round trip truncates downward, so it is
+ * passed through as the original string rather than reformatted. Sending the
+ * current time instead looks equivalent and is not: PUT /:id/assignee writes the
+ * token it receives into the row, so a client whose clock runs ahead stamps the
+ * chore with a future version and locks it out of editing until the skew passes.
+ * The stored value is accepted by every endpoint that takes one, is never in the
+ * future, and is a no-op when written back.
  *
- * The full-edit body does not use this: it sends the merge base's own updatedAt,
- * because there the token means "apply this on top of the version I read", and
- * substituting a later instant would wave through the concurrent edit it exists
- * to catch.
+ * Falls back to now only when the row carries no stamp, which leaves the write
+ * unguarded rather than unmakeable.
  */
 export function concurrencyToken(existing: RawChore, now: Date): string {
-  const stored = existing.updatedAt;
-  if (stored === undefined) return now.toISOString();
-  const storedMs = Date.parse(stored);
-  if (Number.isNaN(storedMs)) return now.toISOString();
-  return storedMs >= now.getTime() ? stored : now.toISOString();
+  return existing.updatedAt ?? now.toISOString();
 }
 
 function resolveMemberIds(names: string[] | undefined, members: Member[]): number[] {
@@ -445,7 +441,23 @@ export function mergeEditRequest(existing: RawChore, input: EditInput, ctx: Buil
   const completionWindowValue = input.completion_window ?? existing.completionWindow ?? null;
   requireDueDateFor(dueDate, frequency.frequencyType, completionWindowValue);
 
-  const subTasks = input.subtasks !== undefined ? buildSubtasks(input.subtasks) : carriedSubtasks(existing);
+  // subtasks replaces; add_subtasks appends. Without the second, the only way to add
+  // a checklist item was to resend every existing one, which also unticked them all,
+  // because buildSubtasks emits no ids and a null completedAt.
+  const carried = carriedSubtasks(existing);
+  const subTasks =
+    input.subtasks !== undefined
+      ? buildSubtasks(input.subtasks)
+      : input.add_subtasks !== undefined
+        ? [
+            ...(carried ?? []),
+            ...input.add_subtasks.map((name, index) => ({
+              name,
+              orderId: (carried?.length ?? 0) + index,
+              completedAt: null,
+            })),
+          ]
+        : carried;
 
   return {
     id: existing.id,

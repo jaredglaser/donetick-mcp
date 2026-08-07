@@ -100,14 +100,17 @@ const archivedRow: RawChore = {
 };
 
 describe("rescheduleChore", () => {
-  test("sends updatedAt equal to now, not the chore's stored updatedAt", async () => {
+  test("sends the row's stored updatedAt, not the current time", async () => {
+    // Measured on v0.1.76: every endpoint that takes a token accepts the stored
+    // value, and PUT /:id/assignee writes whatever it receives into the row, so a
+    // client whose clock runs ahead would stamp the chore with a future version and
+    // lock it out of editing. The stored value is never in the future.
     const fake = fakeService({ chores: [listRow] });
 
     await rescheduleChore({ chore_id: 5, due_date: "2026-08-15" }, ctxFor(fake.service));
 
     const sent = fake.bodies[0]!.body as Record<string, unknown>;
-    expect(sent.updatedAt).toBe(now.toISOString());
-    expect(sent.updatedAt).not.toBe(STALE_UPDATED_AT);
+    expect(sent.updatedAt).toBe(STALE_UPDATED_AT);
   });
 
   test("targets /api/v1/chores/<id>/dueDate", async () => {
@@ -185,7 +188,9 @@ describe("reassignChore", () => {
     expect(fake.calls).toContain("PUT /api/v1/chores/5/assignee");
     const sent = fake.bodies[0]!.body as Record<string, unknown>;
     expect(sent.assignee).toBe(1);
-    expect(sent.updatedAt).toBe(now.toISOString());
+    // This endpoint stores the token it is given, so it must never be a clock
+    // reading: a client running ahead would stamp the row with a future version.
+    expect(sent.updatedAt).toBe(STALE_UPDATED_AT);
   });
 
   test("falls through to a full edit when the person is not on the chore", async () => {

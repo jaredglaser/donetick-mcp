@@ -5,7 +5,7 @@ import { endpoints } from "@/endpoints";
 import { DonetickError } from "@/errors";
 import { FREQUENCY_TYPES, WEEK_PATTERNS } from "@/frequency";
 import { resolveOne } from "@/resolve";
-import { humanizeDueIn } from "@/time";
+import { DUE_SCOPES, humanizeDueIn } from "@/time";
 import type { DonetickService } from "@/service";
 import {
   approveChore,
@@ -188,15 +188,12 @@ const notifySchema = z.object({
     .describe('Reminder offsets before the due date, like "30m", "1h", "2d". Donetick accepts at most 5.'),
 });
 
-const SCOPES = [
-  "all",
-  "overdue",
-  "due_today",
-  "due_this_week",
-  "due_within_days",
-  "unscheduled",
-  "archived",
-] as const;
+/**
+ * The due-date scopes plus the one that changes which list is fetched rather than
+ * how it is filtered. Derived from DUE_SCOPES so a scope cannot be advertised here
+ * without bucket having a rule for it.
+ */
+const SCOPES = [...DUE_SCOPES, "archived"] as const;
 
 /** Mirrors the keys Donetick's history endpoint actually returns; see corrections in the spec. */
 interface RawHistoryRow {
@@ -483,7 +480,14 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
         subtasks: z.array(z.string()).optional(),
         require_approval: z.boolean().optional(),
         is_private: z.boolean().optional(),
-        completion_window: z.number().optional(),
+        completion_window: z
+          .number()
+          .optional()
+          .describe(
+            "Hours before the due date within which the chore can be completed. Donetick's own " +
+              "model comment says seconds; its handler multiplies by hours, and the handler is " +
+              "what runs. A chore with a completion window also needs a due date.",
+          ),
         notify: notifySchema.optional(),
       },
       handler: guard(async (args) => ok(await createChore(args as unknown as CreateInput, writeCtx))),
@@ -523,12 +527,23 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
           .optional()
           .describe(
             "Replaces the whole checklist. Any item not in this list is removed, and every item in " +
-              "it comes back unchecked, including ones already ticked. To tick or untick one item " +
-              "use set_subtask_completed instead.",
+              "it comes back unchecked, including ones already ticked. To add an item without " +
+              "disturbing the rest use add_subtasks; to tick or untick one use set_subtask_completed.",
           ),
+        add_subtasks: z
+          .array(z.string())
+          .optional()
+          .describe("Appends checklist items, keeping the existing ones and their ticked state."),
         require_approval: z.boolean().optional(),
         is_private: z.boolean().optional(),
-        completion_window: z.number().optional(),
+        completion_window: z
+          .number()
+          .optional()
+          .describe(
+            "Hours before the due date within which the chore can be completed. Donetick's own " +
+              "model comment says seconds; its handler multiplies by hours, and the handler is " +
+              "what runs. A chore with a completion window also needs a due date.",
+          ),
         notify: notifySchema
           .optional()
           .describe(

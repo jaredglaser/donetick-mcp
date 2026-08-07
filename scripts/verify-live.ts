@@ -635,6 +635,41 @@ async function main(): Promise<void> {
       };
     });
 
+    await check("PUT /:id/assignee stores the token it is given, so it must be the row's own", async () => {
+      // Every endpoint that takes a token compares it; this one also writes it into
+      // the row. A clock reading would stamp the chore with a version the sender's
+      // own skew invented, and a later write trailing that value is refused.
+      // concurrencyToken sends the stored value for exactly this reason.
+      const roster = (await client.get(endpoints.circleMembers())) as Member[];
+      const target = roster[roster.length - 1]!;
+      const id = await createScratchChore(
+        baseChoreBody(scoped("assignee-token"), {
+          frequencyType: "daily",
+          assignStrategy: "keep_last_assigned",
+          assignedTo: roster[0]!.userId,
+          assignees: roster.map((m) => ({ userId: m.userId })),
+        }),
+      );
+
+      const before = (await listRowById(id)) as unknown as RawChore;
+      if (before.updatedAt === undefined) {
+        return { status: "warn", detail: "the list row no longer carries updatedAt" };
+      }
+      await client.put(endpoints.updateAssignee(id), {
+        assignee: target.userId,
+        updatedAt: concurrencyToken(before, new Date()),
+      });
+      const after = (await listRowById(id)) as unknown as RawChore;
+
+      if (after.updatedAt !== before.updatedAt) {
+        return {
+          status: "warn",
+          detail: `the stamp moved from ${before.updatedAt} to ${after.updatedAt}, so this endpoint no longer stores the token and concurrencyToken could send a clock reading again`,
+        };
+      }
+      return { detail: "the stamp is unchanged, so the stored token was written back as a no-op" };
+    });
+
     await check("PUT /:id/dueDate rejects a body that omits updatedAt", async () => {
       const id = await createScratchChore(baseChoreBody(scoped("duedate-missing"), { frequencyType: "daily" }));
       try {

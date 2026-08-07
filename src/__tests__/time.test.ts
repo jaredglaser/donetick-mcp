@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { addDays, bucket, humanizeDueIn, startOfDay, zonedYmd } from "@/time";
+import { DUE_SCOPES, addDays, bucket, humanizeDueIn, startOfDay, type Scope, zonedYmd } from "@/time";
 
 const NY = "America/New_York";
 const SANTIAGO = "America/Santiago";
@@ -187,3 +187,26 @@ describe("days whose own midnight does not exist", () => {
   });
 });
 
+
+describe("scopes and buckets cannot drift apart", () => {
+  test("every advertised scope has a bucketing rule", () => {
+    // The two used to be separate lists. bucket's default arm answered an unknown
+    // scope with false, so a scope added to the schema and not to bucket returned
+    // zero chores and read as "you have none of those".
+    const at = new Date("2026-06-15T12:00:00Z");
+    for (const scope of DUE_SCOPES) {
+      expect(() => bucket(at, scope, at, "America/New_York")).not.toThrow();
+    }
+  });
+
+  test("a scope with no rule throws rather than filtering everything out", () => {
+    expect(() =>
+      bucket(
+        new Date("2026-06-15T12:00:00Z"),
+        "due_this_month" as unknown as Scope,
+        new Date("2026-06-15T12:00:00Z"),
+        "America/New_York",
+      ),
+    ).toThrow(/no rule for scope/);
+  });
+});

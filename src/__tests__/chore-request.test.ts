@@ -522,11 +522,15 @@ describe("concurrencyToken", () => {
   const withStamp = (updatedAt: string | undefined) =>
     ({ ...existing, updatedAt }) as unknown as RawChore;
 
-  test("uses the current instant when the row's stamp is older", () => {
-    expect(concurrencyToken(withStamp("2026-08-06T15:00:00.000Z"), now)).toBe(now.toISOString());
+  test("sends the row's stamp even when it is older than the clock", () => {
+    // Sending now instead looks equivalent and is not: PUT /:id/assignee writes the
+    // token it receives into the row, so a client running ahead stamps the chore
+    // with a future version and locks it out of editing until the skew passes.
+    const stamp = "2026-08-06T15:00:00.000Z";
+    expect(concurrencyToken(withStamp(stamp), now)).toBe(stamp);
   });
 
-  test("uses the row's own stamp when it is newer than the local clock", () => {
+  test("uses the row's own stamp when it is newer than the local clock too", () => {
     // Measured live: the server's clock ran ahead of the client's, so a write
     // issued right after another sent a "now" already behind the row it was
     // editing, and Donetick refused it with a 403 that reads as a permission
@@ -547,8 +551,8 @@ describe("concurrencyToken", () => {
     expect(concurrencyToken(withStamp(undefined), now)).toBe(now.toISOString());
   });
 
-  test("falls back to now when the stamp is unparseable rather than sending garbage", () => {
-    expect(concurrencyToken(withStamp("not a date"), now)).toBe(now.toISOString());
+  test("falls back to now only when the row carries no stamp at all", () => {
+    expect(concurrencyToken(withStamp(undefined), now)).toBe(now.toISOString());
   });
 });
 
@@ -608,5 +612,42 @@ describe("combinations Donetick cannot complete", () => {
     // all. It matters more than it looks: if Donetick ever reports an unset window as
     // 0 rather than null, that check would refuse every edit of every dateless chore.
     expect(() => buildCreateRequest({ name: "x", completion_window: 0 }, ctx())).not.toThrow();
+  });
+});
+
+describe("adding a checklist item without destroying the checklist", () => {
+  const withList = {
+    ...existing,
+    subTasks: [
+      { id: 1, choreId: 7, name: "Bins to curb", completedAt: "2026-06-14T10:00:00Z" },
+      { id: 2, choreId: 7, name: "Replace bag", completedAt: null },
+    ],
+  } as unknown as RawChore;
+
+  test("add_subtasks keeps the existing items, their ids, and their ticked state", () => {
+    // subtasks alone replaces the list, and buildSubtasks emits no ids and a null
+    // completedAt, so the only way to add an item was to untick everything.
+    const body = mergeEditRequest(withList, { add_subtasks: ["Wipe lid"] }, ctx());
+
+    expect(body.subTasks?.map((t) => t.name)).toEqual(["Bins to curb", "Replace bag", "Wipe lid"]);
+    expect(body.subTasks?.[0]?.id).toBe(1);
+    expect(body.subTasks?.[0]?.completedAt).toBe("2026-06-14T10:00:00Z");
+    expect(body.subTasks?.[2]?.completedAt).toBeNull();
+  });
+
+  test("the appended item is ordered after the existing ones", () => {
+    const body = mergeEditRequest(withList, { add_subtasks: ["Wipe lid"] }, ctx());
+    expect(body.subTasks?.map((t) => t.orderId)).toEqual([0, 1, 2]);
+  });
+
+  test("subtasks still replaces outright, which is what it says it does", () => {
+    const body = mergeEditRequest(withList, { subtasks: ["Only this"] }, ctx());
+    expect(body.subTasks?.map((t) => t.name)).toEqual(["Only this"]);
+    expect(body.subTasks?.[0]?.completedAt).toBeNull();
+  });
+
+  test("add_subtasks on a chore with no checklist just creates one", () => {
+    const body = mergeEditRequest(existing, { add_subtasks: ["First"] }, ctx());
+    expect(body.subTasks?.map((t) => t.name)).toContain("First");
   });
 });

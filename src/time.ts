@@ -1,12 +1,21 @@
 import { Temporal } from "@js-temporal/polyfill";
 
-export type Scope =
-  | "all"
-  | "overdue"
-  | "due_today"
-  | "due_this_week"
-  | "due_within_days"
-  | "unscheduled";
+/**
+ * One table, so the tool schema and the bucketing cannot disagree. They did: SCOPES
+ * carried a seventh value this type did not, rewritten to "all" at runtime, and
+ * bucket's default arm answered anything unrecognized with zero chores rather than
+ * an error. A scope that returns nothing reads as "you have none of those".
+ */
+export const DUE_SCOPES = [
+  "all",
+  "overdue",
+  "due_today",
+  "due_this_week",
+  "due_within_days",
+  "unscheduled",
+] as const;
+
+export type Scope = (typeof DUE_SCOPES)[number];
 
 function zoned(instant: Date, tz: string): Temporal.ZonedDateTime {
   return Temporal.Instant.fromEpochMilliseconds(instant.getTime()).toZonedDateTimeISO(tz);
@@ -89,8 +98,12 @@ export function bucket(
         dueDate.getTime() >= todayStart.getTime() &&
         dueDate.getTime() < addDays(now, withinDays, tz).getTime()
       );
-    default:
-      return false;
+    default: {
+      // Exhaustive: adding a Scope without a bucket for it is a compile error rather
+      // than a listing that silently comes back empty.
+      const unhandled: never = scope;
+      throw new Error(`bucket has no rule for scope ${JSON.stringify(unhandled)}`);
+    }
   }
 }
 
