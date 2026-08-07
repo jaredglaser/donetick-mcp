@@ -201,7 +201,11 @@ describe("list_activity", () => {
     dueDate: "2026-06-14T00:00:00Z",
     performedAt: "2026-06-14T09:00:00Z",
     notes: null,
-    status: 0,
+    // 1 is a completion. Measured on v0.1.76: complete wrote 1, skip 2, a completion
+    // awaiting sign-off 3, and a plain edit 6. The old fixture used 0, which is not
+    // a value Donetick writes, so every list_activity test ran on a shape the wire
+    // never produces.
+    status: 1,
     createdAt: "2026-06-14T09:00:00Z",
     updatedAt: "2026-06-14T09:00:00Z",
     syncVersion: 1,
@@ -932,5 +936,67 @@ describe("error reporting", () => {
     const result = await tools.find((t) => t.name === "complete_chore")!.handler({ chore_id: 1 });
 
     expect(result.content[0]!.text).not.toMatch(/may or may not/);
+  });
+});
+
+describe("list_activity does not report edits as completions", () => {
+  const row = (overrides: Record<string, unknown>) => ({
+    id: 1,
+    choreId: 9,
+    assignedTo: 1,
+    completedBy: 1,
+    dueDate: "2026-06-14T00:00:00Z",
+    performedAt: "2026-06-14T09:00:00Z",
+    notes: null,
+    status: 1,
+    createdAt: "2026-06-14T09:00:00Z",
+    updatedAt: "2026-06-14T09:00:00Z",
+    ...overrides,
+  });
+
+  function toolsFor(rows: Array<Record<string, unknown>>) {
+    return buildToolDefinitions({
+      ...deps,
+      service: {
+        ...service,
+        chores: async () => [{ id: 9, name: "Water plants", isActive: true }],
+        members: async () => [{ userId: 1, username: "j", displayName: "Jared", role: "admin", points: 0, pointsRedeemed: 0 }],
+        rawGet: async () => rows,
+      } as never,
+    });
+  }
+
+  test("a reschedule row is left out by default", async () => {
+    // Donetick writes one on every edit that carries a due date, comparing the old
+    // and new by pointer so it fires even when the date is unchanged. This server
+    // always sends the date, so a plain rename produced a row that read as
+    // "Jared completed Water plants".
+    const tools = toolsFor([row({ status: 6 }), row({ id: 2, status: 1 })]);
+
+    const parsed = jsonOf(await tools.find((t) => t.name === "list_activity")!.handler({})) as Array<{
+      action: string;
+    }>;
+
+    expect(parsed.map((r) => r.action)).toEqual(["completed"]);
+  });
+
+  test("include_all_actions brings them back, each named", async () => {
+    const tools = toolsFor([row({ status: 6 }), row({ id: 2, status: 2 }), row({ id: 3, status: 1 })]);
+
+    const parsed = jsonOf(
+      await tools.find((t) => t.name === "list_activity")!.handler({ include_all_actions: true }),
+    ) as Array<{ action: string }>;
+
+    expect(parsed.map((r) => r.action)).toEqual(["rescheduled", "skipped", "completed"]);
+  });
+
+  test("an unmapped status is reported rather than guessed at", async () => {
+    const tools = toolsFor([row({ status: 99 })]);
+
+    const parsed = jsonOf(
+      await tools.find((t) => t.name === "list_activity")!.handler({ include_all_actions: true }),
+    ) as Array<{ action: string }>;
+
+    expect(parsed[0]!.action).toBe("status 99");
   });
 });

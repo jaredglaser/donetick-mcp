@@ -86,6 +86,22 @@ export const CHORE_STATUS: Record<number, string> = {
 };
 
 /** Donetick priority is inverted: P1 is the most urgent, 0 means unset. */
+/**
+ * Chore history rows, which are not the same scale as CHORE_STATUS. Measured on
+ * v0.1.76: completing wrote 1, skipping 2, a completion awaiting sign-off 3, and a
+ * plain rename wrote 6. Donetick records a reschedule on every edit that carries a
+ * nextDueDate, and it compares the old and new dates by pointer, so the row appears
+ * even when the date is unchanged.
+ */
+export const CHORE_HISTORY_STATUS: Record<number, string> = {
+  1: "completed",
+  2: "skipped",
+  3: "pending_approval",
+  4: "rejected",
+  5: "missed",
+  6: "rescheduled",
+};
+
 export const PRIORITY_LABEL: Record<number, string> = {
   0: "none",
   1: "P1",

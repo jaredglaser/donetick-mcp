@@ -33,7 +33,7 @@ import {
 } from "@/tools/schedule";
 import { setSubtaskCompleted, type SetSubtaskInput } from "@/tools/subtasks";
 import { createChore, deleteChore, editChore, type WriteContext } from "@/tools/write";
-import type { Member, RawChore } from "@/types";
+import { CHORE_HISTORY_STATUS, type Member, type RawChore } from "@/types";
 import { getChore, listChores, type ListArgs } from "@/tools/read";
 
 export interface McpExtras {
@@ -247,6 +247,11 @@ function enrichHistoryRow(row: RawHistoryRow, chores: RawChore[], members: Membe
 
   return {
     chore: label,
+    // Named, not assumed. A rename writes a "rescheduled" row, and reporting every
+    // row as a completion answered "when did I last do X" with the time X was
+    // edited. Donetick writes one on every edit carrying a due date, which this
+    // server now always sends, so they are common rather than rare.
+    action: CHORE_HISTORY_STATUS[row.status] ?? `status ${row.status}`,
     completed_by: completedBy,
     performed_at: row.performedAt,
     due_date: row.dueDate,
@@ -402,6 +407,13 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
           .max(MAX_HISTORY_DAYS)
           .optional()
           .describe("How many days back to look. Defaults to 7, capped at 90."),
+        include_all_actions: z
+          .boolean()
+          .optional()
+          .describe(
+            "Include skips, rejections, misses and reschedules as well as completions. Off by " +
+              "default, because a reschedule is written on every edit and reads as a completion.",
+          ),
       },
       handler: guard(async (args) => {
         const days = clampHistoryDays(args.days);
@@ -418,7 +430,12 @@ export function buildToolDefinitions(deps: ToolDeps): ToolDefinition[] {
         const missing = rows.some((row) => !chores.some((chore) => chore.id === row.choreId));
         const pool = missing ? [...chores, ...(await service.archivedChores())] : chores;
 
-        return ok(rows.map((row) => enrichHistoryRow(row, pool, members)));
+        const enriched = rows.map((row) => enrichHistoryRow(row, pool, members));
+        return ok(
+          args.include_all_actions === true
+            ? enriched
+            : enriched.filter((entry) => entry.action === "completed"),
+        );
       }),
     },
     {
