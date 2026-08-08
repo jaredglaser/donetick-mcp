@@ -4,7 +4,7 @@ import { endpoints } from "@/endpoints";
 import { loadChoreById } from "@/tools/chore-lookup";
 import { resolveMember, safeName } from "@/resolve";
 import type { ToolContext } from "@/tools/context";
-import type { ChoreListRow } from "@/types";
+import { isArchivedChore, type ChoreListRow } from "@/types";
 
 /** Same day in the given zone, which is not the same question as "within 24 hours". */
 function isSameCalendarDay(a: Date, b: Date, tz: string): boolean {
@@ -47,7 +47,7 @@ function messageOf(response: unknown): string | undefined {
  * absent from every active list, which is the part worth saying.
  */
 function inactiveNote(chore: { name: string; isActive?: boolean }): string {
-  if (chore.isActive !== false) return "";
+  if (!isArchivedChore(chore)) return "";
   return ` "${safeName(chore.name)}" is not in your active lists, either because it was archived or because it is a one-off that has already been completed. Nothing you do to it here will show up in list_chores.`;
 }
 

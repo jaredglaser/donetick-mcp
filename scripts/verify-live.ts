@@ -416,8 +416,17 @@ async function main(): Promise<void> {
     await check(
       "the /chores list row and GET /:id/details expose different, non-overlapping field sets",
       async () => {
+        // completionWindow is set, not left off. Donetick tags it omitempty, so a
+        // chore without one produces a /details response with no such key, and that
+        // is how "this row has no completion window" was written down as "this view
+        // omits completionWindow" and stayed in the type's doc for a round.
         const id = await createScratchChore(
-          baseChoreBody(scoped("shape"), { frequencyType: "daily", requireApproval: true, points: 3 }),
+          baseChoreBody(scoped("shape"), {
+            frequencyType: "daily",
+            requireApproval: true,
+            points: 3,
+            completionWindow: 4,
+          }),
         );
         approvalChoreId = id;
 
@@ -445,6 +454,16 @@ async function main(): Promise<void> {
         const detailOnlyFields = ["lastCompletedDate", "totalCompletedCount"];
         for (const field of detailOnlyFields) {
           if (!(field in details)) throw new Error(`GET /:id/details for chore ${id} is missing "${field}"`);
+        }
+
+        // Carried by both, which is the third category the two lists above cannot
+        // express and the one the type's doc got wrong.
+        for (const field of ["completionWindow", "isActive", "status", "subTasks"]) {
+          if (!(field in details)) {
+            throw new Error(
+              `GET /:id/details for chore ${id} is missing "${field}", which ChoreDetails in src/types.ts declares`,
+            );
+          }
         }
 
         return {
@@ -861,6 +880,27 @@ async function main(): Promise<void> {
           1,
           "days_of_the_week",
         ],
+        // The scheduler lowers both sides on the weekday arms and uses EqualFold on
+        // the month one, so these are the neighbours a case-sensitive name check
+        // would land on.
+        [
+          "a capitalised weekday name",
+          { days: ["Saturday"], timezone },
+          1,
+          "days_of_the_week",
+        ],
+        [
+          "a capitalised weekday name under an occurrence pattern",
+          { days: ["Monday"], weekPattern: "week_of_month", occurrences: [1], timezone },
+          1,
+          "days_of_the_week",
+        ],
+        [
+          "a capitalised month name",
+          { months: ["October"], timezone },
+          15,
+          "day_of_the_month",
+        ],
       ];
 
       const advanced: string[] = [];
@@ -897,6 +937,61 @@ async function main(): Promise<void> {
       }
 
       return { detail: `${advanced.length} allowed shapes each advanced on completion` };
+    });
+
+    await check("a weekday or month name the scheduler cannot match fails every completion", async () => {
+      // The gap this closes: buildFrequency checked names on input and
+      // frequencyHealth did not check them on a stored row, so a chore written by
+      // anything else read as healthy, summarised as "every funday", and answered 500
+      // on every completion with nothing in this server willing to say why.
+      //
+      // Both sides again. Donetick giving up on the name is half of it; the other
+      // half is frequencyHealth saying so.
+      const anchor = "2026-09-10T13:00:00Z";
+      const cases: Array<[string, Record<string, unknown>, number, string]> = [
+        ["a weekday name", { days: ["funday"], timezone }, 1, "days_of_the_week"],
+        [
+          "a weekday name under an occurrence pattern",
+          { days: ["funday"], weekPattern: "week_of_month", occurrences: [1], timezone },
+          1,
+          "days_of_the_week",
+        ],
+        ["a month name", { months: ["smarch"], timezone }, 15, "day_of_the_month"],
+      ];
+
+      const refused: string[] = [];
+      for (const [label, metadata, frequency, frequencyType] of cases) {
+        const id = await createScratchChore(
+          baseChoreBody(scoped(`badname-${refused.length}`), {
+            nextDueDate: anchor,
+            frequencyType,
+            frequency,
+            frequencyMetadata: metadata,
+          }),
+        );
+
+        let completed = true;
+        try {
+          await client.post(endpoints.completeChore(id), {});
+        } catch {
+          completed = false;
+        }
+        if (completed) {
+          throw new Error(
+            `${label}: Donetick completed it, so the scheduler grew a match for this name and frequencyHealth now refuses a working chore`,
+          );
+        }
+
+        const health = frequencyHealth((await listRowById(id)) as unknown as ChoreListRow);
+        if (health.ok) {
+          throw new Error(
+            `${label}: Donetick cannot schedule it and frequencyHealth calls it healthy, so this server describes it as a working recurrence and carries it forward on every edit`,
+          );
+        }
+        refused.push(label);
+      }
+
+      return { detail: `${refused.length} unmatchable names each failed completion and read as broken` };
     });
 
     await check("an hourly interval with a time of day freezes, which is why the client refuses it", async () => {
@@ -1116,6 +1211,13 @@ async function main(): Promise<void> {
       // That makes the sign of the offset the predictor, which is what this asserts.
       // A plain warn could not tell an upstream fix from a server that merely moved
       // to UTC.
+      //
+      // Both branches are measured, not one and an inference. On 2026-08-08 against
+      // v0.1.76: at America/New_York created_at came back as
+      // 2026-08-08T02:08:26-04:00 and both undos were refused with a 400; at
+      // TZ=UTC it came back as 2026-08-08T06:09:51Z and both undos succeeded. The
+      // second half needs DONETICK_TZ=UTC bun run verify:live, so CI only ever
+      // exercises the failing direction.
       const offsetProbeId = await createScratchChore(
         baseChoreBody(scoped("undo-offset"), { frequencyType: "daily" }),
       );

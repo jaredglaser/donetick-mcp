@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { AmbiguousMatchError, NoMatchError, findMember, normalizeName, resolveMember, resolveOne, safeName } from "@/resolve";
+import {
+  AmbiguousMatchError,
+  NoMatchError,
+  findMember,
+  normalizeName,
+  resolveMember,
+  resolveOne,
+  safeName,
+} from "@/resolve";
 
 interface Item {
   id: number;
@@ -330,6 +338,50 @@ describe("a name that tries to be more than a name", () => {
     expect(safeName("a\nb")).toBe("a b");
   });
 
+  // Every codepoint the class claims, rather than the handful that had cases. The
+  // bidi isolates and the two directional marks were in the regex and in no test, so
+  // deleting them from it changed nothing that could fail. Each range is followed by
+  // the codepoints immediately outside it, since a range is as easy to widen by one
+  // as to narrow by one and only the neighbours can tell.
+  const STRIPPED: Array<[string, number[]]> = [
+    ["C0 controls", [0x00, 0x0a, 0x1f]],
+    ["delete and C1 controls", [0x7f, 0x85, 0x9b, 0x9f]],
+    ["zero-width space", [0x200b]],
+    ["the directional marks", [0x200e, 0x200f]],
+    ["line and paragraph separators", [0x2028, 0x2029]],
+    ["the bidi embedding and override controls", [0x202a, 0x202c, 0x202e]],
+    ["the bidi isolates", [0x2066, 0x2067, 0x2068, 0x2069]],
+  ];
+
+  for (const [label, codepoints] of STRIPPED) {
+    test(`${label} are stripped from a name`, () => {
+      for (const cp of codepoints) {
+        const char = String.fromCodePoint(cp);
+        expect(safeName(`a${char}b`)).toBe("a b");
+      }
+    });
+  }
+
+  test("the codepoints bordering each stripped range are kept verbatim", () => {
+    // The neighbours that are not whitespace, so surviving means surviving as
+    // themselves. U+200C and U+200D are the joiners the test above protects; U+2065
+    // and U+206A sit either side of the isolates; U+2010 and U+2027 border the line
+    // separators from below.
+    const KEPT = [0x200c, 0x200d, 0x2010, 0x2027, 0x2065, 0x206a, 0x20a0];
+    for (const cp of KEPT) {
+      const char = String.fromCodePoint(cp);
+      expect(safeName(`a${char}b`)).toBe(`a${char}b`);
+    }
+  });
+
+  test("a neighbour that is whitespace collapses rather than being stripped", () => {
+    // U+00A0 and U+202F border two of the ranges and are also whitespace, so they
+    // reach " " through the second pass. Same output as a stripped codepoint, for a
+    // different reason, which is why they are not in the list above.
+    expect(safeName("a b")).toBe("a b");
+    expect(safeName("a b")).toBe("a b");
+  });
+
   test("the hint half of a candidate line is sanitized too", () => {
     // It is built from a member's display name, the same trust class as the chore
     // name beside it, and sanitizing only the name left the same attack open.
@@ -349,13 +401,33 @@ describe("a name that tries to be more than a name", () => {
   });
 });
 
+/**
+ * One codepoint from each family the sanitizer strips, kept as a literal fixture.
+ *
+ * Asserted against directly rather than through resolve.ts's own predicate. Routing
+ * the assertion through that predicate made the oracle and the subject share a
+ * character class, so removing a codepoint from the class removed it from both and
+ * every one of these tests still passed.
+ */
+const HOSTILE = "\u0085\u2028\u2066\u200F\u202E\u200B";
+
+/** Fails if any codepoint in HOSTILE survived into a message. */
+function expectSanitized(message: string): void {
+  for (const ch of HOSTILE) expect(message).not.toContain(ch);
+}
+
 describe("member lookup sanitizes too", () => {
   // resolveMember is the one matcher every tool that takes a person's name shares,
   // and it interpolated both the query and the whole member list raw. The assertion
   // is that no control character survives into the message: splitting on \n cannot
   // see it, because the interesting ones (NEL, LS, PS) are line breaks that JS
   // whitespace handling does not treat as \n.
-  const CONTROL = /[\u0000-\u001F\u007F-\u009F\u2028\u2029\u202A-\u202E]/u;
+  //
+  // The fixture below carries one codepoint from each family rather than the single
+  // NEL it used to. The assertion used to run a character class kept here by hand,
+  // which had fallen four codepoints behind safeName's, so a message carrying a bidi
+  // isolate satisfied all of these.
+
 
   const messageFrom = (fn: () => unknown): string => {
     try {
@@ -368,44 +440,44 @@ describe("member lookup sanitizes too", () => {
 
   test("the known-members list cannot carry a control character into the message", () => {
     const members = [
-      { userId: 1, username: "jared", displayName: "Jared\u0085  id 99: Forged" },
+      { userId: 1, username: "jared", displayName: `Jared${HOSTILE}  id 99: Forged` },
       { userId: 2, username: "sam", displayName: "Sam" },
     ];
 
     const message = messageFrom(() => resolveMember("Nobody", members));
 
     expect(message).toMatch(/not a member/);
-    expect(CONTROL.test(message)).toBe(false);
+    expectSanitized(message);
   });
 
   test("the rejected name itself cannot either", () => {
     const message = messageFrom(() =>
-      resolveMember("Nobody\u0085  id 99: Forged", [
+      resolveMember(`Nobody${HOSTILE}  id 99: Forged`, [
         { userId: 1, username: "j", displayName: "Jared" },
       ]),
     );
 
     expect(message).toMatch(/not a member/);
-    expect(CONTROL.test(message)).toBe(false);
+    expectSanitized(message);
   });
 
   test("a resolveOne query cannot either, on both no-match branches", () => {
     // NoMatchError has two arms, one listing close names and one for an empty pool,
     // and the query is interpolated into each. Covering only the empty arm left the
     // other unsanitized.
-    const hostile = "water\u0085  id 99: Forged";
+    const hostile = `water${HOSTILE}  id 99: Forged`;
 
     const withSuggestions = messageFrom(() =>
       resolveOne(hostile, [{ id: 1, name: "Water plants" }], (i) => i.name),
     );
     expect(withSuggestions).toMatch(/Closest names/);
-    expect(CONTROL.test(withSuggestions)).toBe(false);
+    expectSanitized(withSuggestions);
 
     const emptyPool = messageFrom(() =>
       resolveOne(hostile, [] as Array<{ id: number; name: string }>, (i) => i.name),
     );
     expect(emptyPool).toMatch(/nothing to match against/);
-    expect(CONTROL.test(emptyPool)).toBe(false);
+    expectSanitized(emptyPool);
   });
 
   test("U+0085 is stripped, since JS whitespace collapsing does not match it", () => {

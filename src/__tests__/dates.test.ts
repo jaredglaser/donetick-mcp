@@ -123,12 +123,22 @@ describe("parseDueDate, additional coverage", () => {
   // Null is the only clear. As null these two let edit_chore drop the stored date
   // and reschedule a rolling chore to today 09:00, while reschedule_chore read the
   // same string as a deliberate clear.
+  // Matching the empty-string message specifically, because matching the shared
+  // format help could not tell the guard from its absence: the fall-through throws
+  // that same help, so both of these passed with the branch deleted.
   test("an empty string is a parse error, not a silent clear", () => {
-    expect(() => parseDueDate("", now, NY)).toThrow(/Could not parse/);
+    expect(() => parseDueDate("", now, NY)).toThrow(/pass null for "no due date"/);
   });
 
   test("a whitespace-only string is a parse error too", () => {
-    expect(() => parseDueDate("   ", now, NY)).toThrow(/Could not parse/);
+    expect(() => parseDueDate("   ", now, NY)).toThrow(/pass null for "no due date"/);
+  });
+
+  test("a string that is merely unparseable still gets the plain format help", () => {
+    // The mirror: widening the empty-string branch to every parse failure would tell
+    // a caller who wrote "nextg tuesday" to pass null, which is not their problem.
+    expect(() => parseDueDate("nextg tuesday", now, NY)).toThrow(/Could not parse/);
+    expect(() => parseDueDate("nextg tuesday", now, NY)).not.toThrow(/pass null/);
   });
 
   test("a relative offset past ten years is refused with a bound, not a RangeError", () => {

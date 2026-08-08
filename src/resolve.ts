@@ -38,6 +38,12 @@ export class NoMatchError extends Error {
 // marks and overrides, and the line and paragraph separators. C1 is in there because
 // U+0085 is a Unicode mandatory line break that JS \s does not match, so it survived
 // the collapse-whitespace pass intact and kept the forged-line attack open.
+//
+// U+2028 and U+2029 are the exception: measured 2026-08-08, JS \s does match those
+// two, so the collapse pass would remove them on its own and deleting them from this
+// class changes nothing. They stay because reading the class should not require
+// knowing which line terminators \s happens to cover, and every other entry here is
+// load-bearing.
 const CONTROL_CHARS = /[\u0000-\u001F\u007F-\u009F\u200B\u200E\u200F\u2028\u2029\u202A-\u202E\u2066-\u2069]/gu;
 const MAX_NAME_IN_MESSAGE = 120;
 

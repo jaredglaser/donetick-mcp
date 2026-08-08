@@ -30,6 +30,28 @@ const HOST_PORT = Bun.env.DONETICK_LOCAL_PORT ?? "12021";
 const BASE_URL = `http://127.0.0.1:${HOST_PORT}`;
 
 /**
+ * The container's own zone, which decides the offset Donetick writes into
+ * created_at. Separate from LOCAL_TIMEZONE below, which is the zone the scratch
+ * chores carry in their frequency metadata; the undo check reads the first and every
+ * scheduling check reads the second.
+ *
+ * The default has to match compose.verify.yaml's, since this string is what the
+ * reuse check compares against.
+ */
+const CONTAINER_TZ = Bun.env.DONETICK_TZ ?? "America/New_York";
+
+/**
+ * What the running container is, as opposed to whether it answers.
+ *
+ * The reuse path used to ask only whether the stored token still worked, so every
+ * container-level knob was silently ignored whenever one was already up. That made
+ * the documented `DONETICK_IMAGE_TAG=vX.Y.Z bun run verify:live` re-check v0.1.76 and
+ * report the checks as passing for the new tag, and it is how the first attempt to
+ * measure undo at UTC measured America/New_York instead.
+ */
+const containerIdentity = (): string => `${IMAGE_TAG} ${CONTAINER_TZ} ${HOST_PORT}`;
+
+/**
  * Matches the instance this server is written for. verify-live asserts that undo
  * fails if and only if Donetick stores timestamps behind UTC, so a UTC container
  * would satisfy that check the other way round and stop guarding the diagnosis in
@@ -62,6 +84,9 @@ function compose(args: string[], secret: string): void {
       DONETICK_IMAGE_TAG: IMAGE_TAG,
       DONETICK_LOCAL_PORT: HOST_PORT,
       DONETICK_JWT_SECRET: secret,
+      // Explicit rather than inherited, so the value compose interpolates is the
+      // same one containerIdentity() recorded.
+      DONETICK_TZ: CONTAINER_TZ,
     },
     stdout: "inherit",
     stderr: "inherit",
@@ -85,8 +110,11 @@ async function readCredentials(): Promise<LocalInstance | undefined> {
   const file = Bun.file(CREDENTIALS_FILE);
   if (!(await file.exists())) return undefined;
   try {
-    const parsed = (await file.json()) as Partial<LocalInstance>;
+    const parsed = (await file.json()) as Partial<LocalInstance> & { identity?: unknown };
     if (typeof parsed.baseUrl !== "string" || typeof parsed.token !== "string") return undefined;
+    // A file written before the identity was recorded names a container that cannot
+    // be shown to match, so it is replaced rather than trusted.
+    if (parsed.identity !== containerIdentity()) return undefined;
     return { baseUrl: parsed.baseUrl, token: parsed.token, timezone: LOCAL_TIMEZONE };
   } catch {
     return undefined;
@@ -95,7 +123,8 @@ async function readCredentials(): Promise<LocalInstance | undefined> {
 
 async function writeCredentials(instance: LocalInstance): Promise<void> {
   mkdirSync(`${REPO_ROOT}.donetick-local`, { recursive: true, mode: 0o700 });
-  await Bun.write(CREDENTIALS_FILE, `${JSON.stringify(instance, null, 2)}\n`);
+  const stored = { ...instance, identity: containerIdentity() };
+  await Bun.write(CREDENTIALS_FILE, `${JSON.stringify(stored, null, 2)}\n`);
   // After the write, not as an option to it: Bun.write's mode applies only when it
   // creates the file, so a rewrite would keep whatever mode was there before.
   chmodSync(CREDENTIALS_FILE, 0o600);
@@ -213,11 +242,11 @@ export async function tearDownLocalInstance(): Promise<void> {
 export async function ensureLocalInstance(): Promise<LocalInstance> {
   const existing = await readCredentials();
   if (existing !== undefined && (await tokenWorks(existing))) {
-    log(`reusing the Donetick already running at ${existing.baseUrl}`);
+    log(`reusing the Donetick already running at ${existing.baseUrl} (${containerIdentity()})`);
     return existing;
   }
 
-  log(`starting donetick/donetick:${IMAGE_TAG} on ${BASE_URL}`);
+  log(`starting donetick/donetick:${IMAGE_TAG} on ${BASE_URL}, TZ ${CONTAINER_TZ}`);
   composeDown();
   composeUp();
   await waitForHealth(60_000);

@@ -14,13 +14,14 @@ import { loadChoreById } from "@/tools/chore-lookup";
 import type { ToolContext } from "@/tools/context";
 import { projectChore } from "@/projection";
 import { safeName } from "@/resolve";
-import type {
-  ChoreDetails,
-  ChoreListRow,
-  Member,
-  Project,
-  ProjectedChore,
-  RawChore,
+import {
+  isArchivedChore,
+  type ChoreDetails,
+  type ChoreListRow,
+  type Member,
+  type Project,
+  type ProjectedChore,
+  type RawChore,
 } from "@/types";
 
 export type { ToolContext as WriteContext } from "@/tools/context";
@@ -273,7 +274,7 @@ export async function deleteChore(
     // first sentence early and make the rest read as a separate, benign prompt.
     const label = `${JSON.stringify(safeName(existing.name))} (id ${existing.id})`;
     const message =
-      existing.isActive === false
+      isArchivedChore(existing)
         ? `Delete ${label}? It is already archived, so it is out of your active lists; deleting also removes its completion history, permanently.`
         : `Delete ${label}? This permanently removes the chore and its completion history. If you want to keep the history, archive it instead.`;
     return { kind: "confirm_required", chore: existing.name, message };

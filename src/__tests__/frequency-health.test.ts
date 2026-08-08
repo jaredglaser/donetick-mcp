@@ -64,7 +64,19 @@ const BROKEN: Array<[string, ChoreListRow]> = [
     "week_of_quarter, stored weekNumbers of 14",
     row({ frequencyType: "days_of_the_week", frequencyMetadata: { days: ["monday"], weekPattern: "week_of_quarter", weekNumbers: [14] } }),
   ],
-    ["day_of_the_month, no months", row({ frequencyType: "day_of_the_month", frequency: 15, frequencyMetadata: {} })],
+  [
+    "days_of_the_week, a name no weekday matches",
+    row({ frequencyType: "days_of_the_week", frequencyMetadata: { days: ["funday"] } }),
+  ],
+  [
+    "week_of_month, a name no weekday matches",
+    row({ frequencyType: "days_of_the_week", frequencyMetadata: { days: ["funday"], weekPattern: "week_of_month", occurrences: [1] } }),
+  ],
+  ["day_of_the_month, no months", row({ frequencyType: "day_of_the_month", frequency: 15, frequencyMetadata: {} })],
+  [
+    "day_of_the_month, a name no month matches",
+    row({ frequencyType: "day_of_the_month", frequency: 15, frequencyMetadata: { months: ["smarch"] } }),
+  ],
   [
     "day_of_the_month, day 0",
     row({ frequencyType: "day_of_the_month", frequency: 0, frequencyMetadata: { months: ["october"] } }),
@@ -115,6 +127,22 @@ const HEALTHY: Array<[string, ChoreListRow]> = [
   [
     "day_of_the_month, day 15",
     row({ frequencyType: "day_of_the_month", frequency: 15, frequencyMetadata: { months: ["october"] } }),
+  ],
+  // Donetick lowers both sides on the weekday arms and uses EqualFold on the month
+  // one, so these run exactly as their lowercase twins do. A case-sensitive name
+  // check would refuse them, and refusing one here makes it uneditable through this
+  // server while naming a repair it does not need.
+  [
+    "days_of_the_week, a capitalised weekday name",
+    row({ frequencyType: "days_of_the_week", frequencyMetadata: { days: ["Saturday"] } }),
+  ],
+  [
+    "week_of_month, a capitalised weekday name",
+    row({ frequencyType: "days_of_the_week", frequencyMetadata: { days: ["Monday"], weekPattern: "week_of_month", occurrences: [1] } }),
+  ],
+  [
+    "day_of_the_month, a capitalised month name",
+    row({ frequencyType: "day_of_the_month", frequency: 15, frequencyMetadata: { months: ["October"] } }),
   ],
   [
     "day_of_the_month carrying weekday names, which Donetick ignores",

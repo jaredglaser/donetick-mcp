@@ -24,9 +24,15 @@ export type WeekPattern = (typeof WEEK_PATTERNS)[number];
 
 export type FrequencyUnit = "hours" | "days" | "weeks" | "months" | "years";
 
-const FREQUENCY_UNITS: readonly FrequencyUnit[] = ["hours", "days", "weeks", "months", "years"];
+export const FREQUENCY_UNITS: readonly FrequencyUnit[] = [
+  "hours",
+  "days",
+  "weeks",
+  "months",
+  "years",
+];
 
-const WEEKDAYS = [
+export const WEEKDAYS = [
   "sunday",
   "monday",
   "tuesday",
@@ -36,7 +42,7 @@ const WEEKDAYS = [
   "saturday",
 ] as const;
 
-const MONTHS = [
+export const MONTHS = [
   "january",
   "february",
   "march",

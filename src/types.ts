@@ -97,11 +97,16 @@ export interface ChoreListRow extends RawChore {
 
 /**
  * GET /chores/:id/details, which is not a subset of the list row and not a superset
- * of it either. Measured on v0.1.76 it omits assignStrategy, assignees, circleId,
- * completionWindow, createdAt, frequency, frequencyMetadata, isPrivate, isRolling,
- * labelsV2, notification, notificationMetadata, points, requireApproval, thingChore,
- * updatedAt and updatedBy, and it is the only view carrying lastCompletedDate,
- * lastCompletedBy and totalCompletedCount.
+ * of it either. Read off Donetick's ChoreDetail struct rather than off one response:
+ * it omits assignStrategy, assignees, circleId, createdAt, frequency,
+ * frequencyMetadata, isPrivate, isRolling, labelsV2, notification,
+ * notificationMetadata, points, requireApproval, thingChore, updatedAt and updatedBy,
+ * and it is the only view carrying lastCompletedDate, lastCompletedBy and
+ * totalCompletedCount.
+ *
+ * completionWindow and projectId are on it, and were listed as omitted for a round.
+ * Both are tagged omitempty, so the one chore the original reading measured had
+ * neither set and absent-for-that-row was written down as absent-from-the-view.
  *
  * Assignable to RawChore and never to ChoreListRow, which is the whole reason it has
  * a name of its own.
@@ -118,6 +123,13 @@ export interface ChoreDetails {
   isActive?: boolean;
   createdBy: number;
   syncVersion?: number;
+  completionWindow?: number | null;
+  projectId?: number | null;
+  notes?: string | null;
+  /** Timer fields. Present on this view alone, and not read by anything here yet. */
+  duration?: number;
+  startTime?: string | null;
+  timerUpdatedAt?: string | null;
   subTasks?: RawSubTask[] | null;
   lastCompletedDate?: string | null;
   lastCompletedBy?: number | null;
@@ -175,6 +187,41 @@ export const PRIORITY_LABEL: Record<number, string> = {
 };
 
 /**
+ * Whether a chore is archived.
+ *
+ * `=== false` rather than `!chore.isActive`: the field is optional on some views,
+ * and a row that omits it must not be reported as archived.
+ *
+ * One function because there were five copies, in the service's archived filter and
+ * in four tools, each written out by hand. The member list has its own `isActive`
+ * with the same spelling and a different meaning, which is exactly the kind of
+ * neighbour that makes five copies drift into four.
+ */
+export function isArchivedChore(chore: { isActive?: boolean }): boolean {
+  return chore.isActive === false;
+}
+
+/** Donetick's "no priority set", which is not the least urgent one. That is P4. */
+export const UNSET_PRIORITY = 0;
+
+const PRIORITY_NUMBERS: readonly number[] = Object.keys(PRIORITY_LABEL)
+  .map(Number)
+  .sort((a, b) => a - b);
+
+export const MIN_PRIORITY = PRIORITY_NUMBERS[0]!;
+export const MAX_PRIORITY = PRIORITY_NUMBERS[PRIORITY_NUMBERS.length - 1]!;
+
+/**
+ * Whether a number is a priority Donetick stores.
+ *
+ * The bound lived in three places that agreed by hand: this check, the tool schema's
+ * min and max, and the keys of PRIORITY_LABEL. All three now read the keys.
+ */
+export function isPriorityValue(value: number): boolean {
+  return Number.isInteger(value) && PRIORITY_NUMBERS.includes(value);
+}
+
+/**
  * Derived from PRIORITY_LABEL rather than written out again, so the two directions
  * cannot disagree. Priority is inverted here (P1 is the most urgent, 0 is unset),
  * which makes a hand-maintained second copy the worst place in this codebase for a
@@ -183,6 +230,23 @@ export const PRIORITY_LABEL: Record<number, string> = {
 export const PRIORITY_VALUE: Record<string, number> = Object.fromEntries(
   Object.entries(PRIORITY_LABEL).map(([value, label]) => [label.toLowerCase(), Number(value)]),
 );
+
+/**
+ * The labels a caller may pass, most urgent first and the unset one last, which is
+ * the order they read in a tool schema.
+ *
+ * Derived for the same reason PRIORITY_VALUE is. This was a third hand-written copy
+ * in src/tools/index.ts, so adding a level meant editing three lists and a fourth
+ * that had drifted would still have looked right.
+ */
+export const PRIORITY_INPUT_VALUES: readonly string[] = [
+  ...Object.entries(PRIORITY_LABEL)
+    .map(([value, label]) => [Number(value), label] as const)
+    .filter(([value]) => value !== UNSET_PRIORITY)
+    .sort(([a], [b]) => a - b)
+    .map(([, label]) => label),
+  PRIORITY_LABEL[UNSET_PRIORITY]!,
+];
 
 export interface ProjectedChore {
   id: number;

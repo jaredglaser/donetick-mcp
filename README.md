@@ -135,7 +135,7 @@ bun run verify:live
 
 It needs Docker and nothing else. It starts a Donetick container pinned to the tag
 in `compose.verify.yaml`, signs a throwaway user up over plain HTTP, mints that
-user's API token, and exercises 30 contract facts against it. A clean run reports
+user's API token, and exercises 31 contract facts against it. A clean run reports
 31 passed: the thirty-first is a cleanup assertion, not a contract fact. Scratch chores carry
 a run-scoped name prefix and are deleted in a `finally`, so a mid-run failure
 leaves nothing behind. It exits non-zero if any check fails, and distinguishes a warning
@@ -160,7 +160,17 @@ and `verify:live` on every push and pull request.
 The container's timezone is `America/New_York` rather than UTC on purpose. One
 check asserts that `undo_chore` fails if and only if the server stores timestamps
 behind UTC; on a UTC container it would pass for the opposite reason and stop
-guarding the diagnosis the tool reports.
+guarding the diagnosis the tool reports. The other half of that conditional is
+measurable rather than assumed:
+
+```bash
+DONETICK_TZ=UTC bun run verify:live
+```
+
+Measured on 2026-08-08 against v0.1.76, undo succeeds there and `created_at` comes
+back as `...Z`, which is what makes the offset the cause rather than a correlate.
+`DONETICK_IMAGE_TAG` and `DONETICK_TZ` are both part of the container's recorded
+identity, so changing either replaces a running container instead of reusing it.
 
 ## Known limitations
 

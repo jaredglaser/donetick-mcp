@@ -1,3 +1,4 @@
+import { MONTHS, WEEKDAYS } from "@/frequency";
 import type { RawChore } from "@/types";
 
 /**
@@ -33,6 +34,22 @@ export type FrequencyHealth =
     };
 
 const broken = (detail: string, repair: string): FrequencyHealth => ({ ok: false, detail, repair });
+
+/**
+ * The names the scheduler will not match, from the same lists frequency.ts checks
+ * input against.
+ *
+ * Case-insensitively, because Donetick is: the weekday arms lower both sides before
+ * comparing and the month arm uses strings.EqualFold, so a stored "Saturday" runs
+ * exactly as "saturday" does. A case-sensitive check here would refuse a chore that
+ * works, and every tool that rewrites a whole chore goes through this predicate.
+ */
+function unknownNames(values: unknown, allowed: readonly string[]): string[] {
+  if (!Array.isArray(values)) return [];
+  return (values as unknown[])
+    .filter((value) => typeof value !== "string" || !allowed.includes(value.toLowerCase()))
+    .map((value) => JSON.stringify(value) ?? String(value));
+}
 
 export function frequencyHealth(chore: RawChore): FrequencyHealth {
   const meta = chore.frequencyMetadata ?? {};
@@ -87,6 +104,18 @@ export function frequencyHealth(chore: RawChore): FrequencyHealth {
       );
     }
 
+    // The scheduler walks forward comparing each date's weekday name against this
+    // list. A name it never matches exhausts the walk and returns an error, so the
+    // chore answers 500 on every completion. Both arms behave this way: the plain one
+    // gives up after 7 days, the occurrence one after 730.
+    const badDays = unknownNames(meta.days, WEEKDAYS);
+    if (badDays.length > 0) {
+      return broken(
+        `days_of_the_week listing ${badDays.join(", ")}, which is not a weekday its scheduler can match`,
+        `Pass frequency: {type: "days_of_the_week", days: ["saturday"]}, using names from: ${WEEKDAYS.join(", ")}.`,
+      );
+    }
+
     const picksAnOccurrence =
       meta.weekPattern === "week_of_month" || meta.weekPattern === "week_of_quarter";
     // getOccurrences reads either field, so either one satisfies it.
@@ -126,6 +155,14 @@ export function frequencyHealth(chore: RawChore): FrequencyHealth {
       return broken(
         "day_of_the_month with no months",
         'Pass frequency: {type: "day_of_the_month", day_of_month: N, months: [...]}, or {type: "days_of_the_week", days: ["saturday"], week_pattern: "week_of_month", occurrences: [1]} if what you meant was the first saturday of every month.',
+      );
+    }
+
+    const badMonths = unknownNames(meta.months, MONTHS);
+    if (badMonths.length > 0) {
+      return broken(
+        `day_of_the_month listing ${badMonths.join(", ")}, which is not a month its scheduler can match`,
+        `Pass frequency: {type: "day_of_the_month", day_of_month: N, months: [...]}, using names from: ${MONTHS.join(", ")}.`,
       );
     }
 

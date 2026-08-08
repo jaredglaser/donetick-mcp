@@ -38,7 +38,16 @@ export function parseDueDate(input: string | null, now: Date, tz: string): Date 
   // read it as a clear, while edit_chore took the parse path, lost the stored date,
   // and let ensureDueDateForRolling substitute today 09:00 on a rolling chore. It
   // also broke the overload's promise, which types a string input as returning Date.
-  if (trimmed === "") throw new Error(FORMAT_HELP);
+  //
+  // Its own message, not FORMAT_HELP. The fall-through below throws FORMAT_HELP for
+  // an empty string anyway, so this branch changed nothing and read as though it
+  // did; a caller who sent "" meaning "clear it" needs to be told which value does
+  // that, not handed a list of date formats none of which is what they wanted.
+  if (trimmed === "") {
+    throw new Error(
+      'An empty due date is not a way to clear one: pass null for "no due date". ' + FORMAT_HELP,
+    );
+  }
 
   const instant = tryInstant(trimmed);
   if (instant) return instant;

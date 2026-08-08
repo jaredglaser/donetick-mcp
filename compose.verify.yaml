@@ -25,11 +25,15 @@ services:
       # The default 300 requests per minute is below what one verify-live run
       # sends. Rate limiting is not a wire fact under test, so it is lifted.
       DT_SERVER_RATE_LIMIT: "100000"
-      # Not cosmetic, and not UTC. verify-live asserts that undo fails if and
-      # only if the server stores timestamps behind UTC, which is true of the
-      # instance this server is written for. On a UTC container that check would
-      # pass for the wrong reason and stop guarding explainUndoFailure.
-      TZ: America/New_York
+      # Not cosmetic, and not UTC by default. verify-live asserts that undo fails
+      # if and only if the server stores timestamps behind UTC, which is true of
+      # the instance this server is written for. On a UTC container that check
+      # would pass for the wrong reason and stop guarding explainUndoFailure.
+      #
+      # Overridable so the other half of that conditional can be measured rather
+      # than assumed: DONETICK_TZ=UTC bun run verify:live drives the check into
+      # the branch where undo is expected to work.
+      TZ: ${DONETICK_TZ:-America/New_York}
     # No volume anywhere: the sqlite file lives in the container's writable layer
     # so `docker compose down` destroys the data, and nothing lands in the repo.
     healthcheck:

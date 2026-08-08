@@ -22,6 +22,31 @@ async function readAll(): Promise<Array<{ path: string; text: string }>> {
   );
 }
 
+/**
+ * Every `${...}` in the text, with braces balanced so a nested object literal ends
+ * the expression where it really ends, and scanned across the whole file so a
+ * template broken over several lines is still one expression. A line-at-a-time regex
+ * missed both.
+ */
+function interpolationsIn(text: string): Array<{ expr: string; index: number }> {
+  const found: Array<{ expr: string; index: number }> = [];
+  for (let i = 0; i < text.length - 1; i++) {
+    if (text[i] !== "$" || text[i + 1] !== "{") continue;
+    let depth = 0;
+    for (let j = i + 1; j < text.length; j++) {
+      if (text[j] === "{") depth++;
+      else if (text[j] === "}" && --depth === 0) {
+        found.push({ expr: text.slice(i, j + 1), index: i });
+        i = j;
+        break;
+      }
+    }
+  }
+  return found;
+}
+
+const lineAt = (text: string, index: number): number => text.slice(0, index).split("\n").length;
+
 describe("module boundaries", () => {
   test("only index.ts imports the MCP SDK", async () => {
     const offenders = (await readAll())
@@ -81,11 +106,11 @@ describe("module boundaries", () => {
     // walked past it, and it sat green while three raw sites remained in read.ts.
     // Any interpolation reaching a name field counts unless safeName is in it.
     const NAME_FIELD = /\.(?:name|displayName|username)\b/;
-    const INTERPOLATION = /\$\{([^{}]|\{[^{}]*\})*\}/g;
     // The functions that sanitize on the way through. Keep this list short: every
     // entry is a place the check stops looking, so adding one is a decision to trust
     // that function forever.
     const SANITIZERS = ["safeName", "describeKnown"];
+    const sanitized = (expr: string): boolean => SANITIZERS.some((fn) => expr.includes(fn));
 
     const offenders: string[] = [];
     for (const { path, text } of await readAll()) {
@@ -93,14 +118,33 @@ describe("module boundaries", () => {
       // is where safeName is defined and applied.
       if (path.includes("__tests__") || path === "config.ts" || path === "resolve.ts") continue;
 
-      text.split("\n").forEach((line, index) => {
-        for (const match of line.matchAll(INTERPOLATION)) {
-          const expr = match[0];
-          if (!NAME_FIELD.test(expr)) continue;
-          if (SANITIZERS.some((fn) => expr.includes(fn))) continue;
-          offenders.push(`${path}:${index + 1}  ${expr.trim()}`);
-        }
-      });
+      // Locals holding an unsanitized name, so that lifting one out of the template
+      // does not clear it. This was the surviving evasion: the check saw
+      // `${chore.name}` and not `const n = chore.name` two lines above it.
+      const tainted = new Set<string>();
+      // The right-hand side stops at a newline, a semicolon, or the next declaration
+      // keyword. Without that last one a single-line arrow body swallowed the
+      // declaration nested inside it, so the inner name never got tainted and the
+      // extracted-local evasion still walked through.
+      const DECLARATION = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*((?:(?!\b(?:const|let|var)\b)[^\n;])+)/g;
+      for (const [, ident, rhs] of text.matchAll(DECLARATION)) {
+        if (NAME_FIELD.test(rhs!) && !sanitized(rhs!)) tainted.add(ident!);
+      }
+      const carriesTainted = (expr: string): boolean =>
+        [...tainted].some((id) => new RegExp(`\\b${id}\\b`).test(expr));
+
+      for (const { expr, index } of interpolationsIn(text)) {
+        if (sanitized(expr)) continue;
+        if (!NAME_FIELD.test(expr) && !carriesTainted(expr)) continue;
+        offenders.push(`${path}:${lineAt(text, index)}  ${expr.replace(/\s+/g, " ")}`);
+      }
+
+      // Neither of these is a template, so no interpolation scan reaches them.
+      const COERCED = /(?:\+\s*|String\(\s*)[A-Za-z_$][\w$.[\]]*\.(?:name|displayName|username)\b/g;
+      for (const match of text.matchAll(COERCED)) {
+        if (sanitized(match[0])) continue;
+        offenders.push(`${path}:${lineAt(text, match.index)}  ${match[0]}`);
+      }
     }
 
     expect(offenders).toEqual([]);

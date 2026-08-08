@@ -1,7 +1,7 @@
 import { TtlCache } from "@/cache";
 import type { DonetickClient } from "@/client";
 import { endpoints } from "@/endpoints";
-import type { ChoreDetails, ChoreListRow, Member, Project } from "@/types";
+import { isArchivedChore, type ChoreDetails, type ChoreListRow, type Member, type Project } from "@/types";
 
 interface RawMember {
   id: number;
@@ -63,6 +63,10 @@ export class DonetickService {
         seen.set(row.userId, {
           userId: row.userId,
           username: row.username ?? "",
+          // || rather than ??, deliberately. Donetick stores an unset display name as
+          // "" and not as null, so ?? would keep the empty string and every tool that
+          // names this person would name nobody. The fallback chain has to treat ""
+          // as absent.
           displayName: row.displayName || row.username || `user ${row.userId}`,
           role: row.role ?? "member",
           points: row.points ?? 0,
@@ -112,7 +116,7 @@ export class DonetickService {
    * and a row that omits it must not be reported as archived.
    */
   async archivedChores(): Promise<ChoreListRow[]> {
-    return (await this.allChores()).filter((chore) => chore.isActive === false);
+    return (await this.allChores()).filter(isArchivedChore);
   }
 
   members(): Promise<Member[]> {

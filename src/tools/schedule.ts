@@ -9,7 +9,16 @@ import { endpoints } from "@/endpoints";
 import { loadArchivedChoreById, loadChoreById } from "@/tools/chore-lookup";
 import { resolveMember, safeName } from "@/resolve";
 import type { ToolContext } from "@/tools/context";
-import { PRIORITY_LABEL, PRIORITY_VALUE, type RawChore } from "@/types";
+import {
+  isArchivedChore,
+  isPriorityValue,
+  MAX_PRIORITY,
+  MIN_PRIORITY,
+  PRIORITY_LABEL,
+  PRIORITY_VALUE,
+  UNSET_PRIORITY,
+  type RawChore,
+} from "@/types";
 
 export interface RescheduleInput {
   chore_id?: number;
@@ -148,8 +157,10 @@ export async function reassignChore(input: ReassignInput, ctx: ToolContext): Pro
  */
 function resolvePriority(priority: string | number): number {
   if (typeof priority === "number") {
-    if (Number.isInteger(priority) && priority >= 0 && priority <= 4) return priority;
-    throw new Error(`Priority must be an integer 0 through 4 (0 means unset). Got ${priority}.`);
+    if (isPriorityValue(priority)) return priority;
+    throw new Error(
+      `Priority must be an integer ${MIN_PRIORITY} through ${MAX_PRIORITY} (${UNSET_PRIORITY} means unset). Got ${priority}.`,
+    );
   }
   const value = PRIORITY_VALUE[priority.toLowerCase()];
   if (value === undefined) {
@@ -173,7 +184,7 @@ export async function setPriority(input: SetPriorityInput, ctx: ToolContext): Pr
     chore_id: existing.id,
     priority: label,
     message:
-      priority === 0
+      priority === UNSET_PRIORITY
         ? `"${safeName(existing.name)}" no longer has a priority set.`
         : `"${safeName(existing.name)}" is now ${label}, where P1 is the most urgent and P4 the least.`,
   };
@@ -194,7 +205,7 @@ export async function archiveChore(input: ArchiveInput, ctx: ToolContext): Promi
     kind: "archived",
     chore_id: existing.id,
     name: existing.name,
-    ...(existing.isActive === false
+    ...(isArchivedChore(existing)
       ? {
           message: `"${safeName(existing.name)}" was already out of your active lists, either archived or a one-off that has been completed. It is archived now either way.`,
         }

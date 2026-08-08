@@ -3,7 +3,7 @@ import { ASSIGN_STRATEGIES, type CreateInput, type EditInput } from "@/chore-req
 import { CONFIRM_KEY } from "@/confirm";
 import { endpoints } from "@/endpoints";
 import { DonetickError } from "@/errors";
-import { FREQUENCY_TYPES, WEEK_PATTERNS } from "@/frequency";
+import { FREQUENCY_TYPES, FREQUENCY_UNITS, WEEK_PATTERNS } from "@/frequency";
 import { resolveOne, safeName } from "@/resolve";
 import { DUE_SCOPES, addDays, dueDateOf, humanizeDueIn, startOfDay } from "@/time";
 import type { DonetickService } from "@/service";
@@ -35,7 +35,16 @@ import { setSubtaskCompleted, type SetSubtaskInput } from "@/tools/subtasks";
 import { createChore, deleteChore, editChore } from "@/tools/write";
 import { isMissingChoreError, loadChoreById } from "@/tools/chore-lookup";
 import type { ToolContext } from "@/tools/context";
-import { CHORE_HISTORY_STATUS, type ChoreListRow, type Member, type RawChore } from "@/types";
+import {
+  CHORE_HISTORY_STATUS,
+  isArchivedChore,
+  MAX_PRIORITY,
+  MIN_PRIORITY,
+  PRIORITY_INPUT_VALUES,
+  type ChoreListRow,
+  type Member,
+  type RawChore,
+} from "@/types";
 import { getChore, listChores, type ListArgs } from "@/tools/read";
 
 export interface McpExtras {
@@ -160,12 +169,8 @@ const choreIdSchema = z
       "narrow it) or get_chore first and pass the id it returns.",
   );
 
-const FREQUENCY_UNIT_VALUES = ["hours", "days", "weeks", "months", "years"] as const;
-
-const PRIORITY_VALUES = ["P1", "P2", "P3", "P4", "none"] as const;
-
 const priorityEnumSchema = z
-  .enum(PRIORITY_VALUES)
+  .enum(PRIORITY_INPUT_VALUES)
   .describe("Donetick's priority scale is inverted: P1 is the most urgent, P4 is least urgent, none means unset.");
 
 const frequencySchema = z.object({
@@ -196,7 +201,7 @@ const frequencySchema = z.object({
         "since an adaptive chore that later loses its due date becomes permanently unskippable.",
     ),
   every: z.number().int().positive().optional().describe("Count for type interval, e.g. 3 for every 3 days."),
-  unit: z.enum(FREQUENCY_UNIT_VALUES).optional().describe("Unit for type interval. Defaults to days."),
+  unit: z.enum(FREQUENCY_UNITS).optional().describe("Unit for type interval. Defaults to days."),
   days: z
     .array(z.string())
     .optional()
@@ -294,10 +299,14 @@ function enrichHistoryRow(row: RawHistoryRow, chores: RawChore[], members: Membe
   // An archived chore keeps its history, which is the entire reason this server
   // steers users to archive rather than delete. Labelling those rows "(deleted)"
   // told them the safe operation had destroyed exactly what it preserves.
+  // safeName on both branches, so that what a row reports does not change shape with
+  // the chore's archived state. Not an injection fix: this value is serialized by
+  // ok() through JSON.stringify, which escapes a newline. The vector safeName exists
+  // for is a thrown Error, which fail() renders as raw text.
   const label = chore
-    ? chore.isActive === false
+    ? isArchivedChore(chore)
       ? `${safeName(chore.name)} (archived)`
-      : chore.name
+      : safeName(chore.name)
     : `chore #${row.choreId} (deleted)`;
 
   return {
@@ -365,7 +374,10 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
       (chore) => {
         const due = dueDateOf(chore.nextDueDate);
         const who = members.find((m) => m.userId === chore.assignedTo)?.displayName ?? "unassigned";
-        return `${humanizeDueIn(due, now())}, ${who}`;
+        // resolveOne sanitizes the hint it is handed, so this is the second pass and
+        // safeName is idempotent. It is here so the property holds at the site rather
+        // than one call away, which is the only form a check can see.
+        return `${humanizeDueIn(due, now())}, ${safeName(who)}`;
       },
     );
   }
@@ -473,8 +485,8 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
           .optional()
           .describe(
             "How many calendar days back to look, in your timezone, the same unit list_chores uses. Defaults to 7, " +
-              "capped at 90. Applied by this server: Donetick returns its whole history whatever it " +
-              "is asked for.",
+              "capped at 90. Donetick filters on its own UTC clock and this server filters by calendar " +
+              "day in yours, so it asks for a wider window than requested and narrows the result.",
           ),
         include_all_actions: z
           .boolean()
@@ -801,7 +813,7 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
       inputSchema: {
         chore_id: choreIdSchema,
         priority: z
-          .union([priorityEnumSchema, z.number().int().min(0).max(4)])
+          .union([priorityEnumSchema, z.number().int().min(MIN_PRIORITY).max(MAX_PRIORITY)])
           .describe("A P-label or the equivalent 0-4 integer."),
       },
       handler: guard(async (args) => ok(await setPriority(args as unknown as SetPriorityInput, deps))),
