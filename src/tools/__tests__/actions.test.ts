@@ -7,7 +7,7 @@ import {
   skipChore,
   undoChore,
 } from "../actions";
-import { setSubtaskCompleted } from "../subtasks";
+import { setSubtaskCompleted } from "@/tools/subtasks";
 import type { ToolContext } from "@/tools/context";
 import type { Member, RawChore } from "@/types";
 

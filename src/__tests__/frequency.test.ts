@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { utcOffsetFor } from "@/time";
-import { FREQUENCY_UNITS, buildFrequency, FREQUENCY_TYPES } from "@/frequency";
-import type { FrequencyInput, FrequencyType, WeekPattern } from "@/frequency";
+import { FREQUENCY_UNITS, buildFrequency, FREQUENCY_TYPES } from "../frequency";
+import type { FrequencyInput, FrequencyType, WeekPattern } from "../frequency";
 
 const tz = "America/New_York";
 // Fixed so the RFC3339 offset a time-of-day gets stamped with is deterministic.

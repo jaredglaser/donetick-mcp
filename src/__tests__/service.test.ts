@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { DonetickService } from "@/service";
+import { DonetickService } from "../service";
 
 function fakeClient(routes: Record<string, unknown>) {
   const calls: string[] = [];

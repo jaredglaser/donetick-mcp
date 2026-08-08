@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { DonetickClient } from "@/client";
+import { DonetickClient } from "../client";
 import { DonetickError } from "@/errors";
 
 function stubFetch(handler: (url: string, init: RequestInit) => Response) {

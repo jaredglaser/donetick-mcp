@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseDueDate } from "@/dates";
+import { parseDueDate } from "../dates";
 
 const NY = "America/New_York";
 const now = new Date("2026-06-15T16:00:00Z"); // Monday, noon in New York

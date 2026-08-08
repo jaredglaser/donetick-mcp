@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { projectChore, summarizeFrequency } from "@/projection";
+import { projectChore, summarizeFrequency } from "../projection";
 import {
   CHORE_STATUS,
   STATUS_IN_PROGRESS,

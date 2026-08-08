@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseConfig } from "@/config";
+import { parseConfig } from "../config";
 
 const valid = {
   DONETICK_URL: "https://dt.example.com",

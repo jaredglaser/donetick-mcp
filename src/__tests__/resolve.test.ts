@@ -7,7 +7,7 @@ import {
   resolveMember,
   resolveOne,
   safeName,
-} from "@/resolve";
+} from "../resolve";
 
 interface Item {
   id: number;

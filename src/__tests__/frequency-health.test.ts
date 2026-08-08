@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { frequencyHealth } from "@/frequency-health";
+import { frequencyHealth } from "../frequency-health";
 import { mergeEditRequest, type BuildContext } from "@/chore-request";
 import { summarizeFrequency } from "@/projection";
 import type { ChoreListRow } from "@/types";

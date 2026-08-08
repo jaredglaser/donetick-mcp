@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { DUE_SCOPES, addDays, bucket, humanizeDueIn, startOfDay, type Scope, zonedYmd } from "@/time";
+import { DUE_SCOPES, addDays, bucket, humanizeDueIn, startOfDay, type Scope, zonedYmd } from "../time";
 
 const NY = "America/New_York";
 const SANTIAGO = "America/Santiago";

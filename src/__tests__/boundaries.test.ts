@@ -228,6 +228,31 @@ describe("module boundaries", () => {
     expect(orphans).toEqual([]);
   });
 
+  test("a test imports its own subject relatively, and everything else by alias", async () => {
+    // Rule 1's test clause, which nothing checked: the check below skips __tests__
+    // entirely, so the one half of the rule that was actually contested was the half
+    // with no enforcement. Twelve of fourteen files in src/__tests__ had drifted to
+    // the alias while every file in src/tools/__tests__ followed the rule.
+    const offenders: string[] = [];
+    for (const { path, text } of await readAll()) {
+      if (!path.includes("__tests__")) continue;
+      const subject = path.replace(/.*\//, "").replace(/\.test\.ts$/, "");
+      const dir = path.includes("/") ? `${path.slice(0, path.lastIndexOf("/"))}/` : "";
+
+      if (text.includes(`from "@/${dir}${subject}"`) || text.replace(/__tests__\//, "").includes(`from "@/${subject}"`)) {
+        offenders.push(`${path} imports its own subject by alias`);
+      }
+      // The mirror: a relative import for anything that is not the subject.
+      for (const [, prefix, target] of text.matchAll(/from "((?:\.\.\/)+)([\w-]+)"/g)) {
+        if (prefix !== "../" || target !== subject) {
+          offenders.push(`${path} imports ${prefix}${target} relatively`);
+        }
+      }
+    }
+
+    expect(offenders).toEqual([]);
+  });
+
   test("production modules import by alias, not by relative path", async () => {
     // Relative imports are for a test reaching its own subject. Anywhere else they
     // make a module's place in the graph depend on where it happens to sit.

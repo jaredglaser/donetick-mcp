@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { DonetickError, mapHttpError } from "@/errors";
+import { DonetickError, mapHttpError } from "../errors";
 
 describe("mapHttpError", () => {
   test("401 names the token variable", () => {

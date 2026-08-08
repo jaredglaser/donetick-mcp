@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { TtlCache } from "@/cache";
+import { TtlCache } from "../cache";
 
 describe("TtlCache", () => {
   test("fetches on a cold read", async () => {

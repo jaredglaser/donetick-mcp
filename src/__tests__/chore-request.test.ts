@@ -7,7 +7,7 @@ import {
   requireDueDateFor,
   type AssignStrategy,
   type BuildContext,
-} from "@/chore-request";
+} from "../chore-request";
 import { normalizeName } from "@/resolve";
 import type { ChoreDetails, ChoreListRow, Member, Project } from "@/types";
 
