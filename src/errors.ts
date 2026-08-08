@@ -87,6 +87,16 @@ export function mapHttpError(input: {
 }
 
 /**
+ * POST or PUT to /api/v1/chores/ itself, the create and whole-chore edit endpoint,
+ * as opposed to the id-scoped actions hanging off it.
+ */
+function isWholeChoreWrite(path: string, method: string): boolean {
+  if (method === "GET") return false;
+  const withoutQuery = path.split("?")[0] ?? path;
+  return /\/api\/v1\/chores\/?$/.test(withoutQuery);
+}
+
+/**
  * A negation, so it is whatever the three path sets do not cover rather than a named
  * list. Today that is the whole-chore create and edit endpoint, the one measured to
  * persist before it can fail, plus POST /:id/nudge, which sits outside
@@ -95,12 +105,23 @@ export function mapHttpError(input: {
  * been applied" is true of a notification anyway.
  */
 function writesBeforeItCanFail(input: { path: string; method: string; body: string }): boolean {
-  // A retrieve failure is not a partial write. The whole-chore endpoint reads the
-  // existing row before it changes anything, so a 500 saying it could not retrieve
-  // the chore means nothing was written, and telling the caller their edit may have
-  // landed sends them reconciling a change that does not exist. Reached when a chore
-  // is deleted elsewhere while this server's cache still holds it.
-  if (/Failed to retrieve chore/i.test(input.body)) return false;
+  // Where the retrieve sits relative to the write decides this, and it differs by
+  // endpoint. EditChore reads the row at handler.go:803 and writes at :897, so a 500
+  // carrying that body there wrote nothing. CompleteChore emits the identical body
+  // twice, at :2241 before the write and at :2383 after committing at :2375, and
+  // ApproveChore does the same, so on those the body cannot say which side it came
+  // from and the honest answer is that the write may have landed.
+  //
+  // Two earlier readings were wrong about this in opposite directions. One tested
+  // the body alone, measured on the edit endpoint and stated for every write. The
+  // other excluded the scheduling writes outright, on the reasoning that they
+  // compute the next due date before persisting, which is true of the scheduling
+  // failure and not of the read-back that follows the commit.
+  const retrieveFailed = /Failed to retrieve chore/i.test(input.body);
+  if (retrieveFailed) {
+    if (isWholeChoreWrite(input.path, input.method)) return false;
+    if (isSchedulingWrite(input.path, input.method)) return true;
+  }
 
   return (
     !isCreatorOnlyWrite(input.path, input.method) &&
@@ -178,7 +199,7 @@ function classifyHttpError(input: {
         { status, retryable: true, invalidatesCache: true },
       );
     }
-    if (/Failed to retrieve chore/i.test(body)) {
+    if (isWholeChoreWrite(path, method) && /Failed to retrieve chore/i.test(body)) {
       return new DonetickError(
         "That chore no longer exists, or is no longer visible to this account. If it was in a list a moment ago, it was probably deleted elsewhere.",
         { status, retryable: true, invalidatesCache: true },

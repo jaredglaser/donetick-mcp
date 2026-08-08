@@ -420,6 +420,30 @@ describe("a 500 that reports a failed retrieve", () => {
     expect(mapHttpError(retrieveFailure).invalidatesCache).toBe(true);
   });
 
+  test("the same body on a completion stays indeterminate, because the write comes first there", () => {
+    // Traced in handler.go: EditChore reads the row at :803 and writes at :897, so a
+    // retrieve failure there wrote nothing. CompleteChore commits at :2375 and only
+    // then reads back at :2383, and ApproveChore does the same, so that identical
+    // body can follow a completion that landed. Calling it determinate invites a
+    // retry that completes the chore twice.
+    //
+    // The first version of this fix tested the body alone. It was measured on the
+    // edit endpoint and applied to every write, which is the mistake rule 12 names,
+    // and this is the case it got wrong.
+    for (const [path, method] of [
+      ["/api/v1/chores/7/do", "POST"],
+      ["/api/v1/chores/7/approve", "POST"],
+    ] as const) {
+      const err = mapHttpError({
+        status: 500,
+        body: JSON.stringify({ error: "Failed to retrieve chore" }),
+        path,
+        method,
+      });
+      expect(err.indeterminate).toBe(true);
+    }
+  });
+
   test("an unrelated 500 on the same endpoint is still indeterminate", () => {
     const other = mapHttpError({
       status: 500,

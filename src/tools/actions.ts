@@ -4,6 +4,7 @@ import { endpoints } from "@/endpoints";
 import { loadChoreById } from "@/tools/chore-lookup";
 import { resolveMember, safeName } from "@/resolve";
 import type { ToolContext } from "@/tools/context";
+import type { ChoreListRow } from "@/types";
 
 /** Same day in the given zone, which is not the same question as "within 24 hours". */
 function isSameCalendarDay(a: Date, b: Date, tz: string): boolean {
@@ -212,6 +213,28 @@ export async function completeChore(input: CompleteInput, ctx: ToolContext): Pro
   };
 }
 
+/**
+ * The chore's status, read fresh.
+ *
+ * Every guard below turns on it, and a guard on a destructive path cannot be built
+ * from a cached row. Measured: with the cache warm at status 0 and the chore
+ * completed out of band to status 3, skip_chore skipped it and destroyed a
+ * submission its own error message exists to protect. The mirror also fired, a
+ * confident refusal about a sign-off that had already been settled.
+ *
+ * GET /:id/details carries status and is one uncached request, which is cheaper than
+ * discarding the whole chore list. A read failure here is not fatal: the guards fall
+ * back to the cached value rather than blocking a skip on a transient fault.
+ */
+async function liveStatus(chore: ChoreListRow, ctx: ToolContext): Promise<number | undefined> {
+  try {
+    const detail = (await ctx.service.choreDetails(chore.id)) as { status?: unknown };
+    return typeof detail.status === "number" ? detail.status : chore.status;
+  } catch {
+    return chore.status;
+  }
+}
+
 export interface SkipInput {
   chore_id?: number;
 }
@@ -239,14 +262,16 @@ export async function skipChore(input: SkipInput, ctx: ToolContext): Promise<Ski
   // idle, advances the due date, leaves the pending history row orphaned, pays out
   // nothing, and approve_chore then answers "Chore is not pending approval", so the
   // completion and its points are unrecoverable.
-  if (chore.status === 3) {
+  const status = await liveStatus(chore, ctx);
+
+  if (status === 3) {
     throw new Error(
       `"${safeName(chore.name)}" has a completion waiting on sign-off. Skipping it discards that submission: the chore drops to idle, the due date advances, and approve_chore then reports that nothing is pending, so whoever completed it loses the credit and any points. Settle it with approve_chore or reject_chore first.`,
     );
   }
 
-  if (chore.status === 1 || chore.status === 2) {
-    const state = chore.status === 1 ? "running" : "paused";
+  if (status === 1 || status === 2) {
+    const state = status === 1 ? "running" : "paused";
     throw new Error(
       `"${safeName(chore.name)}" has a ${state} timer, and Donetick cannot skip a chore in that state: it answers 200 and does nothing, leaving the due date where it is. Complete it instead, which works from either timer state, or stop the timer in Donetick and skip it then.`,
     );
@@ -260,6 +285,17 @@ export async function skipChore(input: SkipInput, ctx: ToolContext): Promise<Ski
   // occurrence that was just skipped, and reporting it under a field named
   // next_due_date is indistinguishable from a verified answer.
   const nextDue = nextDueDateOf(response);
+
+  // Donetick answers 200 for a skip it did not perform, so the response is compared
+  // against the date the chore had going in. The guards above catch the states known
+  // to cause it; this catches the ones that are not known yet, which is the half a
+  // guard built on a status enum cannot cover.
+  if (nextDue.present && nextDue.value !== null && nextDue.value === chore.nextDueDate) {
+    throw new Error(
+      `Donetick accepted the skip of "${safeName(chore.name)}" and left its due date at ${nextDue.value}, so nothing was skipped. That happens when the chore is in a state its skip handler cannot act on, such as a running timer. Check it with get_chore.`,
+    );
+  }
+
   const archivedNote = inactiveNote(chore);
   return {
     id: chore.id,
