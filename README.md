@@ -82,7 +82,7 @@ Add an entry to your MCP configuration, using an absolute path to `src/index.ts`
 | --- | --- |
 | `list_chores` | List chores with filters for scope (all, overdue, due today, due this week, due within N days, unscheduled, archived), project, priority, label, assignee, status, a name search, sorting, and a result limit. |
 | `get_chore` | Fetch one chore in full, by id or by name, including subtasks and last-completion detail. |
-| `list_activity` | Recent chore completions across the circle, defaulting to the last 7 days and capped at 90. |
+| `list_activity` | Recent chore completions across the circle, defaulting to the last 7 days and capped at 90. Days are calendar days in your timezone, the same unit `list_chores` uses. |
 | `list_members` | Circle members with their roles and point totals. |
 | `list_projects` | Projects used to group chores. |
 
@@ -104,7 +104,7 @@ Add an entry to your MCP configuration, using an absolute path to `src/index.ts`
 | Tool | What it does |
 | --- | --- |
 | `complete_chore` | Mark a chore done, optionally backdated or on someone else's behalf. Reports a chore that needs approval as pending rather than done. |
-| `skip_chore` | Skip this occurrence and move to the next. Refuses a chore with a running or paused timer, which Donetick answers 200 to and then does nothing about. |
+| `skip_chore` | Skip this occurrence and move to the next. Refuses a chore with a running or paused timer, which Donetick answers 200 to and then does nothing about, and a chore with a completion awaiting sign-off, which it would discard along with that person's points. |
 | `undo_chore` | Reverse your own completion. Fails on any instance whose clock is behind UTC: see Known limitations. |
 | `approve_chore` | Approve a completion that is waiting on sign-off. |
 | `reject_chore` | Reject one. |
@@ -187,6 +187,7 @@ These were verified against a live Donetick instance, not assumed from its sourc
 - **Activity history rows carry no chore name**, only a `choreId`. `list_activity` joins each row against the current chore list to recover a name, and reports a completion whose chore was later deleted rather than dropping it silently.
 - **The concurrency token is the row's own stamp, never a clock reading.** The endpoints that take an `updatedAt` compare it against the stored row and refuse anything older, and `PUT /:id/assignee` writes the value it receives back into the row, so a machine running ahead of the server would stamp a chore with a version its own skew invented. `concurrencyToken` in `src/chore-request.ts` sends the stored string verbatim, because it carries nanosecond precision a `Date` round trip truncates downward.
 - **Recurring chores drift by an hour across a daylight-saving boundary**, because Donetick advances daily and weekly recurrences in UTC rather than in the chore's local calendar day. This server reports that drift accurately; it does not cause it.
+- **A monthly chore due on the 29th, 30th or 31st moves to the 1st and stays there.** Donetick adds a month with Go's date arithmetic, which normalises September 31 to October 1, so a chore due the 31st of August skips September entirely and is a 1st-of-the-month chore from its first completion on. This applies to `monthly` and to an `interval` measured in months. `day_of_the_month` handles month lengths properly and is the right choice for a fixed calendar day.
 
 ## AI Disclosure
 

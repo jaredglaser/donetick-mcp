@@ -69,6 +69,7 @@ at a different Donetick version with `DONETICK_IMAGE_TAG=vX.Y.Z bun run verify:l
 - `src/time.ts` has DST-safe calendar arithmetic (day boundaries, "due in" phrasing) built on `Temporal`.
 - `src/dates.ts` parses what a caller may write for a date: RFC3339, `YYYY-MM-DD`, and phrases like "tomorrow" or "in 3 days".
 - `src/frequency.ts` maps a recurrence description onto Donetick's eleven `frequencyType` values and their metadata.
+- `src/frequency-health.ts` decides whether Donetick's scheduler can advance a stored recurrence, and what to say when it cannot. Both `summarizeFrequency` and `assertSchedulableFrequency` call it, so the description a reader gets and the refusal a writer gets cannot disagree. They used to be separate and drifted three times.
 - `src/chore-request.ts` builds the create body and merges the edit body. The merge is the highest-risk code in the repo: Donetick has no partial update, so every field absent from the merge base is destroyed on write.
 - `src/probe.ts` decides whether Donetick is reachable and is actually Donetick. A failure is re-checked on the next tool call, never latched: the server is started at login alongside the containers it talks to, so losing that race is the likeliest way it ever fails.
 - `src/confirm.ts` holds the elicitation key and the pure decision that turns an elicitation response into consent, refusal, or "not asked yet". It is separate from `src/index.ts` only so it can be tested, since the suite cannot import the entry point.
