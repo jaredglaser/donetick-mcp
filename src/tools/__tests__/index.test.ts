@@ -443,6 +443,28 @@ describe("list_activity", () => {
     ]);
   });
 
+  test("days means calendar days, the same unit list_chores means by it", async () => {
+    // The clock is 2026-06-15T12:00Z, which is 08:00 in America/New_York. A rolling
+    // 24-hour window starts at 12:00Z yesterday and drops an action recorded at
+    // 11:00Z yesterday, which is 07:00 local, a thing a person would call yesterday
+    // and expect in a one-day view. Calendar bucketing starts at local midnight and
+    // keeps it. One parameter name, one meaning.
+    const yesterdayMorning = historyRow({ id: 1, performedAt: "2026-06-14T11:00:00Z" });
+    const dayBefore = historyRow({ id: 2, performedAt: "2026-06-13T11:00:00Z" });
+    const fakeService = { ...service, rawGet: async () => [yesterdayMorning, dayBefore] };
+    const tools = buildToolDefinitions({ ...deps, service: fakeService as never });
+    const tool = tools.find((t) => t.name === "list_activity")!;
+
+    const oneDay = jsonOf(await tool.handler({ days: 1 })) as Array<{ performed_at: string }>;
+    expect(oneDay.map((r) => r.performed_at)).toEqual(["2026-06-14T11:00:00Z"]);
+
+    const twoDays = jsonOf(await tool.handler({ days: 2 })) as Array<{ performed_at: string }>;
+    expect(twoDays.map((r) => r.performed_at)).toEqual([
+      "2026-06-14T11:00:00Z",
+      "2026-06-13T11:00:00Z",
+    ]);
+  });
+
   test("keeps a row with no performedAt, which is what a timer start looks like", async () => {
     const started = historyRow({ id: 3, performedAt: null, status: 0 });
     const fakeService = { ...service, rawGet: async () => [started] };

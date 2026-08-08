@@ -7,7 +7,7 @@ import {
 import { parseDueDate } from "@/dates";
 import { endpoints } from "@/endpoints";
 import { loadArchivedChoreById, loadChoreById } from "@/tools/chore-lookup";
-import { resolveMember } from "@/resolve";
+import { resolveMember, safeName } from "@/resolve";
 import type { ToolContext } from "@/tools/context";
 import { PRIORITY_LABEL, PRIORITY_VALUE, type RawChore } from "@/types";
 
@@ -125,7 +125,7 @@ export async function reassignChore(input: ReassignInput, ctx: ToolContext): Pro
 
   const warnings = [
     notificationsSwitchedOff
-      ? `Notifications on "${existing.name}" were switched off by this write. Donetick had them enabled with no reminder settings stored, a combination it crashes on when written back. Use edit_chore with notify to turn them on again.`
+      ? `Notifications on "${safeName(existing.name)}" were switched off by this write. Donetick had them enabled with no reminder settings stored, a combination it crashes on when written back. Use edit_chore with notify to turn them on again.`
       : "",
     strategyPromoted
       ? `The assign strategy changed from no_assignee to ${body.assignStrategy}, because a chore cannot both have an assignee and be set to assign nobody. Later occurrences will keep an assignee rather than reverting to unassigned.`
@@ -174,8 +174,8 @@ export async function setPriority(input: SetPriorityInput, ctx: ToolContext): Pr
     priority: label,
     message:
       priority === 0
-        ? `"${existing.name}" no longer has a priority set.`
-        : `"${existing.name}" is now ${label}, where P1 is the most urgent and P4 the least.`,
+        ? `"${safeName(existing.name)}" no longer has a priority set.`
+        : `"${safeName(existing.name)}" is now ${label}, where P1 is the most urgent and P4 the least.`,
   };
 }
 
@@ -196,7 +196,7 @@ export async function archiveChore(input: ArchiveInput, ctx: ToolContext): Promi
     name: existing.name,
     ...(existing.isActive === false
       ? {
-          message: `"${existing.name}" was already out of your active lists, either archived or a one-off that has been completed. It is archived now either way.`,
+          message: `"${safeName(existing.name)}" was already out of your active lists, either archived or a one-off that has been completed. It is archived now either way.`,
         }
       : {}),
   };

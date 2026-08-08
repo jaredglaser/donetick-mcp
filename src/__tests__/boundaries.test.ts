@@ -69,6 +69,28 @@ describe("module boundaries", () => {
     expect(offenders).toEqual([]);
   });
 
+  test("a chore or member name never reaches a message unsanitized", async () => {
+    // Names are written by any circle member and reach the model as untrusted text.
+    // safeName was applied at two of roughly twenty-five interpolation sites, which
+    // is closer to a comment than a control: a newline in one forged a whole extra
+    // candidate line carrying an id no lookup produced. This is the check, because
+    // the next site added would otherwise be unsanitized by default.
+    //
+    // config.ts is excluded: its ${name} is a hard-coded environment variable label,
+    // not anything a user writes.
+    const RAW_NAME = /\$\{(?:chore|existing|target|found|member|sub)\.(?:name|displayName)\}/;
+    const offenders: string[] = [];
+
+    for (const { path, text } of await readAll()) {
+      if (path.includes("__tests__") || path === "config.ts") continue;
+      text.split("\n").forEach((line, index) => {
+        if (RAW_NAME.test(line)) offenders.push(`${path}:${index + 1}`);
+      });
+    }
+
+    expect(offenders).toEqual([]);
+  });
+
   test("no doc comment is orphaned from what it describes", async () => {
     // Review passes keep finding a JSDoc block separated from its function by a newer
     // block inserted above it, on several different functions. Each time the fix was

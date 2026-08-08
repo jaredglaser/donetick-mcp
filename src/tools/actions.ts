@@ -2,7 +2,7 @@ import { carriesTimeOfDay, parseDueDate } from "@/dates";
 import { zonedYmd } from "@/time";
 import { endpoints } from "@/endpoints";
 import { loadChoreById } from "@/tools/chore-lookup";
-import { resolveMember } from "@/resolve";
+import { resolveMember, safeName } from "@/resolve";
 import type { ToolContext } from "@/tools/context";
 
 /** Same day in the given zone, which is not the same question as "within 24 hours". */
@@ -47,7 +47,7 @@ function messageOf(response: unknown): string | undefined {
  */
 function inactiveNote(chore: { name: string; isActive?: boolean }): string {
   if (chore.isActive !== false) return "";
-  return ` "${chore.name}" is not in your active lists, either because it was archived or because it is a one-off that has already been completed. Nothing you do to it here will show up in list_chores.`;
+  return ` "${safeName(chore.name)}" is not in your active lists, either because it was archived or because it is a one-off that has already been completed. Nothing you do to it here will show up in list_chores.`;
 }
 
 export interface CompleteInput {
@@ -146,7 +146,7 @@ export async function completeChore(input: CompleteInput, ctx: ToolContext): Pro
       completed: false,
       pending_approval: true,
       next_due_date: chore.nextDueDate,
-      message: `"${chore.name}" was submitted for approval and has not been completed. Its due date is unchanged. A circle admin or manager must sign off with approve_chore.`,
+      message: `"${safeName(chore.name)}" was submitted for approval and has not been completed. Its due date is unchanged. A circle admin or manager must sign off with approve_chore.`,
     };
   }
 
@@ -204,7 +204,7 @@ export async function completeChore(input: CompleteInput, ctx: ToolContext): Pro
     completed: true,
     pending_approval: false,
     next_due_date: nextDue.present ? nextDue.value : null,
-    message: `Completed "${chore.name}".${archivedNote}${rollingNote}${pastNote}${
+    message: `Completed "${safeName(chore.name)}".${archivedNote}${rollingNote}${pastNote}${
       nextDue.present
         ? ""
         : " Donetick did not report a new due date, so the next occurrence is unknown here; call get_chore to see it."
@@ -241,14 +241,14 @@ export async function skipChore(input: SkipInput, ctx: ToolContext): Promise<Ski
   // completion and its points are unrecoverable.
   if (chore.status === 3) {
     throw new Error(
-      `"${chore.name}" has a completion waiting on sign-off. Skipping it discards that submission: the chore drops to idle, the due date advances, and approve_chore then reports that nothing is pending, so whoever completed it loses the credit and any points. Settle it with approve_chore or reject_chore first.`,
+      `"${safeName(chore.name)}" has a completion waiting on sign-off. Skipping it discards that submission: the chore drops to idle, the due date advances, and approve_chore then reports that nothing is pending, so whoever completed it loses the credit and any points. Settle it with approve_chore or reject_chore first.`,
     );
   }
 
   if (chore.status === 1 || chore.status === 2) {
     const state = chore.status === 1 ? "running" : "paused";
     throw new Error(
-      `"${chore.name}" has a ${state} timer, and Donetick cannot skip a chore in that state: it answers 200 and does nothing, leaving the due date where it is. Complete it instead, which works from either timer state, or stop the timer in Donetick and skip it then.`,
+      `"${safeName(chore.name)}" has a ${state} timer, and Donetick cannot skip a chore in that state: it answers 200 and does nothing, leaving the due date where it is. Complete it instead, which works from either timer state, or stop the timer in Donetick and skip it then.`,
     );
   }
 
@@ -266,8 +266,8 @@ export async function skipChore(input: SkipInput, ctx: ToolContext): Promise<Ski
     name: chore.name,
     next_due_date: nextDue.present ? nextDue.value : null,
     message: nextDue.present
-      ? `Skipped "${chore.name}".${archivedNote}`
-      : `Skipped "${chore.name}".${archivedNote} Donetick did not report the new due date; call get_chore to see it.`,
+      ? `Skipped "${safeName(chore.name)}".${archivedNote}`
+      : `Skipped "${safeName(chore.name)}".${archivedNote} Donetick did not report the new due date; call get_chore to see it.`,
   };
 }
 
@@ -293,7 +293,7 @@ export async function undoChore(input: UndoInput, ctx: ToolContext): Promise<Und
   if (typeof input.chore_id !== "number") {
     if (typeof input.name === "string") {
       throw new Error(
-        `undo_chore takes chore_id only, not a name. "${input.name}" may no longer be in the active list this server searches by name, since a just-completed non-recurring chore has isActive: false. Use the id complete_chore returned.`,
+        `undo_chore takes chore_id only, not a name. "${safeName(input.name)}" may no longer be in the active list this server searches by name, since a just-completed non-recurring chore has isActive: false. Use the id complete_chore returned.`,
       );
     }
     throw new Error(
@@ -347,7 +347,7 @@ export async function approveChore(input: ApprovalInput, ctx: ToolContext): Prom
     id: chore.id,
     name: chore.name,
     decision: "approved",
-    message: `The pending completion of "${chore.name}" was approved.${inactiveNote(chore)}`,
+    message: `The pending completion of "${safeName(chore.name)}" was approved.${inactiveNote(chore)}`,
   };
 }
 
@@ -358,7 +358,7 @@ export async function rejectChore(input: ApprovalInput, ctx: ToolContext): Promi
     id: chore.id,
     name: chore.name,
     decision: "rejected",
-    message: `The pending completion of "${chore.name}" was rejected. The chore is not marked done.${inactiveNote(chore)}`,
+    message: `The pending completion of "${safeName(chore.name)}" was rejected. The chore is not marked done.${inactiveNote(chore)}`,
   };
 }
 

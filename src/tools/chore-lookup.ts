@@ -36,10 +36,9 @@ async function loadFrom(
  * inside the cache TTL. Without that fallback every tool that acts on an id would
  * report the chore does not exist.
  *
- * The /details probe below is what separates the three ways a lookup can come up
- * empty: genuinely absent, present but undescribable, and a read that failed for
- * some other reason. It used to live in tools/index.ts and serve get_chore and
- * delete_chore alone, so the eleven id-only tools got one flat message for all three.
+ * The /details probe below separates the three ways a lookup can come up empty:
+ * genuinely absent, present but undescribable, and a read that failed for some other
+ * reason.
  */
 export async function loadChoreById(
   chore_id: number | undefined,

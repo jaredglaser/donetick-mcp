@@ -185,7 +185,7 @@ export async function editChore(
       return {
         kind: "edited_detail_unavailable",
         id: existing.id,
-        message: `"${existing.name}" was updated, but reading it back to clear its due date failed: ${
+        message: `"${safeName(existing.name)}" was updated, but reading it back to clear its due date failed: ${
           error instanceof Error ? error.message : String(error)
         }. Everything else in the edit landed. Call reschedule_chore with due_date null to finish clearing it.`,
       };
@@ -203,7 +203,7 @@ export async function editChore(
       return {
         kind: "edited_detail_unavailable",
         id: existing.id,
-        message: `"${existing.name}" was updated, but clearing its due date failed: ${
+        message: `"${safeName(existing.name)}" was updated, but clearing its due date failed: ${
           error instanceof Error ? error.message : String(error)
         }. Everything else in the edit landed. Call reschedule_chore with due_date null to finish clearing it.`,
       };
@@ -220,7 +220,7 @@ export async function editChore(
     return {
       kind: "edited_detail_unavailable",
       id: existing.id,
-      message: `"${existing.name}" was updated, but reading it back failed: ${
+      message: `"${safeName(existing.name)}" was updated, but reading it back failed: ${
         error instanceof Error ? error.message : String(error)
       }. The edit itself succeeded; call get_chore to see the current state.`,
     };
@@ -247,7 +247,7 @@ export async function editChore(
     chore: projectChore(merged, buildCtx.members, buildCtx.projects, buildCtx.now),
     ...(notificationsSwitchedOff
       ? {
-          warning: `Notifications on "${existing.name}" were switched off by this edit. Donetick had them enabled with no reminder settings stored, a combination it crashes on when written back. Pass notify with the reminders you want to turn them on again.`,
+          warning: `Notifications on "${safeName(existing.name)}" were switched off by this edit. Donetick had them enabled with no reminder settings stored, a combination it crashes on when written back. Pass notify with the reminders you want to turn them on again.`,
         }
       : {}),
   };

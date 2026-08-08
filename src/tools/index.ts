@@ -4,8 +4,8 @@ import { CONFIRM_KEY } from "@/confirm";
 import { endpoints } from "@/endpoints";
 import { DonetickError } from "@/errors";
 import { FREQUENCY_TYPES, WEEK_PATTERNS } from "@/frequency";
-import { resolveOne } from "@/resolve";
-import { DUE_SCOPES, dueDateOf, humanizeDueIn } from "@/time";
+import { resolveOne, safeName } from "@/resolve";
+import { DUE_SCOPES, addDays, dueDateOf, humanizeDueIn, startOfDay } from "@/time";
 import type { DonetickService } from "@/service";
 import {
   approveChore,
@@ -50,9 +50,8 @@ export interface ToolResult {
    * Present when the tool needs the caller's answer before it can proceed
    * (protocol revision 2026-07-28's multi-round-trip flow). Read only in
    * src/index.ts, which turns it into inputRequired and drops content on that path,
-   * so the message here is the only copy the caller sees. An older protocol era is
-   * covered by the SDK's legacy shim rather than by anything on this type: there is
-   * no text fallback, and a comment here used to claim otherwise.
+   * so the message here is the only copy the caller sees. There is no text fallback;
+   * an older protocol era is covered by the SDK's legacy shim, not by this type.
    */
   confirmRequired?: { key: string; message: string };
 }
@@ -297,7 +296,7 @@ function enrichHistoryRow(row: RawHistoryRow, chores: RawChore[], members: Membe
   // told them the safe operation had destroyed exactly what it preserves.
   const label = chore
     ? chore.isActive === false
-      ? `${chore.name} (archived)`
+      ? `${safeName(chore.name)} (archived)`
       : chore.name
     : `chore #${row.choreId} (deleted)`;
 
@@ -438,7 +437,7 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
           .max(MAX_HISTORY_DAYS)
           .optional()
           .describe(
-            "How many days back to look, counted from each action's recorded time. Defaults to 7, " +
+            "How many calendar days back to look, in your timezone, the same unit list_chores uses. Defaults to 7, " +
               "capped at 90. Applied by this server: Donetick returns its whole history whatever it " +
               "is asked for.",
           ),
@@ -480,7 +479,11 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
         //
         // Rows with no performedAt are kept: a timer start carries none, and it is
         // an action the caller asked about rather than an old one.
-        const cutoff = now().getTime() - days * 86_400_000;
+        // Calendar days in the caller's zone, the same unit list_chores means by
+        // `days`. A rolling days * 86_400_000 window made one parameter name mean two
+        // things: asking for 1 day of activity at 09:00 would drop what was done at
+        // 08:00 yesterday, which is a thing a person would call yesterday.
+        const cutoff = startOfDay(addDays(now(), -days, timezone), timezone).getTime();
         const rows = all.filter((row) => {
           const at = dueDateOf(row.performedAt);
           return at === null || at.getTime() >= cutoff;

@@ -176,7 +176,7 @@ function resolveProjectId(name: string | null | undefined, projects: Project[]):
   const found = projects.find((p) => normalizeName(p.name) === wanted);
   if (!found) {
     throw new Error(
-      `"${name}" is not a known project. Known projects: ${projects.map((p) => p.name).join(", ") || "none"}.`,
+      `"${safeName(name)}" is not a known project. Known projects: ${projects.map((p) => safeName(p.name)).join(", ") || "none"}.`,
     );
   }
   return found.id;
@@ -381,7 +381,7 @@ function assertNoThingTrigger(existing: RawChore): void {
   const hasThing = existing.thingChore !== undefined && existing.thingChore !== null;
   if (!isTrigger && !hasThing) return;
   throw new Error(
-    `"${existing.name}" is driven by a Donetick Thing. Editing it through this server would sever that link permanently, because Donetick drops the association on every edit and only restores it for a request that names the Thing. Edit this chore in the Donetick web UI. Every tool that rewrites the whole chore is blocked until then, reassign_chore included.`,
+    `"${safeName(existing.name)}" is driven by a Donetick Thing. Editing it through this server would sever that link permanently, because Donetick drops the association on every edit and only restores it for a request that names the Thing. Edit this chore in the Donetick web UI. Every tool that rewrites the whole chore is blocked until then, reassign_chore included.`,
   );
 }
 
@@ -402,7 +402,7 @@ function assertSchedulableFrequency(existing: RawChore): void {
   if (health.ok) return;
 
   throw new Error(
-    `"${existing.name}" has a recurrence Donetick cannot schedule: it is ${health.detail}, so every completion fails. ` +
+    `"${safeName(existing.name)}" has a recurrence Donetick cannot schedule: it is ${health.detail}, so every completion fails. ` +
       `${health.repair} Every tool that rewrites the whole chore is blocked until then, reassign_chore included.`,
   );
 }

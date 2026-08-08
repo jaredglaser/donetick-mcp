@@ -1,6 +1,6 @@
 import { endpoints } from "@/endpoints";
 import { loadChoreById } from "@/tools/chore-lookup";
-import { resolveOne } from "@/resolve";
+import { resolveOne, safeName } from "@/resolve";
 import type { ToolContext } from "@/tools/context";
 import type { RawSubTask } from "@/types";
 
@@ -42,7 +42,7 @@ export async function setSubtaskCompleted(
 
   const subtasks = chore.subTasks ?? [];
   if (subtasks.length === 0) {
-    throw new Error(`"${chore.name}" has no subtasks.`);
+    throw new Error(`"${safeName(chore.name)}" has no subtasks.`);
   }
 
   const subtask = resolveOne(
