@@ -94,6 +94,40 @@ export async function loadChoreById(
 }
 
 /**
+ * Issues a whole-chore write, and on a concurrency refusal rebuilds it on the row
+ * that landed instead and sends it once more.
+ *
+ * The merge base is a cached row, so between reading it and writing, an edit from the
+ * web UI or the phone can land. Donetick refuses that with a 403 rather than letting
+ * this overwrite them, and the answer is to rebuild on their version: the caller's
+ * input is a sparse patch either way, so re-merging applies only their fields onto
+ * whatever is current and keeps the rest of the other change. Retried once, not in a
+ * loop, so a genuine permission failure surfaces on the second attempt.
+ *
+ * Shared because there are two callers and only edit_chore had it. reassign_chore
+ * takes the same merge path whenever it has to add someone new, and a concurrent edit
+ * there failed outright with a message about another user having modified the chore.
+ *
+ * `send` runs before every attempt, so any guard inside it re-checks against the row
+ * actually being written rather than the one first read.
+ */
+export async function writeWithConcurrencyRetry(
+  chore_id: number | undefined,
+  first: ChoreListRow,
+  send: (base: ChoreListRow) => Promise<void>,
+  ctx: ToolContext,
+): Promise<void> {
+  try {
+    await send(first);
+    return;
+  } catch (error) {
+    if (!(error instanceof DonetickError) || !error.retryable) throw error;
+    ctx.service.invalidateChores();
+  }
+  await send(await loadChoreById(chore_id ?? first.id, ctx));
+}
+
+/**
  * An archived chore is by definition absent from the active list, so unarchiving
  * has to look somewhere the default fetch does not reach.
  */

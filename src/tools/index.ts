@@ -37,6 +37,7 @@ import { isMissingChoreError, loadChoreById } from "@/tools/chore-lookup";
 import type { ToolContext } from "@/tools/context";
 import {
   CHORE_HISTORY_STATUS,
+  CHORE_STATUS_NAMES,
   isArchivedChore,
   MAX_PRIORITY,
   MIN_PRIORITY,
@@ -397,14 +398,14 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
             "throws a RangeError that would surface as an opaque tool failure.",
         ),
         project: z.string().optional(),
-        priority: z.enum(["P1", "P2", "P3", "P4", "none"]).optional(),
+        priority: priorityEnumSchema.optional(),
         label: z.string().optional(),
         assignee: z.string().optional().describe(
           "A member name, or 'unassigned'. There is no 'me': this server cannot resolve the caller " +
             "to a member, so ask which member they are before filtering by person.",
         ),
         status: z
-          .enum(["idle", "in_progress", "paused", "pending_approval"])
+          .enum(CHORE_STATUS_NAMES)
           .optional()
           .describe("Use pending_approval to find completions waiting on sign-off."),
         search: z.string().optional(),

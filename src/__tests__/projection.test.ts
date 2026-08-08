@@ -488,3 +488,22 @@ describe("occurrence shapes Donetick stores but does not act on", () => {
     expect(dow({ days: ["saturday"], occurrences: [1] })).toBe("every saturday");
   });
 });
+
+describe("archived state is reported", () => {
+  // list_chores excludes archived chores, so get_chore returning one that looked
+  // exactly like an active chore left the caller with no way to tell why it could
+  // not be found again.
+  test("an archived chore says so", () => {
+    expect(projectChore(chore({ isActive: false }), members, projects, now).archived).toBe(true);
+  });
+
+  test("an active chore says so", () => {
+    expect(projectChore(chore({ isActive: true }), members, projects, now).archived).toBe(false);
+  });
+
+  test("a view that omits isActive is not reported as archived", () => {
+    // The field is optional on a merged row, and reporting an unknown as archived
+    // would tell the caller a chore they can see in list_chores is not there.
+    expect(projectChore(chore(), members, projects, now).archived).toBe(false);
+  });
+});

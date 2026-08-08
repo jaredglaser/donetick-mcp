@@ -159,6 +159,13 @@ export const CHORE_STATUS: Record<number, string> = {
 };
 
 /**
+ * The names list_chores accepts for its status filter, which are the names the
+ * filter compares against. Derived, because a fifth status added above and not to a
+ * hand-written enum would be filterable by nothing and rejected by the schema.
+ */
+export const CHORE_STATUS_NAMES: readonly string[] = Object.values(CHORE_STATUS);
+
+/**
  * Chore history rows, which are not the same scale as CHORE_STATUS. Measured on
  * v0.1.76: completing wrote 1, skipping 2, a completion awaiting sign-off 3, and a
  * plain rename wrote 6. 0 is written when someone starts a chore timer, and 4 by a
@@ -254,6 +261,7 @@ export interface ProjectedChore {
   due_date: string | null;
   due_in: string;
   is_overdue: boolean;
+  archived: boolean;
   assigned_to: string | null;
   description: string | null;
   points: number | null;

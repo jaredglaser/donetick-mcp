@@ -3,10 +3,11 @@ import {
   mergeEditRequest,
   requireDueDateFor,
   type BuildContext,
+  type ChoreRequestBody,
 } from "@/chore-request";
 import { parseDueDate } from "@/dates";
 import { endpoints } from "@/endpoints";
-import { loadArchivedChoreById, loadChoreById } from "@/tools/chore-lookup";
+import { loadArchivedChoreById, loadChoreById, writeWithConcurrencyRetry } from "@/tools/chore-lookup";
 import { resolveMember, safeName } from "@/resolve";
 import type { ToolContext } from "@/tools/context";
 import {
@@ -17,6 +18,7 @@ import {
   PRIORITY_LABEL,
   PRIORITY_VALUE,
   UNSET_PRIORITY,
+  type ChoreListRow,
   type RawChore,
 } from "@/types";
 
@@ -75,7 +77,17 @@ export async function rescheduleChore(input: RescheduleInput, ctx: ToolContext):
   // This endpoint writes the due date directly, so it never passes through the
   // builders where the guard normally runs. Clearing the date on a chore with a
   // completion window leaves it uncompletable, and an adaptive frequency unskippable.
-  requireDueDateFor(parsed, existing.frequencyType, existing.completionWindow ?? null);
+  //
+  // Checked against the live row before refusing, never against the cached one. The
+  // cached row's completion window can be up to a TTL out of date, so a window
+  // removed on the phone made this refuse a clear that Donetick would have accepted,
+  // and the message named a repair the caller had already made. Only on the refusal
+  // path: the read costs nothing on the common one, and a guard that lets a clear
+  // through is recoverable where a wrong refusal makes the chore uneditable here.
+  if (parsed === null) {
+    const live = await liveGuardFields(existing, ctx);
+    requireDueDateFor(null, live.frequencyType, live.completionWindow);
+  }
   const updatedAt = concurrencyToken(existing, ctx.now());
 
   await ctx.service.write(() =>
@@ -85,6 +97,32 @@ export async function rescheduleChore(input: RescheduleInput, ctx: ToolContext):
   // PUT /:id/dueDate returns the chore as it was before the update, so the response
   // body is never trusted for the new date; the value already computed is echoed back.
   return { kind: "rescheduled", chore_id: existing.id, due_date: dueDate };
+}
+
+/**
+ * The two fields requireDueDateFor reads, taken from GET /:id/details rather than
+ * from the cached list row.
+ *
+ * Falls back to the cached values if that read fails. A refusal is the outcome either
+ * way when the cached row says so, and turning a transient read failure into a
+ * different error would hide the reason the write was blocked.
+ */
+async function liveGuardFields(
+  existing: ChoreListRow,
+  ctx: ToolContext,
+): Promise<{ frequencyType: string; completionWindow: number | null }> {
+  try {
+    const detail = await ctx.service.choreDetails(existing.id);
+    return {
+      frequencyType: detail.frequencyType,
+      completionWindow: detail.completionWindow ?? null,
+    };
+  } catch {
+    return {
+      frequencyType: existing.frequencyType,
+      completionWindow: existing.completionWindow ?? null,
+    };
+  }
 }
 
 function currentAssigneeIds(existing: RawChore): number[] {
@@ -120,24 +158,34 @@ export async function reassignChore(input: ReassignInput, ctx: ToolContext): Pro
   // (now-larger) assignee set.
   const projects = await ctx.service.projects();
   const buildCtx: BuildContext = { members, projects, now: ctx.now(), timezone: ctx.timezone };
-  const body = mergeEditRequest(existing, { add_assignees: [input.assignee] }, buildCtx);
-  body.assignedTo = target.userId;
 
-  // This path goes through the same merge edit_chore does, so it causes the same two
-  // side effects, and edit_chore warns about only one of them from only one of the
-  // two tools that reach it.
-  const notificationsSwitchedOff = existing.notification === true && body.notification === false;
-  const strategyPromoted =
-    existing.assignStrategy === "no_assignee" && body.assignStrategy !== "no_assignee";
+  // Rebuilt per attempt, so a retry merges onto the row that actually landed. The
+  // warnings are computed here too: which side effects this write causes depends on
+  // the base it merged onto, and reporting the first attempt's would describe a chore
+  // that was never written.
+  let body: ChoreRequestBody | undefined;
+  let notificationsSwitchedOff = false;
+  let strategyPromoted = false;
 
-  await ctx.service.write(() => ctx.service.client.put(endpoints.editChore(), body));
+  const put = async (base: ChoreListRow): Promise<void> => {
+    body = mergeEditRequest(base, { add_assignees: [input.assignee] }, buildCtx);
+    body.assignedTo = target.userId;
+    // This path goes through the same merge edit_chore does, so it causes the same
+    // two side effects, and edit_chore warns about only one of them from only one of
+    // the two tools that reach it.
+    notificationsSwitchedOff = base.notification === true && body.notification === false;
+    strategyPromoted = base.assignStrategy === "no_assignee" && body.assignStrategy !== "no_assignee";
+    await ctx.service.write(() => ctx.service.client.put(endpoints.editChore(), body));
+  };
+
+  await writeWithConcurrencyRetry(input.chore_id, existing, put, ctx);
 
   const warnings = [
     notificationsSwitchedOff
       ? `Notifications on "${safeName(existing.name)}" were switched off by this write. Donetick had them enabled with no reminder settings stored, a combination it crashes on when written back. Use edit_chore with notify to turn them on again.`
       : "",
     strategyPromoted
-      ? `The assign strategy changed from no_assignee to ${body.assignStrategy}, because a chore cannot both have an assignee and be set to assign nobody. Later occurrences will keep an assignee rather than reverting to unassigned.`
+      ? `The assign strategy changed from no_assignee to ${body?.assignStrategy}, because a chore cannot both have an assignee and be set to assign nobody. Later occurrences will keep an assignee rather than reverting to unassigned.`
       : "",
   ].filter((w) => w.length > 0);
 

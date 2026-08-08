@@ -2,6 +2,7 @@ import { dueDateOf, humanizeDueIn } from "@/time";
 import { frequencyHealth } from "@/frequency-health";
 import {
   CHORE_STATUS,
+  isArchivedChore,
   PRIORITY_LABEL,
   type Member,
   type ProjectedChore,
@@ -158,6 +159,10 @@ export function projectChore(
         : (member?.displayName ?? `member #${chore.assignedTo} (unknown)`),
     description: chore.description ?? null,
     is_private: chore.isPrivate === true,
+    // Archived chores are absent from list_chores, so without this get_chore returned
+    // one looking exactly like an active chore and the caller had no way to tell why
+    // it could not be found again. Both views carry isActive.
+    archived: isArchivedChore(chore),
     assign_strategy: chore.assignStrategy ?? null,
     assignees: (chore.assignees ?? [])
       .map((a) => members.find((m) => m.userId === a.userId)?.displayName ?? `member #${a.userId} (unknown)`),

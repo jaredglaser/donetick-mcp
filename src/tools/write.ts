@@ -9,8 +9,7 @@ import {
   type EditInput,
 } from "@/chore-request";
 import { endpoints } from "@/endpoints";
-import { DonetickError } from "@/errors";
-import { loadChoreById } from "@/tools/chore-lookup";
+import { loadChoreById, writeWithConcurrencyRetry } from "@/tools/chore-lookup";
 import type { ToolContext } from "@/tools/context";
 import { projectChore } from "@/projection";
 import { safeName } from "@/resolve";
@@ -130,7 +129,7 @@ export async function editChore(
   input: EditInput & { chore_id?: number },
   ctx: ToolContext,
 ): Promise<EditOutcome> {
-  let existing = await loadChoreById(input.chore_id, ctx);
+  const existing = await loadChoreById(input.chore_id, ctx);
   const buildCtx = await loadBuildContext(ctx);
 
   // The body that actually landed, kept for the read-back merge below: it holds the
@@ -150,21 +149,7 @@ export async function editChore(
     await ctx.service.write(() => ctx.service.client.put(endpoints.editChore(), body));
   };
 
-  try {
-    await put(existing);
-  } catch (error) {
-    // The merge base is a cached row, so between reading it and writing, someone
-    // on the web UI or the phone can land an edit of their own. Donetick refuses
-    // that with a 403 rather than letting this overwrite them, and the answer is
-    // to rebuild on their version: input is a sparse patch, so re-merging applies
-    // only the caller's fields onto whatever is current and keeps the rest of
-    // their change. Retried once, not in a loop, so a genuine permission failure
-    // surfaces on the second attempt instead of spinning.
-    if (!(error instanceof DonetickError) || !error.retryable) throw error;
-    ctx.service.invalidateChores();
-    existing = await loadChoreById(input.chore_id, ctx);
-    await put(existing);
-  }
+  await writeWithConcurrencyRetry(input.chore_id, existing, put, ctx);
 
   // PUT /chores/ reads nextDueDate: null as "keep the current date" rather than as
   // "clear it" (verified live on v0.1.76: the field is only assigned when non-nil,

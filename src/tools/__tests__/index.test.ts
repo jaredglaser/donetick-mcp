@@ -2,6 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { DonetickError } from "@/errors";
 import { z } from "zod";
 import { buildToolDefinitions, type McpExtras, type ToolResult } from "../index";
+import {
+  CHORE_STATUS_NAMES,
+  PRIORITY_INPUT_VALUES,
+  PRIORITY_LABEL,
+  UNSET_PRIORITY,
+} from "@/types";
 
 const service = {
   chores: async () => [],
@@ -1442,5 +1448,57 @@ describe("history rows that carry no completer", () => {
     }>;
 
     expect(parsed[0]!.completed_by).toBeNull();
+  });
+});
+
+describe("the tool schemas are derived from the tables, not retyped beside them", () => {
+  // Four hand-written copies of the priority labels, two of the frequency units and
+  // two of the status names, all agreeing on the day they were written. Priority is
+  // the dangerous one: the scale is inverted, so a transcription slip reads as
+  // plausible whatever it says.
+  const optionsOf = (shape: z.ZodRawShape, field: string): string[] => {
+    let schema: z.ZodTypeAny = shape[field] as z.ZodTypeAny;
+    // Unwrap .optional() and the union set_priority takes.
+    for (let i = 0; i < 4; i += 1) {
+      const def = (schema as { _def?: { innerType?: z.ZodTypeAny; options?: z.ZodTypeAny[]; entries?: Record<string, string> } })._def;
+      if (def?.entries) return Object.values(def.entries);
+      if (def?.innerType) schema = def.innerType;
+      else if (def?.options) schema = def.options[0]!;
+      else break;
+    }
+    return [];
+  };
+
+  const tools = buildToolDefinitions(deps);
+  const schemaOf = (name: string): z.ZodRawShape =>
+    tools.find((t) => t.name === name)!.inputSchema;
+
+  test("every priority enum offers exactly the labels PRIORITY_LABEL defines", () => {
+    const expected = [...PRIORITY_INPUT_VALUES].sort();
+    for (const [tool, field] of [
+      ["list_chores", "priority"],
+      ["set_priority", "priority"],
+      ["create_chore", "priority"],
+      ["edit_chore", "priority"],
+    ] as const) {
+      const offered = optionsOf(schemaOf(tool), field);
+      expect(offered.length).toBeGreaterThan(0);
+      expect([...offered].sort()).toEqual(expected);
+    }
+  });
+
+  test("the status filter offers exactly the names CHORE_STATUS defines", () => {
+    expect([...optionsOf(schemaOf("list_chores"), "status")].sort()).toEqual(
+      [...CHORE_STATUS_NAMES].sort(),
+    );
+  });
+
+  test("adding a priority level reaches the schemas without another edit", () => {
+    // The derivation is the point: this fails if any of the four lists above is
+    // written out by hand again.
+    expect(PRIORITY_INPUT_VALUES.length).toBe(Object.keys(PRIORITY_LABEL).length);
+    expect(PRIORITY_INPUT_VALUES[PRIORITY_INPUT_VALUES.length - 1]).toBe(
+      PRIORITY_LABEL[UNSET_PRIORITY],
+    );
   });
 });

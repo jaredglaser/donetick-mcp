@@ -19,6 +19,7 @@ interface FakeOptions {
   members?: Member[];
   projects?: Project[];
   put?: (path: string, body?: unknown) => unknown | Promise<unknown>;
+  choreDetails?: () => unknown;
 }
 
 function fakeService(opts: FakeOptions = {}) {
@@ -35,6 +36,8 @@ function fakeService(opts: FakeOptions = {}) {
     // loadChoreById probes /details before it reports an id as missing, so a fake
     // without one turns "no such chore" into a TypeError.
     choreDetails: async () => {
+      calls.push("GET details");
+      if (opts.choreDetails) return opts.choreDetails();
       throw new DonetickError("chore not found", { status: 404 });
     },
     archivedChores: async () => {
@@ -43,6 +46,9 @@ function fakeService(opts: FakeOptions = {}) {
     },
     members: async () => opts.members ?? members,
     projects: async () => opts.projects ?? projects,
+    invalidateChores: () => {
+      calls.push("invalidateChores");
+    },
     write: async <T>(operation: () => Promise<T>): Promise<T> => {
       try {
         return await operation();
@@ -449,6 +455,144 @@ describe("archiving a chore that is already inactive", () => {
     await expect(archiveChore({ chore_id: 5 }, ctxFor(fake.service))).resolves.toMatchObject({
       kind: "archived",
     });
+  });
+});
+
+describe("clearing a due date checks the live row, not the cached one", () => {
+  // The guard refuses a clear on a chore with a completion window, because Donetick
+  // answers 502 on every completion of one that has no due date. Read off the cached
+  // list row it refused on state that could be a TTL old, so a window removed on the
+  // phone made this refuse a clear Donetick would accept and name a repair the caller
+  // had already made.
+  test("allows the clear when the window is gone from the live row", () => {
+    const fake = fakeService({
+      chores: [{ ...listRow, completionWindow: 4 }],
+      choreDetails: () => ({ id: 5, name: listRow.name, frequencyType: "daily", completionWindow: null }),
+    });
+
+    return expect(
+      rescheduleChore({ chore_id: 5, due_date: null }, ctxFor(fake.service)),
+    ).resolves.toMatchObject({ due_date: null });
+  });
+
+  test("refuses when the live row has acquired one the cache does not show", () => {
+    const fake = fakeService({
+      chores: [{ ...listRow, completionWindow: null }],
+      choreDetails: () => ({ id: 5, name: listRow.name, frequencyType: "daily", completionWindow: 4 }),
+    });
+
+    return expect(
+      rescheduleChore({ chore_id: 5, due_date: null }, ctxFor(fake.service)),
+    ).rejects.toThrow(/completion window needs a due date/);
+  });
+
+  test("the same holds for an adaptive frequency", async () => {
+    const fake = fakeService({
+      chores: [{ ...listRow, frequencyType: "daily" }],
+      choreDetails: () => ({ id: 5, name: listRow.name, frequencyType: "adaptive", completionWindow: null }),
+    });
+
+    await expect(
+      rescheduleChore({ chore_id: 5, due_date: null }, ctxFor(fake.service)),
+    ).rejects.toThrow(/adaptive chore needs a due date/);
+  });
+
+  test("a failed live read falls back to the cached row rather than inventing an answer", async () => {
+    const fake = fakeService({
+      chores: [{ ...listRow, completionWindow: 4 }],
+      choreDetails: () => {
+        throw new DonetickError("The request timed out after 15000ms.", { status: 0 });
+      },
+    });
+
+    await expect(
+      rescheduleChore({ chore_id: 5, due_date: null }, ctxFor(fake.service)),
+    ).rejects.toThrow(/completion window needs a due date/);
+  });
+
+  test("setting a date does not pay for the extra read", async () => {
+    // The live read is on the refusal path only. requireDueDateFor returns
+    // immediately for a non-null date, so fetching there would be a request per
+    // reschedule for a guard that cannot fire.
+    const fake = fakeService({ chores: [{ ...listRow, completionWindow: 4 }] });
+
+    await rescheduleChore({ chore_id: 5, due_date: "2026-09-01" }, ctxFor(fake.service));
+
+    expect(fake.calls).not.toContain("GET details");
+  });
+});
+
+describe("reassign under a concurrent edit", () => {
+  // The full-edit path issues the same whole-chore PUT edit_chore does, and only
+  // edit_chore retried the conflict. A reassign racing an edit from the phone failed
+  // outright, telling the caller another user had modified the chore and leaving them
+  // to redo it by hand.
+  const conflicting = (attempts: { n: number }) => (_path: string, _body?: unknown) => {
+    attempts.n += 1;
+    if (attempts.n === 1) {
+      throw new DonetickError("chore has been modified by another user", {
+        status: 403,
+        retryable: true,
+        invalidatesCache: true,
+      });
+    }
+    return undefined;
+  };
+
+  test("rebuilds on the row that landed and retries once", async () => {
+    const attempts = { n: 0 };
+    const fake = fakeService({
+      chores: [{ ...listRow, assignStrategy: "no_assignee", assignees: [], assignedTo: null }],
+      put: conflicting(attempts),
+    });
+
+    const outcome = await reassignChore(
+      { chore_id: 5, assignee: "Jared Glaser" },
+      ctxFor(fake.service),
+    );
+
+    expect(attempts.n).toBe(2);
+    expect(outcome.assignee).toBe("Jared Glaser");
+    expect(fake.calls).toContain("invalidateChores");
+  });
+
+  test("the warnings describe the attempt that landed, not the one that was refused", async () => {
+    // The base is re-read before the second attempt, so a chore whose notifications
+    // were switched off by the other writer must not still be warned about here. The
+    // warnings were computed once, off the first base, before this.
+    const attempts = { n: 0 };
+    let read = 0;
+    const bases = [
+      { ...listRow, notification: true, notificationMetadata: null },
+      { ...listRow, notification: false, notificationMetadata: null },
+    ];
+    const fake = fakeService({ put: conflicting(attempts) });
+    const service = {
+      ...fake.service,
+      chores: async () => [bases[Math.min(read++, bases.length - 1)]!],
+      allChores: async () => [bases[Math.min(read, bases.length - 1)]!],
+    };
+
+    const outcome = await reassignChore({ chore_id: 5, assignee: "Jared Glaser" }, ctxFor(service as never));
+
+    expect(attempts.n).toBe(2);
+    expect(outcome.warning ?? "").not.toMatch(/switched off/i);
+  });
+
+  test("a refusal that is not a conflict is not retried", async () => {
+    let attempts = 0;
+    const fake = fakeService({
+      chores: [{ ...listRow, assignStrategy: "no_assignee", assignees: [], assignedTo: null }],
+      put: () => {
+        attempts += 1;
+        throw new DonetickError("Donetick rejected the request: bad body", { status: 400 });
+      },
+    });
+
+    await expect(
+      reassignChore({ chore_id: 5, assignee: "Jared Glaser" }, ctxFor(fake.service)),
+    ).rejects.toThrow(/bad body/);
+    expect(attempts).toBe(1);
   });
 });
 
