@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { utcOffsetFor } from "@/time";
-import { buildFrequency, FREQUENCY_TYPES } from "@/frequency";
+import { FREQUENCY_UNITS, buildFrequency, FREQUENCY_TYPES } from "@/frequency";
 import type { FrequencyInput, FrequencyType, WeekPattern } from "@/frequency";
 
 const tz = "America/New_York";
@@ -542,5 +542,21 @@ describe("utcOffsetFor's format guard", () => {
 
   test("an ordinary offset is passed through whole", () => {
     expect(utcOffsetFor("Asia/Kolkata", new Date("2026-08-06T00:00:00Z"))).toBe("+05:30");
+  });
+});
+
+describe("an interval unit Donetick does not have", () => {
+  // The check existed and nothing exercised it. An unknown unit reaches the wire and
+  // scheduleNextDueDate falls to its default arm, which errors on every completion.
+  test("is refused, and the message lists the ones that exist", () => {
+    expect(() =>
+      buildFrequency({ type: "interval", every: 3, unit: "fortnights" as never }, tz, now),
+    ).toThrow(/Unknown unit "fortnights"/);
+  });
+
+  test("every unit Donetick does have is accepted", () => {
+    for (const unit of FREQUENCY_UNITS) {
+      expect(() => buildFrequency({ type: "interval", every: 3, unit }, tz, now)).not.toThrow();
+    }
   });
 });

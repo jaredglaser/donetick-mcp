@@ -128,3 +128,18 @@ describe("token hygiene", () => {
   });
 });
 
+describe("the URL protocol is checked, not only its path and credentials", () => {
+  // Path, query, fragment and credentials each had a case. Protocol did not, so
+  // dropping the http/https test changed nothing that could fail, and a file: or
+  // javascript: URL would have been accepted as a Donetick instance.
+  for (const url of ["file:///etc/passwd", "ftp://tasks.example.test", "javascript:alert(1)"]) {
+    test(`${url} is refused`, () => {
+      expect(() => parseConfig({ DONETICK_URL: url, DONETICK_TOKEN: "t" })).toThrow(/DONETICK_URL/);
+    });
+  }
+
+  test("http and https are both accepted", () => {
+    expect(() => parseConfig({ DONETICK_URL: "http://tasks.example.test", DONETICK_TOKEN: "t" })).not.toThrow();
+    expect(() => parseConfig({ DONETICK_URL: "https://tasks.example.test", DONETICK_TOKEN: "t" })).not.toThrow();
+  });
+});

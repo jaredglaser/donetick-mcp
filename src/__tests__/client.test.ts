@@ -246,3 +246,49 @@ describe("a 200 whose body is not JSON", () => {
     expect(error.indeterminate).toBe(true);
   });
 });
+
+describe("the base URL is normalised before a path is appended", () => {
+  // config.ts accepts pathname "/" as valid, so a trailing slash is a configuration
+  // a user can really have, and without the strip every request would go to
+  // https://host//api/v1/... Nothing asserted it.
+  test("a trailing slash does not produce a doubled slash", async () => {
+    let requested = "";
+    const client = new DonetickClient({
+      baseUrl: "https://tasks.example.test/",
+      token: "t",
+      timeoutMs: 1000,
+      fetchFn: (async (url: string) => {
+        requested = String(url);
+        return new Response(JSON.stringify({ res: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }) as unknown as typeof fetch,
+    });
+
+    await client.get("/api/v1/chores/");
+
+    expect(requested).toBe("https://tasks.example.test/api/v1/chores/");
+    expect(requested).not.toContain("//api");
+  });
+
+  test("several trailing slashes are stripped too", async () => {
+    let requested = "";
+    const client = new DonetickClient({
+      baseUrl: "https://tasks.example.test///",
+      token: "t",
+      timeoutMs: 1000,
+      fetchFn: (async (url: string) => {
+        requested = String(url);
+        return new Response(JSON.stringify({ res: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }) as unknown as typeof fetch,
+    });
+
+    await client.get("/api/v1/chores/");
+
+    expect(requested).toBe("https://tasks.example.test/api/v1/chores/");
+  });
+});

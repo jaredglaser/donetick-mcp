@@ -135,8 +135,8 @@ bun run verify:live
 
 It needs Docker and nothing else. It starts a Donetick container pinned to the tag
 in `compose.verify.yaml`, signs a throwaway user up over plain HTTP, mints that
-user's API token, and exercises 31 contract facts against it. A clean run reports
-31 passed: the thirty-first is a cleanup assertion, not a contract fact. Scratch chores carry
+user's API token, and exercises 33 contract facts against it. A clean run reports
+34 passed: the last is a cleanup assertion, not a contract fact. Scratch chores carry
 a run-scoped name prefix and are deleted in a `finally`, so a mid-run failure
 leaves nothing behind. It exits non-zero if any check fails, and distinguishes a warning
 (something changed but nothing is broken) from a failure.

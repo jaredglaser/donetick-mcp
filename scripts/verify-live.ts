@@ -1029,6 +1029,96 @@ async function main(): Promise<void> {
       return { detail: `${refused.length} unmatchable names each failed completion and read as broken` };
     });
 
+    await check("a timer makes skip a silent no-op, which is why skip_chore refuses one", async () => {
+      // The justification for a refusal in skip_chore, and nothing measured it: there
+      // was no timer anywhere in this script, so the claim sat in a comment for
+      // several rounds with no way to check it.
+      //
+      // The paths are built here rather than added to src/endpoints.ts, which is the
+      // list of what this server calls. It does not start or pause timers.
+      const startPath = (id: number): string => `/api/v1/chores/${id}/start`;
+      const pausePath = (id: number): string => `/api/v1/chores/${id}/pause`;
+      const anchorDate = "2026-09-10T13:00:00Z";
+
+      const observed: string[] = [];
+      for (const [label, arm] of [
+        ["running", startPath],
+        ["paused", pausePath],
+      ] as const) {
+        const id = await createScratchChore(
+          baseChoreBody(scoped(`timer-${label}`), {
+            nextDueDate: anchorDate,
+            frequencyType: "daily",
+          }),
+        );
+        await client.put(startPath(id), {});
+        if (arm === pausePath) await client.put(pausePath(id), {});
+
+        const before = await listRowById(id);
+        if (before.status !== (label === "running" ? 1 : 2)) {
+          throw new Error(
+            `${label}: expected status ${label === "running" ? 1 : 2}, got ${JSON.stringify(before.status)}. The timer states this guard names may have been renumbered.`,
+          );
+        }
+
+        await client.post(endpoints.skipChore(id), {});
+        const after = await listRowById(id);
+        if (after.nextDueDate !== before.nextDueDate) {
+          throw new Error(
+            `${label}: the skip moved the due date from ${String(before.nextDueDate)} to ${String(after.nextDueDate)}, so Donetick now acts on a skip in this state and skip_chore refuses one for no reason.`,
+          );
+        }
+        observed.push(`${label} (status ${String(before.status)})`);
+      }
+
+      return { detail: `skip answered 200 and moved nothing for ${observed.join(" and ")}` };
+    });
+
+    await check("skipping a chore awaiting sign-off destroys the submission", async () => {
+      // skip_chore's loudest refusal, and the one that claims real data loss. It was
+      // measured once and never re-checked: this script created pending-approval
+      // chores and never skipped one.
+      const id = await createScratchChore(
+        baseChoreBody(scoped("skip-pending"), {
+          nextDueDate: "2026-09-10T13:00:00Z",
+          frequencyType: "daily",
+          requireApproval: true,
+          points: 5,
+        }),
+      );
+
+      await client.post(endpoints.completeChore(id), {});
+      const pending = await listRowById(id);
+      if (pending.status !== 3) {
+        throw new Error(`expected status 3 after completing an approval chore, got ${JSON.stringify(pending.status)}`);
+      }
+
+      await client.post(endpoints.skipChore(id), {});
+      const afterSkip = await listRowById(id);
+      if (afterSkip.status === 3) {
+        throw new Error(
+          "the skip left the chore pending approval, so it no longer discards the submission and skip_chore's refusal is stale",
+        );
+      }
+
+      // The half that makes it unrecoverable: approve now reports nothing pending.
+      let approveRefused = false;
+      try {
+        await client.post(endpoints.approveChore(id), {});
+      } catch {
+        approveRefused = true;
+      }
+      if (!approveRefused) {
+        throw new Error(
+          "approve succeeded after the skip, so the submission survives and the refusal overstates the damage",
+        );
+      }
+
+      return {
+        detail: `skip dropped status 3 to ${String(afterSkip.status)} and approve then refused`,
+      };
+    });
+
     await check("an hourly interval with a time of day freezes, which is why the client refuses it", async () => {
       // Measured: the scheduler resets the base date's clock to the stored time
       // before adding the hours, so from the second completion the chore reschedules

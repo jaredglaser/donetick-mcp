@@ -8,6 +8,7 @@ import {
   type AssignStrategy,
   type BuildContext,
 } from "@/chore-request";
+import { normalizeName } from "@/resolve";
 import type { ChoreDetails, ChoreListRow, Member, Project } from "@/types";
 
 const tz = "America/New_York";
@@ -1308,5 +1309,31 @@ describe("the due-date guard names a repair and the tool that has it", () => {
     expect(() =>
       mergeEditRequest(noDue({ frequencyType: "adaptive" }), { due_date: "2026-07-01" }, ctx()),
     ).not.toThrow();
+  });
+});
+
+describe("clearing a text field, which nullish coalescing would swallow", () => {
+  // points, projectId and completionWindow each have a test proving an explicit clear
+  // is honoured. description did not, so switching its ?? to || made clearing it a
+  // silent no-op that still reported success.
+  test("an empty description is written as empty, not carried forward", () => {
+    const body = mergeEditRequest(existing, { description: "" }, ctx());
+    expect(body.description).toBe("");
+  });
+
+  test("an omitted description keeps the stored one", () => {
+    const body = mergeEditRequest(existing, { name: "Renamed" }, ctx());
+    expect(body.description).toBe(existing.description ?? "");
+  });
+});
+
+describe("normalizeName folds decomposed characters", () => {
+  // The variation-selector strip beside it has a test; the NFC pass did not, so a
+  // member whose display name is stored decomposed could not be matched by a caller
+  // who typed it composed.
+  test("a decomposed name matches its composed form", () => {
+    const decomposed = "Jose\u0301 Garcia";
+    const composed = "Jos\u00e9 Garcia";
+    expect(normalizeName(decomposed)).toBe(normalizeName(composed));
   });
 });

@@ -254,6 +254,25 @@ describe("completeChore", () => {
     expect(result.completed).toBe(true);
   });
 
+  test("the same date in a different year is refused, not clamped to now", async () => {
+    // isSameCalendarDay compares year, month and day. Dropping the year made "the
+    // 15th of June" next year look like today, so a future completion was clamped to
+    // now and recorded as a plain success instead of being refused.
+    const fake = fakeService({ chores: [listRow] });
+
+    await expect(
+      completeChore({ chore_id: 7, completed_at: "2027-08-06" }, ctxFor(fake.service)),
+    ).rejects.toThrow(/future/i);
+  });
+
+  test("the same day-of-month in a different month is refused too", async () => {
+    const fake = fakeService({ chores: [listRow] });
+
+    await expect(
+      completeChore({ chore_id: 7, completed_at: "2026-12-06" }, ctxFor(fake.service)),
+    ).rejects.toThrow(/future/i);
+  });
+
   test('completed_at "today" means now at every hour, not 09:00', async () => {
     // This test asserted the opposite, on the reasoning that 09:00 was already in the
     // past so there was nothing to clamp. There was: parseDueDate resolves a bare day

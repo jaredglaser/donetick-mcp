@@ -383,3 +383,31 @@ describe("the messages that list what does exist", () => {
     expect(message).toMatch(/Garden/);
   });
 });
+
+describe("the default result limit", () => {
+  // Nothing asserted it, and the schema caps `limit` at 200, so raising the default
+  // past that cap would mean truncation never fires and a large circle returns every
+  // chore in one response.
+  const many = (count: number): RawChore[] =>
+    Array.from({ length: count }, (_, i) => ({
+      id: i + 1,
+      name: `Chore ${i + 1}`,
+      nextDueDate: null,
+      assignedTo: null,
+      priority: 0,
+      status: 0,
+      frequencyType: "once",
+      createdBy: 1,
+    }));
+
+  test("is 50, which is below the 200 the schema allows", () => {
+    const result = listChores({ scope: "all" }, { ...ctx, chores: many(300) });
+    expect(result.chores.length).toBe(50);
+    expect(result.total).toBe(300);
+  });
+
+  test("an explicit limit still wins", () => {
+    const result = listChores({ scope: "all", limit: 7 }, { ...ctx, chores: many(300) });
+    expect(result.chores.length).toBe(7);
+  });
+});
