@@ -34,6 +34,7 @@ import { ensureLocalInstance } from "./local-instance";
 import { endpoints } from "@/endpoints";
 import { DonetickError } from "@/errors";
 import { concurrencyToken, mergeEditRequest } from "@/chore-request";
+import { frequencyHealth } from "@/frequency-health";
 import type { ChoreListRow, Member, Project } from "@/types";
 
 type Status = "pass" | "warn" | "fail";
@@ -816,6 +817,86 @@ async function main(): Promise<void> {
         };
       }
       return { detail: "the stamp is unchanged, so the stored token was written back as a no-op" };
+    });
+
+    await check("the recurrences frequencyHealth calls healthy actually schedule", async () => {
+      // Every other frequency check here confirms that a shape the client refuses is
+      // genuinely broken. None confirmed the other half, that a shape it allows
+      // genuinely works, and that is the half two false positives hid behind: an
+      // hourly interval carrying a time was refused for every count because the
+      // freezing case was the only one pinned, and a day_of_the_month row carrying
+      // weekday names was refused because no check created one with months alongside.
+      // Both blocked editing on chores Donetick schedules correctly, which rule 13
+      // says costs more than the bug it prevents. These are the neighbours of the
+      // refused shapes, so a guard that widens by one lands on them.
+      const anchor = "2026-09-10T13:00:00Z";
+      const cases: Array<[string, Record<string, unknown>, number, string]> = [
+        [
+          "interval of 24 hours carrying a time",
+          { unit: "hours", time: "1970-01-01T09:00:00-04:00", timezone },
+          24,
+          "interval",
+        ],
+        [
+          "interval of 48 hours carrying a time",
+          { unit: "hours", time: "1970-01-01T09:00:00-04:00", timezone },
+          48,
+          "interval",
+        ],
+        [
+          "day_of_the_month carrying weekday names alongside months",
+          { days: ["saturday"], months: ["october"], timezone },
+          15,
+          "day_of_the_month",
+        ],
+        [
+          "week_of_quarter at the occurrence ceiling",
+          { days: ["monday"], weekPattern: "week_of_quarter", occurrences: [13], timezone },
+          1,
+          "days_of_the_week",
+        ],
+        [
+          "week_of_month at the occurrence ceiling",
+          { days: ["monday"], weekPattern: "week_of_month", occurrences: [5], timezone },
+          1,
+          "days_of_the_week",
+        ],
+      ];
+
+      const advanced: string[] = [];
+      for (const [label, metadata, frequency, frequencyType] of cases) {
+        const id = await createScratchChore(
+          baseChoreBody(scoped(`healthy-${advanced.length}`), {
+            nextDueDate: anchor,
+            frequencyType,
+            frequency,
+            frequencyMetadata: metadata,
+          }),
+        );
+
+        const before = (await listRowById(id)).nextDueDate;
+        const response = (await client.post(endpoints.completeChore(id), {})) as Record<string, unknown>;
+        if (typeof response.nextDueDate !== "string") {
+          throw new Error(`${label}: /do returned no nextDueDate, so this check cannot tell it advanced`);
+        }
+        if (response.nextDueDate === before) {
+          throw new Error(`${label}: the due date did not move, so this shape is not healthy after all`);
+        }
+
+        // Both sides, because Donetick scheduling the shape is only half of it. The
+        // first version of this check measured Donetick alone and passed with both
+        // historical false positives reintroduced, since the defect was never in
+        // Donetick: it was in this server refusing a row Donetick handles.
+        const health = frequencyHealth((await listRowById(id)) as unknown as ChoreListRow);
+        if (!health.ok) {
+          throw new Error(
+            `${label}: Donetick scheduled it, and frequencyHealth calls it broken (${health.detail}), so every edit and reassign on this chore is refused for no reason`,
+          );
+        }
+        advanced.push(label);
+      }
+
+      return { detail: `${advanced.length} allowed shapes each advanced on completion` };
     });
 
     await check("an hourly interval with a time of day freezes, which is why the client refuses it", async () => {
