@@ -123,12 +123,12 @@ export async function completeChore(input: CompleteInput, ctx: ToolContext): Pro
     body.completedBy = member.userId;
   }
 
-  const response = await ctx.service.write(() =>
-    ctx.service.client.post(endpoints.completeChore(chore.id), body),
+  // movesPoints, so the member cache is invalidated in write()'s finally rather than
+  // after the await: a completion that lands and then times out still moved points.
+  const response = await ctx.service.write(
+    () => ctx.service.client.post(endpoints.completeChore(chore.id), body),
+    { movesPoints: true },
   );
-  // Points move on completion, and list_members answers point-standing questions
-  // off a cache with a five minute TTL.
-  ctx.service.invalidateMembers();
 
   // A chore awaiting sign-off comes back 200 with the full chore object at status 3
   // and no message field at all, and its due date is unchanged.
@@ -141,13 +141,22 @@ export async function completeChore(input: CompleteInput, ctx: ToolContext): Pro
   const pendingApproval = status !== undefined ? status === 3 : chore.requireApproval === true;
 
   if (pendingApproval) {
+    // From the response, not from the row read before the write. The /do answer on an
+    // approval-gated chore is the full chore object and carries the true date;
+    // reaching for the cached one reported a date that was up to a TTL old under a
+    // field named next_due_date, and then asserted it was unchanged. skipChore twelve
+    // lines down already refuses to do exactly this.
+    const pendingDue = nextDueDateOf(response);
+    const unchanged = pendingDue.present && pendingDue.value === chore.nextDueDate;
     return {
       id: chore.id,
       name: chore.name,
       completed: false,
       pending_approval: true,
-      next_due_date: chore.nextDueDate,
-      message: `"${safeName(chore.name)}" was submitted for approval and has not been completed. Its due date is unchanged. A circle admin or manager must sign off with approve_chore.`,
+      next_due_date: pendingDue.present ? pendingDue.value : null,
+      message: `"${safeName(chore.name)}" was submitted for approval and has not been completed.${
+        unchanged ? " Its due date is unchanged." : ""
+      } A circle admin or manager must sign off with approve_chore.`,
     };
   }
 
@@ -338,11 +347,13 @@ export async function undoChore(input: UndoInput, ctx: ToolContext): Promise<Und
   }
 
   try {
-    await ctx.service.write(() => ctx.service.client.post(endpoints.undoChore(input.chore_id!), {}));
+    await ctx.service.write(
+      () => ctx.service.client.post(endpoints.undoChore(input.chore_id!), {}),
+      { movesPoints: true },
+    );
   } catch (error) {
     throw new Error(explainUndoFailure(error));
   }
-  ctx.service.invalidateMembers();
   return { id: input.chore_id, message: "The most recent completion was undone." };
 }
 
@@ -377,8 +388,10 @@ export interface ApprovalOutcome {
 
 export async function approveChore(input: ApprovalInput, ctx: ToolContext): Promise<ApprovalOutcome> {
   const chore = await loadChoreById(input.chore_id, ctx);
-  await ctx.service.write(() => ctx.service.client.post(endpoints.approveChore(chore.id), {}));
-  ctx.service.invalidateMembers();
+  await ctx.service.write(
+    () => ctx.service.client.post(endpoints.approveChore(chore.id), {}),
+    { movesPoints: true },
+  );
   return {
     id: chore.id,
     name: chore.name,

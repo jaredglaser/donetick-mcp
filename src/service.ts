@@ -135,11 +135,16 @@ export class DonetickService {
    * Donetick's CreateChore inserts the row before several later steps that can fail,
    * so a failed write can still have changed state. Invalidation runs in finally.
    */
-  async write<T>(operation: () => Promise<T>): Promise<T> {
+  async write<T>(operation: () => Promise<T>, options: { movesPoints?: boolean } = {}): Promise<T> {
     try {
       return await operation();
     } finally {
       this.choreCache.invalidate();
+      // Same finally, same reason. The three point-moving tools called this after
+      // the await, so a completion that timed out after landing left the member
+      // cache holding the pre-completion total for the rest of its five minutes,
+      // which is exactly the case the chore invalidation is in a finally for.
+      if (options.movesPoints === true) this.memberCache.invalidate();
     }
   }
 

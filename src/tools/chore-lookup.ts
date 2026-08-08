@@ -15,7 +15,12 @@ import type { ToolContext } from "@/tools/context";
  * must keep its own reason rather than becoming a missing chore.
  */
 export function isMissingChoreError(error: unknown): boolean {
-  return error instanceof DonetickError && (error.status === 404 || error.status >= 500);
+  // 500 exactly, not every 5xx. Measured on v0.1.76: /details answers a missing id
+  // with a 500, and that is the only 5xx it produces for one. A 502, 503 or 504 is
+  // the shape a reverse proxy makes while Donetick restarts, which is a fault rather
+  // than a deletion, and calling it a deletion tells the caller a chore they can see
+  // is gone.
+  return error instanceof DonetickError && (error.status === 404 || error.status === 500);
 }
 
 function requireChoreId(chore_id: number | undefined): number {

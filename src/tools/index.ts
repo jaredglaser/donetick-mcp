@@ -314,6 +314,20 @@ function enrichHistoryRow(row: RawHistoryRow, chores: RawChore[], members: Membe
   };
 }
 
+/**
+ * How many days back Donetick must be asked for so its own filter cannot cut inside
+ * the calendar window list_activity applies afterward.
+ *
+ * Its filter is `updated_at > now - limit days` on the server's UTC clock; ours is a
+ * calendar cutoff in the caller's zone. The two do not line up, and a local day is
+ * not always 24 hours, so the span is measured rather than assumed.
+ */
+function serverDayReach(days: number, now: Date, timezone: string): number {
+  const cutoff = startOfDay(addDays(now, -(days - 1), timezone), timezone).getTime();
+  const spanDays = (now.getTime() - cutoff) / 86_400_000;
+  return Math.ceil(spanDays) + 1;
+}
+
 export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
   const { service, timezone, now } = deps;
   const guard = guardWith(service);
@@ -410,6 +424,15 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
         name: z.string().optional(),
       },
       handler: guard(async (args) => {
+        // The list row is refetched, not taken from the cache. /details carries none
+        // of the ChoreListRow-only fields, so points, requires_approval, is_private,
+        // is_rolling, assign_strategy, assignees, labels, project and notifications
+        // all come from the list, and every one of them was served up to a TTL stale
+        // and stated as fact. Measured: points read 3 while the chore held 99, and
+        // notifications read "off" on a chore with a reminder set. This is the tool
+        // every other description points at for checking state, so it is the one
+        // place a refetch is worth its request.
+        service.invalidateChores();
         const resolved = await resolveChore(args);
         const [members, projects] = await Promise.all([service.members(), service.projects()]);
 
@@ -425,7 +448,7 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
           if (!isMissingChoreError(error)) throw error;
           service.invalidateChores();
           throw new Error(
-            `No chore with id ${resolved.id} exists on this account any more. It was in this server's cached list, so it was probably deleted elsewhere in the last few seconds. Use list_chores to see what is there.`,
+            `No chore with id ${resolved.id} exists on this account any more. It was in the chore list this server just read, so it was most likely deleted in the last few seconds. Use list_chores to see what is there.`,
           );
         }
         // ChoreListRow and ChoreDetails are different views of a chore, and neither is
@@ -468,14 +491,14 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
         // only ever disagree with it.
         const days = typeof args.days === "number" ? args.days : DEFAULT_HISTORY_DAYS;
         const [raw, chores, members] = await Promise.all([
-          // days + 1, because Donetick's `limit` is not a row count. It parses as a
-          // day count and filters `updated_at > now - limit` on its own UTC clock,
-          // while the window below is calendar days in the caller's zone. A matching
-          // number would let the server cut inside our own window and drop rows the
-          // filter would have kept, which is the rolling-window behavior the calendar
-          // change exists to remove. One extra day covers the elapsed part of today
-          // plus any zone offset.
-          service.rawGet(endpoints.choreHistory(days + 1, true)),
+          // Derived from the cutoff, not from days. Donetick's `limit` is a day count
+          // filtering `updated_at > now - limit` on its own UTC clock, so it has to
+          // reach at least as far back as the calendar window below or the server
+          // cuts inside it and drops rows this filter would have kept. days + 1 was
+          // measured to run up to an hour short on a daylight-saving fall-back day,
+          // where a local day is 25 hours; ceil of the real span plus one covers that
+          // and any zone offset without pretending to know the shape of either.
+          service.rawGet(endpoints.choreHistory(serverDayReach(days, now(), timezone), true)),
           service.chores(),
           service.members(),
         ]);
@@ -503,7 +526,12 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
         // `days`. A rolling days * 86_400_000 window made one parameter name mean two
         // things: asking for 1 day of activity at 09:00 would drop what was done at
         // 08:00 yesterday, which is a thing a person would call yesterday.
-        const cutoff = startOfDay(addDays(now(), -days, timezone), timezone).getTime();
+        // -(days - 1), so days: 1 is today and days: 7 is today and the six before it.
+        // Counting back a full N put the cutoff N days plus the elapsed part of today
+        // behind now, making the window N + 1 days wide while the schema promised it
+        // matched list_chores. A previous commit message claimed this and did not
+        // carry the change.
+        const cutoff = startOfDay(addDays(now(), -(days - 1), timezone), timezone).getTime();
         const rows = all.filter((row) => {
           const at = dueDateOf(row.performedAt);
           return at === null || at.getTime() >= cutoff;

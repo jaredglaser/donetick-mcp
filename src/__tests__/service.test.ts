@@ -287,3 +287,70 @@ describe("a response that is not the array every consumer assumes", () => {
     expect(await service.projects()).toEqual([]);
   });
 });
+
+
+describe("a write that moves points", () => {
+  // The chore invalidation is in write()'s finally because a failed write can still
+  // have changed state. The member invalidation sat after the await, so a completion
+  // that landed and then timed out left the pre-completion total for the whole five
+  // minute TTL. Same reasoning, one predicate short.
+  //
+  // Exercised against the real service, because a fake that mirrors the intended
+  // behaviour cannot tell whether the service still has it.
+  function serviceWith(members: unknown) {
+    const fake = fakeClient({ "/api/v1/circles/members": members });
+    return new DonetickService(fake.client as never, { cacheTtlMs: 300_000 });
+  }
+
+  test("invalidates the member cache even when the write throws", async () => {
+    const service = serviceWith([
+      { userId: 1, username: "jared", displayName: "Jared", isActive: true, points: 50 },
+    ]);
+    await service.members();
+
+    await expect(
+      service.write(async () => {
+        throw new Error("The request timed out after 15000ms.");
+      }, { movesPoints: true }),
+    ).rejects.toThrow(/timed out/);
+
+    // A second read must go back to the client rather than answering from the cache.
+    const before = service.members();
+    expect(before).toBeInstanceOf(Promise);
+    await before;
+  });
+
+  test("a write that does not move points leaves the member cache alone", async () => {
+    let memberReads = 0;
+    const client = {
+      get: async (path: string) => {
+        if (path.includes("members")) memberReads += 1;
+        return [{ userId: 1, username: "j", displayName: "J", isActive: true, points: 0 }];
+      },
+    };
+    const service = new DonetickService(client as never, { cacheTtlMs: 300_000 });
+
+    await service.members();
+    await service.write(async () => undefined);
+    await service.members();
+
+    expect(memberReads).toBe(1);
+  });
+
+  test("a write that moves points forces the next member read to refetch", async () => {
+    let memberReads = 0;
+    const client = {
+      get: async (path: string) => {
+        if (path.includes("members")) memberReads += 1;
+        return [{ userId: 1, username: "j", displayName: "J", isActive: true, points: 0 }];
+      },
+    };
+    const service = new DonetickService(client as never, { cacheTtlMs: 300_000 });
+
+    await service.members();
+    await service.write(async () => undefined, { movesPoints: true });
+    await service.members();
+
+    expect(memberReads).toBe(2);
+  });
+});

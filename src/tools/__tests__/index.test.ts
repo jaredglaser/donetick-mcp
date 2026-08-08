@@ -320,6 +320,35 @@ describe("get_chore on a chore deleted while the cache was warm", () => {
     return { fake, invalidations: () => invalidations };
   }
 
+  test("refetches the chore list rather than answering from cache", async () => {
+    // ChoreListRow-only fields (points, requires_approval, is_private, is_rolling,
+    // assign_strategy, assignees, labels, project, notifications) come from the list,
+    // not from /details, so a cached list serves all of them stale and stated as
+    // fact. Measured: points read 3 on a chore holding 99.
+    // The order is the property, not the count: a read after the invalidation is
+    // fresh, a read before it is whatever the cache was holding. Counting calls
+    // cannot tell those apart, since either way the handler reads the list once.
+    const order: string[] = [];
+    const fake = {
+      ...service,
+      chores: async () => {
+        order.push("read");
+        return [row];
+      },
+      allChores: async () => [row],
+      choreDetails: async () => ({ id: 5, name: row.name }),
+      invalidateChores: () => {
+        order.push("invalidate");
+      },
+    };
+    const tools = buildToolDefinitions({ ...deps, service: fake as never });
+
+    await tools.find((t) => t.name === "get_chore")!.handler({ chore_id: 5 });
+
+    expect(order[0]).toBe("invalidate");
+    expect(order).toContain("read");
+  });
+
   test("says the chore is gone rather than that the instance errored", async () => {
     const { fake } = fakeFor(new DonetickError("Failed to fetch chore details", { status: 500 }));
     const tools = buildToolDefinitions({ ...deps, service: fake as never });
@@ -340,7 +369,9 @@ describe("get_chore on a chore deleted while the cache was warm", () => {
 
     await tools.find((t) => t.name === "get_chore")!.handler({ chore_id: 5 });
 
-    expect(invalidations()).toBe(1);
+    // At least once: the handler also refetches the list up front, so the count is
+    // not the property. That the stale row cannot survive this call is.
+    expect(invalidations()).toBeGreaterThanOrEqual(1);
   });
 
   test("a timeout keeps its own reason instead of becoming a missing chore", async () => {
@@ -510,25 +541,60 @@ describe("list_activity", () => {
   });
 
   test("days means calendar days, the same unit list_chores means by it", async () => {
-    // The clock is 2026-06-15T12:00Z, which is 08:00 in America/New_York. A rolling
-    // 24-hour window starts at 12:00Z yesterday and drops an action recorded at
-    // 11:00Z yesterday, which is 07:00 local, a thing a person would call yesterday
-    // and expect in a one-day view. Calendar bucketing starts at local midnight and
-    // keeps it. One parameter name, one meaning.
-    const yesterdayMorning = historyRow({ id: 1, performedAt: "2026-06-14T11:00:00Z" });
-    const dayBefore = historyRow({ id: 2, performedAt: "2026-06-13T11:00:00Z" });
-    const fakeService = { ...service, rawGet: async () => [yesterdayMorning, dayBefore] };
+    // The clock is 2026-06-15T12:00Z, which is 08:00 in America/New_York.
+    //
+    // days: 1 is today, days: 2 is today and yesterday. Counting back a full N put
+    // the cutoff N days plus the elapsed part of today behind now, so the window was
+    // N + 1 days wide while the schema promised it matched list_chores. A commit
+    // message claimed this was fixed and the change was not in its diff.
+    const today = historyRow({ id: 1, performedAt: "2026-06-15T11:00:00Z" });
+    const yesterday = historyRow({ id: 2, performedAt: "2026-06-14T11:00:00Z" });
+    const dayBefore = historyRow({ id: 3, performedAt: "2026-06-13T11:00:00Z" });
+    const fakeService = { ...service, rawGet: async () => [today, yesterday, dayBefore] };
     const tools = buildToolDefinitions({ ...deps, service: fakeService as never });
     const tool = tools.find((t) => t.name === "list_activity")!;
 
     const oneDay = jsonOf(await tool.handler({ days: 1 })) as Array<{ performed_at: string }>;
-    expect(oneDay.map((r) => r.performed_at)).toEqual(["2026-06-14T11:00:00Z"]);
+    expect(oneDay.map((r) => r.performed_at)).toEqual(["2026-06-15T11:00:00Z"]);
 
     const twoDays = jsonOf(await tool.handler({ days: 2 })) as Array<{ performed_at: string }>;
     expect(twoDays.map((r) => r.performed_at)).toEqual([
+      "2026-06-15T11:00:00Z",
       "2026-06-14T11:00:00Z",
-      "2026-06-13T11:00:00Z",
     ]);
+
+    const threeDays = jsonOf(await tool.handler({ days: 3 })) as Array<{ performed_at: string }>;
+    expect(threeDays.length).toBe(3);
+  });
+
+  test("the day count sent to Donetick always reaches past this server's own cutoff", async () => {
+    // Donetick filters updated_at > now - limit days on its UTC clock; this tool
+    // filters by calendar days in the caller's zone. A limit of days + 1 was measured
+    // to fall up to an hour short on a daylight-saving fall-back day, where a local
+    // day is 25 hours, so the server cut inside the window and dropped rows silently.
+    let requestedPath = "";
+    const fakeService = {
+      ...service,
+      rawGet: async (path: string) => {
+        requestedPath = path;
+        return [];
+      },
+    };
+
+    // 2026-11-04 in New York is after the fall back, so a seven day window spans a
+    // 25 hour day and the naive days + 1 is not enough.
+    const acrossFallBack = {
+      ...deps,
+      service: fakeService as never,
+      now: () => new Date("2026-11-05T04:59:00Z"),
+    };
+    const tools = buildToolDefinitions(acrossFallBack);
+    await tools.find((t) => t.name === "list_activity")!.handler({ days: 7 });
+
+    const limit = Number(/limit=(\d+)/.exec(requestedPath)?.[1]);
+    const cutoff = Date.parse("2026-10-30T04:00:00Z"); // startOfDay six days back, EDT
+    const spanDays = (Date.parse("2026-11-05T04:59:00Z") - cutoff) / 86_400_000;
+    expect(limit).toBeGreaterThan(spanDays);
   });
 
   test("keeps a row with no performedAt, which is what a timer start looks like", async () => {

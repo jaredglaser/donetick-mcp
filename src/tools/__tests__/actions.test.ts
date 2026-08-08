@@ -7,6 +7,7 @@ import {
   skipChore,
   undoChore,
 } from "../actions";
+import { setSubtaskCompleted } from "../subtasks";
 import type { ToolContext } from "@/tools/context";
 import type { Member, RawChore } from "@/types";
 
@@ -36,11 +37,14 @@ function fakeService(opts: FakeOptions = {}) {
     },
     allChores: async () => opts.chores ?? [],
     members: async () => opts.members ?? members,
-    write: async <T>(operation: () => Promise<T>): Promise<T> => {
+    write: async <T>(operation: () => Promise<T>, options: { movesPoints?: boolean } = {}): Promise<T> => {
       try {
         return await operation();
       } finally {
         invalidations += 1;
+        // Mirrors the real service: the member cache is invalidated inside the same
+        // finally, so a write that lands and then fails still moves it.
+        if (options.movesPoints === true) memberInvalidations += 1;
       }
     },
     invalidateMembers: () => {
@@ -826,5 +830,157 @@ describe("approve and reject report distinguishable outcomes", () => {
     const result = await approveChore({ chore_id: 7 }, ctxFor(fake.service));
 
     expect(result.decision).toBe("approved");
+  });
+});
+
+
+describe("claims made off a row that may be stale", () => {
+  // Every fix in this block survived its own mutation when it landed, which is rule
+  // 2's case exactly: the behaviour was changed and nothing could tell.
+  //
+  // The fake serves a different chore from choreDetails than from chores(), which is
+  // the whole point. Every other fake in the suite returns the same object from both,
+  // so a tool reading the cached copy and a tool reading fresh are indistinguishable.
+  function staleFake(cached: Partial<RawChore>, live: Record<string, unknown>) {
+    const calls: Array<{ method: string; path: string; body?: unknown }> = [];
+    const service = {
+      chores: async () => [{ ...listRow, ...cached }],
+      allChores: async () => [{ ...listRow, ...cached }],
+      members: async () => members,
+      choreDetails: async () => ({ id: 7, name: listRow.name, ...live }),
+      write: async <T>(operation: () => Promise<T>): Promise<T> => operation(),
+      invalidateMembers: () => {},
+      client: {
+        post: async (path: string, body?: unknown) => {
+          calls.push({ method: "POST", path, body });
+          return {};
+        },
+        put: async (path: string, body?: unknown) => {
+          calls.push({ method: "PUT", path, body });
+          return {};
+        },
+      },
+    };
+    return { service, calls };
+  }
+
+  test("skip_chore refuses a completion that went to sign-off after the cache was read", async () => {
+    // The guard exists to stop a submission being destroyed. Off a cached status it
+    // destroyed one: measured live, cache warm at 0, chore completed out of band to
+    // 3, and the skip went through.
+    const fake = staleFake({ status: 0 }, { status: 3 });
+
+    await expect(
+      skipChore({ chore_id: 7 }, ctxFor(fake.service as never)),
+    ).rejects.toThrow(/waiting on sign-off/);
+    expect(fake.calls.some((c) => c.method === "POST")).toBe(false);
+  });
+
+  test("skip_chore allows one whose sign-off was settled after the cache was read", async () => {
+    // The mirror: a confident refusal about a chore with nothing pending is a wrong
+    // refusal, which costs more than the bug it prevents.
+    const fake = staleFake({ status: 3 }, { status: 0 });
+
+    await expect(skipChore({ chore_id: 7 }, ctxFor(fake.service as never))).resolves.toBeDefined();
+  });
+
+  test("skip_chore refuses a timer started after the cache was read", async () => {
+    const fake = staleFake({ status: 0 }, { status: 1 });
+
+    await expect(skipChore({ chore_id: 7 }, ctxFor(fake.service as never))).rejects.toThrow(
+      /running timer/,
+    );
+  });
+
+  test("skip_chore refuses to call a no-op a skip, whatever state caused it", async () => {
+    // The guards cover the states known to make Donetick answer 200 without acting.
+    // This covers the ones that are not known yet: the response's due date is the one
+    // the chore already had.
+    const fake = fakeService({
+      chores: [{ ...listRow, status: 0 }],
+      post: () => ({ ...listRow, nextDueDate: listRow.nextDueDate }),
+    });
+
+    await expect(skipChore({ chore_id: 7 }, ctxFor(fake.service))).rejects.toThrow(
+      /nothing was skipped/,
+    );
+  });
+
+  test("skip_chore accepts a due date that actually moved", async () => {
+    const fake = fakeService({
+      chores: [{ ...listRow, status: 0 }],
+      post: () => ({ ...listRow, nextDueDate: "2026-08-13T13:00:00Z" }),
+    });
+
+    const result = await skipChore({ chore_id: 7 }, ctxFor(fake.service));
+    expect(result.next_due_date).toBe("2026-08-13T13:00:00Z");
+  });
+
+  test("complete_chore's pending branch reports the response's due date, not the cached one", async () => {
+    // Measured live: with the due date moved out of band, this reported the stale
+    // value under a field named next_due_date and then asserted it was unchanged.
+    const fake = fakeService({
+      chores: [{ ...listRow, requireApproval: true }],
+      post: () => ({ ...listRow, status: 3, nextDueDate: "2026-09-07T13:00:00Z" }),
+    });
+
+    const result = await completeChore({ chore_id: 7 }, ctxFor(fake.service));
+
+    expect(result.pending_approval).toBe(true);
+    expect(result.next_due_date).toBe("2026-09-07T13:00:00Z");
+    expect(result.message).not.toMatch(/due date is unchanged/);
+  });
+
+  test("it says the due date is unchanged only when the response agrees", async () => {
+    const fake = fakeService({
+      chores: [{ ...listRow, requireApproval: true }],
+      post: () => ({ ...listRow, status: 3, nextDueDate: listRow.nextDueDate }),
+    });
+
+    const result = await completeChore({ chore_id: 7 }, ctxFor(fake.service));
+    expect(result.message).toMatch(/due date is unchanged/);
+  });
+
+  test("a completion that lands and then fails still invalidates the member cache", async () => {
+    // The chore invalidation is in write()'s finally for exactly this reason. The
+    // member invalidation sat after the await, so a timeout on a completion that had
+    // already moved points left the pre-completion total for the full five minutes.
+    const fake = fakeService({
+      chores: [listRow],
+      post: () => {
+        throw new Error("The request timed out after 15000ms.");
+      },
+    });
+
+    await expect(completeChore({ chore_id: 7 }, ctxFor(fake.service))).rejects.toThrow(/timed out/);
+    expect(fake.memberInvalidations()).toBe(1);
+  });
+
+  test("set_subtask_completed resolves against the live checklist, not the cached one", async () => {
+    // Measured live: renaming a subtask while keeping its id made this tick a task
+    // called something else and report back the name it was given.
+    const fake = staleFake(
+      { subTasks: [{ id: 52, name: "mop floor", completedAt: null }] as never },
+      { subTasks: [{ id: 54, name: "take out bins", completedAt: null }] },
+    );
+
+    await expect(
+      setSubtaskCompleted({ chore_id: 7, subtask: "mop floor", completed: true }, ctxFor(fake.service as never)),
+    ).rejects.toThrow(/Nothing matches/);
+  });
+
+  test("set_subtask_completed writes the id the live checklist gives", async () => {
+    const fake = staleFake(
+      { subTasks: [{ id: 52, name: "wipe counters", completedAt: null }] as never },
+      { subTasks: [{ id: 99, name: "wipe counters", completedAt: null }] },
+    );
+
+    await setSubtaskCompleted(
+      { chore_id: 7, subtask: "wipe counters", completed: true },
+      ctxFor(fake.service as never),
+    );
+
+    const put = fake.calls.find((c) => c.method === "PUT")!;
+    expect((put.body as { id: number }).id).toBe(99);
   });
 });

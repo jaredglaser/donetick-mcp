@@ -2,7 +2,7 @@ import { endpoints } from "@/endpoints";
 import { loadChoreById } from "@/tools/chore-lookup";
 import { resolveOne, safeName } from "@/resolve";
 import type { ToolContext } from "@/tools/context";
-import type { RawSubTask } from "@/types";
+import type { ChoreListRow, RawSubTask } from "@/types";
 
 function isDone(sub: RawSubTask): boolean {
   return Boolean(sub.completedAt);
@@ -19,6 +19,23 @@ export interface SetSubtaskOutcome {
   chore_name: string;
   subtask: string;
   completed: boolean;
+}
+
+/**
+ * The chore's checklist as Donetick holds it now.
+ *
+ * Falls back to the cached row only when the fresh read fails, since this tool
+ * resolves a name to an id and then writes that id: a stale list does not fail, it
+ * writes to the wrong item.
+ */
+async function freshSubtasks(chore: ChoreListRow, ctx: ToolContext): Promise<RawSubTask[]> {
+  try {
+    const detail = (await ctx.service.choreDetails(chore.id)) as { subTasks?: RawSubTask[] | null };
+    if (Array.isArray(detail.subTasks)) return detail.subTasks;
+  } catch {
+    // Fall through to the cached copy.
+  }
+  return chore.subTasks ?? [];
 }
 
 /**
@@ -40,14 +57,19 @@ export async function setSubtaskCompleted(
     throw new Error("completed is required: true to check the subtask, false to uncheck it.");
   }
 
-  const subtasks = chore.subTasks ?? [];
+  // Read fresh, not from the cached row. A name is resolved to a subtask id here and
+  // that id is what gets written, so a checklist edited out of band sends the write
+  // somewhere else: measured, renaming a subtask while keeping its id made this tool
+  // tick a task called "CALL THE PLUMBER" and report back the name it was given, and
+  // replacing the checklist made it write an id that matched no row while reporting
+  // success. GET /:id/details carries subTasks and is one uncached request.
+  //
+  // The cached row is the fallback, because a detail read failing is not a reason to
+  // refuse a tick, and loadChoreById above has already established the chore exists.
+  const subtasks = await freshSubtasks(chore, ctx);
   if (subtasks.length === 0) {
-    // Hedged, because this path never contacts the server. The row can come from a
-    // cache that is up to its TTL old, so a chore deleted elsewhere is
-    // indistinguishable here from a live one with an empty checklist, and stating the
-    // second as fact is a claim this tool has not checked.
     throw new Error(
-      `"${safeName(chore.name)}" has no subtasks, according to this server's cached copy of it. If you expected some, the chore may have changed or been deleted since that copy was read; get_chore will say.`,
+      `"${safeName(chore.name)}" has no subtasks.`,
     );
   }
 
