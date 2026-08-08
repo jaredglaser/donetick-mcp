@@ -1,6 +1,6 @@
 import { projectChore } from "@/projection";
 import { bucket, dueDateOf, isValidTimezone, type Scope } from "@/time";
-import { findMember, normalizeName } from "@/resolve";
+import { findMember, normalizeName, safeName } from "@/resolve";
 import { CHORE_STATUS, PRIORITY_LABEL, type Member, type ProjectedChore, type Project, type RawChore } from "@/types";
 
 export interface ListArgs {
@@ -43,9 +43,16 @@ function zoneFor(chore: RawChore, fallback: string): string {
   return zone && zone.length > 0 && isValidTimezone(zone) ? zone : fallback;
 }
 
-/** Lists what does exist, so the caller can correct itself without another round trip. */
+/**
+ * Lists what does exist, so the caller can correct itself without another round trip.
+ *
+ * Sanitized here rather than at the three call sites, because these are the messages
+ * where the attack works: fail() renders a thrown Error as plain text with newlines
+ * intact, so a project or member name carrying one forges a whole extra line.
+ */
 function describeKnown(names: string[]): string {
-  return names.length === 0 ? " There are none." : ` Known: ${names.join(", ")}.`;
+  if (names.length === 0) return " There are none.";
+  return ` Known: ${names.map(safeName).join(", ")}.`;
 }
 
 export function listChores(args: ListArgs, ctx: ListContext): ListResult {
@@ -66,7 +73,7 @@ export function listChores(args: ListArgs, ctx: ListContext): ListResult {
     const project = ctx.projects.find((p) => normalizeName(p.name) === wanted);
     if (project === undefined) {
       throw new Error(
-        `"${args.project}" is not a known project.${describeKnown(ctx.projects.map((p) => p.name))}`,
+        `"${safeName(args.project)}" is not a known project.${describeKnown(ctx.projects.map((p) => p.name))}`,
       );
     }
     rows = rows.filter((chore) => chore.projectId === project.id);
@@ -80,7 +87,7 @@ export function listChores(args: ListArgs, ctx: ListContext): ListResult {
       const member = findMember(args.assignee, ctx.members);
       if (member === undefined) {
         throw new Error(
-          `"${args.assignee}" is not a member of this circle.${describeKnown(
+          `"${safeName(args.assignee)}" is not a member of this circle.${describeKnown(
             ctx.members.map((m) => m.displayName),
           )} Use "unassigned" for chores with nobody on them.`,
         );
@@ -102,7 +109,7 @@ export function listChores(args: ListArgs, ctx: ListContext): ListResult {
     const inUse = [...new Set(ctx.chores.flatMap((c) => (c.labelsV2 ?? []).map((l) => l.name)))];
     if (!inUse.some((name) => normalizeName(name) === wanted)) {
       throw new Error(
-        `"${args.label}" is not on any chore this server can see.${describeKnown(inUse)} Donetick's ` +
+        `"${safeName(args.label)}" is not on any chore this server can see.${describeKnown(inUse)} Donetick's ` +
           "label API needs session auth, so a label attached to nothing is invisible here.",
       );
     }

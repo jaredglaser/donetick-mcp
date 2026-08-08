@@ -71,20 +71,35 @@ describe("module boundaries", () => {
 
   test("a chore or member name never reaches a message unsanitized", async () => {
     // Names are written by any circle member and reach the model as untrusted text.
-    // safeName was applied at two of roughly twenty-five interpolation sites, which
-    // is closer to a comment than a control: a newline in one forged a whole extra
-    // candidate line carrying an id no lookup produced. This is the check, because
-    // the next site added would otherwise be unsanitized by default.
+    // fail() renders a thrown Error as plain text with newlines intact, so one
+    // carrying a line break forges a whole extra candidate line with an id no lookup
+    // produced.
     //
-    // config.ts is excluded: its ${name} is a hard-coded environment variable label,
-    // not anything a user writes.
-    const RAW_NAME = /\$\{(?:chore|existing|target|found|member|sub)\.(?:name|displayName)\}/;
-    const offenders: string[] = [];
+    // Matched on the property rather than on a spelling. The first version of this
+    // check listed the exact identifiers the edit beside it had just fixed, so a
+    // renamed local, a template split across lines, or a `.map(x => x.name)` all
+    // walked past it, and it sat green while three raw sites remained in read.ts.
+    // Any interpolation reaching a name field counts unless safeName is in it.
+    const NAME_FIELD = /\.(?:name|displayName|username)\b/;
+    const INTERPOLATION = /\$\{([^{}]|\{[^{}]*\})*\}/g;
+    // The functions that sanitize on the way through. Keep this list short: every
+    // entry is a place the check stops looking, so adding one is a decision to trust
+    // that function forever.
+    const SANITIZERS = ["safeName", "describeKnown"];
 
+    const offenders: string[] = [];
     for (const { path, text } of await readAll()) {
-      if (path.includes("__tests__") || path === "config.ts") continue;
+      // config.ts interpolates a hard-coded environment variable label, and resolve.ts
+      // is where safeName is defined and applied.
+      if (path.includes("__tests__") || path === "config.ts" || path === "resolve.ts") continue;
+
       text.split("\n").forEach((line, index) => {
-        if (RAW_NAME.test(line)) offenders.push(`${path}:${index + 1}`);
+        for (const match of line.matchAll(INTERPOLATION)) {
+          const expr = match[0];
+          if (!NAME_FIELD.test(expr)) continue;
+          if (SANITIZERS.some((fn) => expr.includes(fn))) continue;
+          offenders.push(`${path}:${index + 1}  ${expr.trim()}`);
+        }
       });
     }
 
