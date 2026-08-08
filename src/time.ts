@@ -124,6 +124,16 @@ export function bucket(
   }
 }
 
+/**
+ * Elapsed time, not calendar days, and deliberately unlike everything else here.
+ *
+ * Measured 2026-08-08: across a spring-forward night a chore due tomorrow at the same
+ * wall clock reads "in 23 hours" rather than "in 1 day", and "in 1 day" across a fall
+ * back. CLAUDE.md called this DST-safe alongside the day-boundary helpers, which it
+ * is not. It stays elapsed because that is what "due in" answers: the question is how
+ * long you have, and on a 23-hour day you have 23 hours. startOfDay, addDays and
+ * bucket are the calendar-based half, and they are what scope filtering uses.
+ */
 export function humanizeDueIn(dueDate: Date | null, now: Date): string {
   if (dueDate === null) return "no due date";
 

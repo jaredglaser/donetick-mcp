@@ -25,7 +25,7 @@ const MEMBER_TTL_MS = 300_000;
  * reaches it. Donetick returns [] for an empty circle, so a non-array means a proxy
  * or a version change rather than an empty result.
  */
-function expectArray<T>(value: unknown, what: string): T[] {
+export function expectArray<T>(value: unknown, what: string): T[] {
   if (!Array.isArray(value)) {
     throw new Error(
       `Donetick answered the ${what} request but did not return an array. The instance may be behind a proxy that is rewriting responses.`,

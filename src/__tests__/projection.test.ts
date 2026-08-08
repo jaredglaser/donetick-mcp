@@ -1,6 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { projectChore, summarizeFrequency } from "@/projection";
-import type { Member, Project, RawChore } from "@/types";
+import {
+  CHORE_STATUS,
+  STATUS_IN_PROGRESS,
+  STATUS_PAUSED,
+  STATUS_PENDING_APPROVAL,
+  type Member,
+  type Project,
+  type RawChore,
+} from "@/types";
 
 const now = new Date("2026-06-15T12:00:00Z");
 
@@ -505,5 +513,21 @@ describe("archived state is reported", () => {
     // The field is optional on a merged row, and reporting an unknown as archived
     // would tell the caller a chore they can see in list_chores is not there.
     expect(projectChore(chore(), members, projects, now).archived).toBe(false);
+  });
+});
+
+describe("the named status values track the table", () => {
+  // Three bare literals in actions.ts decided whether skip_chore refuses. Derived, so
+  // a renumbered status fails at import rather than quietly changing which chores a
+  // guard blocks.
+  test("each name resolves to the number CHORE_STATUS gives it", () => {
+    expect(CHORE_STATUS[STATUS_IN_PROGRESS]).toBe("in_progress");
+    expect(CHORE_STATUS[STATUS_PAUSED]).toBe("paused");
+    expect(CHORE_STATUS[STATUS_PENDING_APPROVAL]).toBe("pending_approval");
+  });
+
+  test("they are distinct, which is the whole reason the guards branch on them", () => {
+    const values = [STATUS_IN_PROGRESS, STATUS_PAUSED, STATUS_PENDING_APPROVAL];
+    expect(new Set(values).size).toBe(values.length);
   });
 });

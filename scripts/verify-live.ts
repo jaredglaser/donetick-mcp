@@ -434,7 +434,11 @@ async function main(): Promise<void> {
         const row = list.find((c) => c.id === id);
         if (!row) throw new Error(`chore ${id} was not found in GET ${endpoints.listChores()}`);
 
-        const listOnlyFields = ["assignStrategy", "frequency", "frequencyMetadata", "labelsV2", "points", "requireApproval"];
+        // assignees is in here because ChoreListRow requires it, and the claim that
+        // every list row carries it (empty rather than absent) is what makes
+        // mergeEditRequest refuse a /details view at the call site. The fixture set
+        // assignees: [] and then asserted every other field.
+        const listOnlyFields = ["assignStrategy", "assignees", "frequency", "frequencyMetadata", "labelsV2", "points", "requireApproval"];
         for (const field of listOnlyFields) {
           if (!(field in row)) throw new Error(`list row for chore ${id} is missing "${field}"`);
         }
@@ -901,6 +905,15 @@ async function main(): Promise<void> {
           15,
           "day_of_the_month",
         ],
+        // The quarter's fourteenth occurrence. Q3 2026 runs Jul 1 to Sep 30, 92 days,
+        // and Jul 1 is a Wednesday, so the fourteenth Wednesday is Sep 30. The guard
+        // capped this at 13 and refused it on the merge path.
+        [
+          "occurrence 14 of a quarter, which only one weekday can reach",
+          { days: ["wednesday"], weekPattern: "week_of_quarter", occurrences: [14], timezone },
+          1,
+          "days_of_the_week",
+        ],
       ];
 
       const advanced: string[] = [];
@@ -957,6 +970,28 @@ async function main(): Promise<void> {
           "days_of_the_week",
         ],
         ["a month name", { months: ["smarch"], timezone }, 15, "day_of_the_month"],
+        // -1 in the legacy weekNumbers, which getOccurrences formats with %d rather
+        // than mapping to "last". The occurrences twin of this is in the healthy set.
+        [
+          "-1 in the legacy weekNumbers",
+          { days: ["monday"], weekPattern: "week_of_month", weekNumbers: [-1], timezone },
+          1,
+          "days_of_the_week",
+        ],
+        // Above the ceiling on both patterns, which nothing live created before: every
+        // occurrence fixture held a value the guard allows.
+        [
+          "an occurrence past the quarter ceiling",
+          { days: ["monday"], weekPattern: "week_of_quarter", occurrences: [15], timezone },
+          1,
+          "days_of_the_week",
+        ],
+        [
+          "an occurrence past the month ceiling",
+          { days: ["monday"], weekPattern: "week_of_month", occurrences: [6], timezone },
+          1,
+          "days_of_the_week",
+        ],
       ];
 
       const refused: string[] = [];

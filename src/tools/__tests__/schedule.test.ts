@@ -612,6 +612,9 @@ describe("reassign's side effects, which the caller did not ask for", () => {
 
     expect(outcome.method).toBe("full_edit");
     expect(outcome.warning).toMatch(/switched off/i);
+    // The chore's name, so the caller knows which one. Dropping it from the shared
+    // sentence failed nothing before this.
+    expect(outcome.warning).toContain(listRow.name);
   });
 
   test("warns when no_assignee is promoted, since the policy changes permanently", async () => {

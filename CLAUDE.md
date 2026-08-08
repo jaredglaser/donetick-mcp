@@ -8,7 +8,7 @@ Operating rules for an agent working in `donetick-mcp`, a stdio MCP server on Bu
 
 2. **Testing.** Tests live in `__tests__/` co-located with the source they cover, use `bun:test`, and run with `bun test --isolate`. Never sleep in a test. Every module that depends on time takes an injected clock (a `now: () => Date` or `now: () => number`) precisely so a test can pass a fixed instant instead of waiting on a real one. A test that cannot fail is worse than none, because it reports coverage that does not exist. After writing one, revert the behavior it covers and confirm it fails.
 
-3. **I/O boundaries.** `src/client.ts` is the only module that touches the network. `src/cache.ts` and `src/probe.ts` are the only modules that hold state, and both hold it in an instance created once at startup, never at module scope. Domain helpers (`src/time.ts`, `src/projection.ts`, `src/resolve.ts`, `src/tools/read.ts`) take their clock and their data as arguments and hold nothing themselves.
+3. **I/O boundaries, under `src/`.** `src/client.ts` is the only module that touches the network. `src/cache.ts` and `src/probe.ts` are the only ones that hold state, and both hold it in an instance created once at startup, never at module scope. Every other module takes its clock and its data as arguments and holds nothing. `scripts/` is outside this: it fetches and keeps state directly, because it is a CLI and not the server.
 
 4. **MCP boundary.** Only `src/index.ts` may import `@modelcontextprotocol/server`. Tool definitions elsewhere are plain data: a name, a description, a zod raw shape for the input, and a handler function. Anything constructed inside the server factory in `src/index.ts` has per-connection lifetime, so the `DonetickService` and its caches are built once outside the factory and closed over, not rebuilt per connection.
 
@@ -18,7 +18,7 @@ Operating rules for an agent working in `donetick-mcp`, a stdio MCP server on Bu
 
 7. **Chore status has four values.** `3` is pending approval. A completion handler must detect that status and report it rather than claiming the chore is done. See `CHORE_STATUS` in `src/types.ts`.
 
-8. **Logging: `console.error` only.** Verified under Bun, `console.log` and `console.info` write to stdout, and stdout is the JSON-RPC transport this server speaks over. An operational line written with `console.info` corrupts the protocol stream. This is a deliberate divergence from the sibling `homelab-manager` project, where stdout is harmless.
+8. **Logging under `src/`: `console.error` or `console.warn`, nothing else.** Measured under Bun 1.3.14, everything else on `console`, and `process.stdout`, writes to stdout, and stdout is the JSON-RPC transport this server speaks over. One operational line there corrupts the protocol stream. `scripts/` prints its reports to stdout on purpose. This is a deliberate divergence from the sibling `homelab-manager` project, where stdout is harmless.
 
 9. **Comments default to none.** Write one only when it states a constraint the code itself cannot express, for example why an ordering matters or why a value cannot be what it looks like it should be.
 
@@ -66,7 +66,7 @@ at a different Donetick version with `DONETICK_IMAGE_TAG=vX.Y.Z bun run verify:l
 - `src/types.ts` holds the raw Donetick shapes, the projected shape returned to tools, and the `CHORE_STATUS` and `PRIORITY_LABEL` lookup tables. Donetick returns a chore in two genuinely different shapes and they have two names: `ChoreListRow` for the `/chores` row, `ChoreDetails` for the `/chores/:id/details` view. `RawChore` is the permissive third, where every field either view omits is optional, and it is what the projection and the read-back merges take. `mergeEditRequest` takes a `ChoreListRow`, which is what stops a `/details` view reaching the one function that destroys every field its base does not carry.
 - `src/projection.ts` turns a raw chore into the trimmed `ProjectedChore` shape tools return.
 - `src/resolve.ts` resolves a free-text name to one entity, or raises an ambiguity or no-match error with suggestions. `resolveMember` lives here so that every tool matches a person's name the same way.
-- `src/time.ts` has DST-safe calendar arithmetic (day boundaries, "due in" phrasing) built on `Temporal`.
+- `src/time.ts` has DST-safe calendar arithmetic (day boundaries, scope bucketing) built on `Temporal`. `humanizeDueIn` is the exception and is elapsed time, so across a DST change "tomorrow" reads as 23 or 25 hours rather than a day.
 - `src/dates.ts` parses what a caller may write for a date: RFC3339, `YYYY-MM-DD`, and phrases like "tomorrow" or "in 3 days".
 - `src/frequency.ts` maps a recurrence description onto Donetick's eleven `frequencyType` values and their metadata.
 - `src/frequency-health.ts` decides whether Donetick's scheduler can advance a stored recurrence, and what to say when it cannot. Both `summarizeFrequency` and `assertSchedulableFrequency` call it, so the description a reader gets and the refusal a writer gets cannot disagree. They used to be separate and drifted three times.

@@ -7,6 +7,7 @@ import {
   type ChoreRequestBody,
   type CreateInput,
   type EditInput,
+  notificationsOffWarning,
 } from "@/chore-request";
 import { endpoints } from "@/endpoints";
 import { loadChoreById, writeWithConcurrencyRetry } from "@/tools/chore-lookup";
@@ -241,7 +242,7 @@ export async function editChore(
     chore: projectChore(merged, buildCtx.members, buildCtx.projects, buildCtx.now),
     ...(notificationsSwitchedOff
       ? {
-          warning: `Notifications on "${safeName(mergeBase.name)}" were switched off by this edit. Donetick had them enabled with no reminder settings stored, a combination it crashes on when written back. Pass notify with the reminders you want to turn them on again.`,
+          warning: notificationsOffWarning(mergeBase.name),
         }
       : {}),
   };

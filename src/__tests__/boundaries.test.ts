@@ -71,10 +71,20 @@ describe("module boundaries", () => {
   });
 
   test("nothing under src writes to stdout", async () => {
-    // console.log and console.info write to stdout under Bun, and stdout is the
-    // JSON-RPC transport. One operational line there corrupts the protocol stream.
+    // stdout is the JSON-RPC transport, so one operational line there corrupts the
+    // protocol stream. This is the highest-consequence rule in the file and its check
+    // used to cover two of the eight ways to reach stdout.
+    //
+    // Measured under Bun 1.3.14 on 2026-08-08: console.debug, dir, table, group,
+    // count and process.stdout.write all go to stdout; only warn and error go to
+    // stderr. So the allowlist is the two that are safe, rather than a denylist of
+    // the ones thought of at the time.
+    const STDOUT_ROUTE = /console\.(?!error\b|warn\b)\w+\s*\(|process\.stdout\b/;
+    // The server is what speaks the protocol; a test process has no transport to
+    // corrupt, and this file has to name the routes in prose to explain itself.
     const offenders = (await readAll())
-      .filter(({ text }) => /console\.(log|info)\(/.test(text))
+      .filter(({ path }) => !path.includes("__tests__"))
+      .filter(({ text }) => STDOUT_ROUTE.test(text))
       .map(({ path }) => path);
 
     expect(offenders).toEqual([]);
@@ -105,13 +115,42 @@ describe("module boundaries", () => {
     // renamed local, a template split across lines, or a `.map(x => x.name)` all
     // walked past it, and it sat green while three raw sites remained in read.ts.
     // Any interpolation reaching a name field counts unless safeName is in it.
-    const NAME_FIELD = /\.(?:name|displayName|username)\b/;
+    // Bracket access counts: chore["name"] reaches the same string and the dotted
+    // form was the only one matched.
+    const NAME_FIELD = /(?:\.|\[["'])(?:name|displayName|username)\b/;
     // The functions that sanitize on the way through. Keep this list short: every
     // entry is a place the check stops looking, so adding one is a decision to trust
     // that function forever.
     const SANITIZERS = ["safeName", "describeKnown"];
-    const sanitized = (expr: string): boolean => SANITIZERS.some((fn) => expr.includes(fn));
 
+    /**
+     * Removes whole sanitizer calls, so that what remains is the unsanitized part.
+     *
+     * Every name in an expression has to be inside one, not just some name: asking
+     * whether the text mentions safeName passes `${a ? safeName(x.name) : y.name}`.
+     * Balanced paren matching rather than a regex, because describeKnown(xs.map((x)
+     * => x.name)) nests and a [^()]* body stops at the inner paren.
+     */
+    const stripSanitizerCalls = (expr: string): string => {
+      for (const fn of SANITIZERS) {
+        for (;;) {
+          const at = expr.indexOf(`${fn}(`);
+          if (at === -1) break;
+          let depth = 0;
+          let end = -1;
+          for (let i = at + fn.length; i < expr.length; i++) {
+            if (expr[i] === "(") depth++;
+            else if (expr[i] === ")" && --depth === 0) {
+              end = i;
+              break;
+            }
+          }
+          if (end === -1) break;
+          expr = `${expr.slice(0, at)}OK${expr.slice(end + 1)}`;
+        }
+      }
+      return expr;
+    };
     const offenders: string[] = [];
     for (const { path, text } of await readAll()) {
       // config.ts interpolates a hard-coded environment variable label, and resolve.ts
@@ -128,21 +167,33 @@ describe("module boundaries", () => {
       // extracted-local evasion still walked through.
       const DECLARATION = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*((?:(?!\b(?:const|let|var)\b)[^\n;])+)/g;
       for (const [, ident, rhs] of text.matchAll(DECLARATION)) {
-        if (NAME_FIELD.test(rhs!) && !sanitized(rhs!)) tainted.add(ident!);
+        if (NAME_FIELD.test(stripSanitizerCalls(rhs!))) tainted.add(ident!);
+      }
+      // `const { name } = chore` binds the field to a bare identifier, so neither the
+      // declaration pattern above nor NAME_FIELD sees it at the use site.
+      const DESTRUCTURED = /\b(?:const|let|var)\s*\{([^}]*)\}\s*=/g;
+      for (const [, inner] of text.matchAll(DESTRUCTURED)) {
+        for (const part of inner!.split(",")) {
+          const [key, alias] = part.split(":").map((piece) => piece.trim());
+          if (/^(?:name|displayName|username)$/.test(key ?? "")) tainted.add(alias || key!);
+        }
       }
       const carriesTainted = (expr: string): boolean =>
         [...tainted].some((id) => new RegExp(`\\b${id}\\b`).test(expr));
 
       for (const { expr, index } of interpolationsIn(text)) {
-        if (sanitized(expr)) continue;
-        if (!NAME_FIELD.test(expr) && !carriesTainted(expr)) continue;
+        // Stripped first, then both questions asked of what is left. A tainted local
+        // wrapped in safeName disappears with the call, and one that is not still
+        // shows.
+        const bare = stripSanitizerCalls(expr);
+        if (!NAME_FIELD.test(bare) && !carriesTainted(bare)) continue;
         offenders.push(`${path}:${lineAt(text, index)}  ${expr.replace(/\s+/g, " ")}`);
       }
 
       // Neither of these is a template, so no interpolation scan reaches them.
       const COERCED = /(?:\+\s*|String\(\s*)[A-Za-z_$][\w$.[\]]*\.(?:name|displayName|username)\b/g;
       for (const match of text.matchAll(COERCED)) {
-        if (sanitized(match[0])) continue;
+        if (!NAME_FIELD.test(stripSanitizerCalls(match[0]))) continue;
         offenders.push(`${path}:${lineAt(text, match.index)}  ${match[0]}`);
       }
     }

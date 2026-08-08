@@ -163,6 +163,24 @@ export const CHORE_STATUS: Record<number, string> = {
 };
 
 /**
+ * The status values this server branches on, by name.
+ *
+ * Priority got PRIORITY_VALUE, MIN/MAX and a predicate; status got a table and three
+ * bare literals in src/tools/actions.ts, on the one scale rule 7 calls out by name.
+ * Derived from CHORE_STATUS so a renamed or renumbered value fails here at import
+ * rather than silently changing which chores a guard refuses.
+ */
+function statusValue(name: string): number {
+  const found = Object.entries(CHORE_STATUS).find(([, label]) => label === name);
+  if (!found) throw new Error(`CHORE_STATUS has no "${name}"`);
+  return Number(found[0]);
+}
+
+export const STATUS_IN_PROGRESS = statusValue("in_progress");
+export const STATUS_PAUSED = statusValue("paused");
+export const STATUS_PENDING_APPROVAL = statusValue("pending_approval");
+
+/**
  * The names list_chores accepts for its status filter, which are the names the
  * filter compares against. Derived, because a fifth status added above and not to a
  * hand-written enum would be filterable by nothing and rejected by the schema.

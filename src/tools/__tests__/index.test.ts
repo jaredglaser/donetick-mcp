@@ -3,6 +3,7 @@ import { DonetickError } from "@/errors";
 import { z } from "zod";
 import { buildToolDefinitions, type McpExtras, type ToolResult } from "../index";
 import {
+  CHORE_STATUS,
   CHORE_STATUS_NAMES,
   PRIORITY_INPUT_VALUES,
   PRIORITY_LABEL,
@@ -452,6 +453,72 @@ describe("list_activity", () => {
     const parsed = jsonOf(result) as Array<Record<string, unknown>>;
     expect(parsed).toHaveLength(1);
     expect(parsed[0]?.chore).toBe("chore #42 (deleted)");
+  });
+
+  test("a row whose chore is archived says archived, not deleted", async () => {
+    // History outlives archiving, which is the entire reason this server steers users
+    // to archive rather than delete. No fixture here had an archived chore, so both
+    // the "(archived)" label and the archived-pool fetch that finds it could be
+    // deleted with nothing failing, and the row would have read "chore #42 (deleted)":
+    // telling the user the safe operation destroyed what it preserves.
+    let archivedFetched = 0;
+    const fakeService = {
+      ...service,
+      chores: async () => [],
+      archivedChores: async () => {
+        archivedFetched += 1;
+        return [{
+          id: 42,
+          name: "Deep clean fridge",
+          nextDueDate: null,
+          assignedTo: null,
+          priority: 0,
+          status: 0,
+          frequencyType: "once",
+          createdBy: 1,
+          isActive: false,
+        }];
+      },
+      members: async () => [member1],
+      rawGet: async () => [historyRow({ choreId: 42 })],
+    };
+    const tools = buildToolDefinitions({ ...deps, service: fakeService as never });
+
+    const parsed = jsonOf(await tools.find((t) => t.name === "list_activity")!.handler({})) as Array<
+      Record<string, unknown>
+    >;
+
+    expect(archivedFetched).toBe(1);
+    expect(parsed[0]?.chore).toBe("Deep clean fridge (archived)");
+  });
+
+  test("an active chore's row carries no suffix at all", async () => {
+    // The other side: labelling every row would be the same defect inverted.
+    const fakeService = {
+      ...service,
+      chores: async () => [
+        {
+          id: 42,
+          name: "Take out trash",
+          nextDueDate: null,
+          assignedTo: null,
+          priority: 0,
+          status: 0,
+          frequencyType: "once",
+          createdBy: 1,
+          isActive: true,
+        },
+      ],
+      members: async () => [member1],
+      rawGet: async () => [historyRow({ choreId: 42 })],
+    };
+    const tools = buildToolDefinitions({ ...deps, service: fakeService as never });
+
+    const parsed = jsonOf(await tools.find((t) => t.name === "list_activity")!.handler({})) as Array<
+      Record<string, unknown>
+    >;
+
+    expect(parsed[0]?.chore).toBe("Take out trash");
   });
 
   test("resolves completedBy to a display name, and tolerates an unknown member id", async () => {
@@ -1491,6 +1558,20 @@ describe("the tool schemas are derived from the tables, not retyped beside them"
     expect([...optionsOf(schemaOf("list_chores"), "status")].sort()).toEqual(
       [...CHORE_STATUS_NAMES].sort(),
     );
+  });
+
+  test("CHORE_STATUS_NAMES is the labels, not the numbers", () => {
+    // The test above cannot tell: the schema is built from CHORE_STATUS_NAMES, so
+    // changing that constant to Object.keys(CHORE_STATUS) moves both sides and it
+    // still passes, while the filter would then accept "0".."3" and reject
+    // pending_approval, the one value its own describe() tells the caller to use.
+    // This is the shape the last two commits were about, written by me, in the test
+    // that was supposed to catch it.
+    expect(CHORE_STATUS_NAMES).toContain("pending_approval");
+    expect(CHORE_STATUS_NAMES.length).toBe(Object.keys(CHORE_STATUS).length);
+    for (const name of CHORE_STATUS_NAMES) {
+      expect(Number.isNaN(Number(name))).toBe(true);
+    }
   });
 
   test("adding a priority level reaches the schemas without another edit", () => {

@@ -57,13 +57,17 @@ function bodyError(body: string): string | undefined {
  * already committed. Reported as a flat failure, the obvious next move is to retry,
  * which makes a duplicate.
  *
- * The narrow set is the point. An earlier version set this on every 5xx write, and
- * the other branches were measured not to write anything at all: archive and
- * unarchive are one UPDATE that matched no rows, DELETE the same, and the scheduling
- * writes compute the next due date before persisting, so a 500 there leaves the due
- * date, the status, the history and the points untouched. Saying "this may have been
- * applied" about a delete the caller has just confirmed is a false alarm about data
- * loss, and it contradicted the branch message it was appended to.
+ * The set is narrow because an earlier version set this on every 5xx write, and
+ * archive, unarchive and delete were measured not to write anything at all: each is
+ * one UPDATE or DELETE that matched no rows. Saying "this may have been applied"
+ * about a delete the caller has just confirmed is a false alarm about data loss, and
+ * it contradicted the branch message it was appended to.
+ *
+ * The scheduling writes are not in that set, and this block said they were for a
+ * round after writesBeforeItCanFail below was corrected. They compute the next due
+ * date before persisting, which is true of a scheduling failure and not of the
+ * read-back that follows the commit, so a 500 from one of them genuinely may have
+ * landed. See the comment on that function, which is where the distinction lives.
  *
  * 4xx stays determinate everywhere: a rejected body, a bad token or a missing id all
  * mean nothing was written.

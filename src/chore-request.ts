@@ -2,7 +2,7 @@ import { parseDueDate } from "@/dates";
 import { dueDateOf } from "@/time";
 import { frequencyHealth } from "@/frequency-health";
 import { buildFrequency, type FrequencyInput, type FrequencyOutput } from "@/frequency";
-import { findMember, normalizeName, safeName } from "@/resolve";
+import { normalizeName, resolveMember, safeName } from "@/resolve";
 import {
   PRIORITY_VALUE,
   type ChoreListRow,
@@ -147,15 +147,10 @@ export function concurrencyToken(existing: RawChore, now: Date): string {
 
 function resolveMemberIds(names: string[] | undefined, members: Member[]): number[] {
   if (names === undefined) return [];
-  return names.map((name) => {
-    const found = findMember(name, members);
-    if (!found) {
-      throw new Error(
-        `"${safeName(name)}" is not a member of this circle. Known members: ${members.map((m) => safeName(m.displayName)).join(", ") || "none"}.`,
-      );
-    }
-    return found.userId;
-  });
+  // resolveMember rather than a second copy of its refusal. The two built the same
+  // sentence from the same inputs, so a change to one left the other saying something
+  // slightly different about the identical situation.
+  return names.map((name) => resolveMember(name, members).userId);
 }
 
 /**
@@ -276,6 +271,36 @@ function carriedSubtasks(existing: RawChore): ChoreRequestBody["subTasks"] {
     orderId: task.orderId ?? index,
     completedAt: task.completedAt,
   }));
+}
+
+/**
+ * Who is on a chore right now, from whichever field the view carries.
+ *
+ * `assignees` when it is there, the scalar `assignedTo` otherwise. Written out twice,
+ * here and in reassign_chore's fast-path check, and the two decide different things
+ * off the same fact: whether the merge keeps someone, and whether the fast endpoint
+ * can be used at all. Disagreeing would send the fast write for someone the merge
+ * then drops.
+ */
+export function currentAssigneeIds(chore: RawChore): number[] {
+  if (chore.assignees !== undefined) return chore.assignees.map((a) => a.userId);
+  if (chore.assignedTo !== null && chore.assignedTo !== undefined) return [chore.assignedTo];
+  return [];
+}
+
+/**
+ * What to tell the caller when the merge switched notifications off.
+ *
+ * One sentence because there were two, in edit_chore and in reassign_chore, differing
+ * only in "this edit" against "this write" and in whether they said "Use edit_chore".
+ * The condition that raises it is the same merge in both, so the explanation is too.
+ */
+export function notificationsOffWarning(choreName: string): string {
+  return (
+    `Notifications on "${safeName(choreName)}" were switched off by this write. Donetick had ` +
+    "them enabled with no reminder settings stored, a combination it crashes on when written " +
+    "back. Use edit_chore with notify to turn them on again."
+  );
 }
 
 /**
@@ -505,12 +530,7 @@ export function mergeEditRequest(existing: ChoreListRow, input: EditInput, ctx: 
   // the fallback for one, the assignee count for the other.
   const row = existing as RawChore;
 
-  const existingAssignees =
-    row.assignees !== undefined
-      ? row.assignees.map((a) => a.userId)
-      : existing.assignedTo !== null && existing.assignedTo !== undefined
-        ? [existing.assignedTo]
-        : [];
+  const existingAssignees = currentAssigneeIds(row);
 
   const replaced = input.assignees !== undefined ? resolveMemberIds(input.assignees, ctx.members) : undefined;
   const added = input.add_assignees !== undefined ? resolveMemberIds(input.add_assignees, ctx.members) : [];
@@ -545,7 +565,7 @@ export function mergeEditRequest(existing: ChoreListRow, input: EditInput, ctx: 
   // and keeps the stored value, so emitting null would describe an edit the server
   // will not perform. editChore issues the clear against PUT /:id/dueDate instead,
   // and this body carries the current date so the two agree about the interim state.
-  const parsedDueDate =
+  const dueDate =
     input.due_date !== undefined && input.due_date !== null
       ? parseDueDate(input.due_date, ctx.now, ctx.timezone)
       // dueDateOf rather than a bare new Date: it exists because this same parse was
@@ -553,7 +573,6 @@ export function mergeEditRequest(existing: ChoreListRow, input: EditInput, ctx: 
       // still skipping it. An unparseable stored date reached toISOString below and
       // failed the whole edit with a message that was only the words "Invalid Date".
       : dueDateOf(existing.nextDueDate);
-  const dueDate = parsedDueDate;
   // Against undefined, not folded into a ?? chain, for the reason points is: under
   // ?? an explicit null is nullish and falls through to the stored value, so the
   // window could be set but never removed. That matters more here than elsewhere,

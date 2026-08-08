@@ -6,6 +6,7 @@ import { DonetickError } from "@/errors";
 import { FREQUENCY_TYPES, FREQUENCY_UNITS, WEEK_PATTERNS } from "@/frequency";
 import { resolveOne, safeName } from "@/resolve";
 import { DUE_SCOPES, addDays, dueDateOf, humanizeDueIn, startOfDay } from "@/time";
+import { expectArray } from "@/service";
 import type { DonetickService } from "@/service";
 import {
   approveChore,
@@ -518,13 +519,10 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
         // Refused rather than defaulted to an empty list, which is the same rule
         // src/time.ts holds for a scope and src/service.ts for every other array:
         // "nothing happened this week" is an answer, and a proxy rewriting the
-        // response must not be able to produce it. Worded as service.ts words it.
-        if (!Array.isArray(raw)) {
-          throw new Error(
-            "Donetick answered the chore history request but did not return an array. The instance may be behind a proxy that is rewriting responses.",
-          );
-        }
-        const all = raw as RawHistoryRow[];
+        // response must not be able to produce it. service.ts's own function rather
+        // than its wording copied out, which is what the comment here used to say it
+        // was doing.
+        const all = expectArray<RawHistoryRow>(raw, "chore history");
 
         // Narrowed here because Donetick's own filter is the wrong shape, not absent.
         // `limit` is a day count against `updated_at` on the server's UTC clock

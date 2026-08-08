@@ -4,6 +4,8 @@ import {
   requireDueDateFor,
   type BuildContext,
   type ChoreRequestBody,
+  currentAssigneeIds,
+  notificationsOffWarning,
 } from "@/chore-request";
 import { parseDueDate } from "@/dates";
 import { endpoints } from "@/endpoints";
@@ -19,7 +21,6 @@ import {
   PRIORITY_VALUE,
   UNSET_PRIORITY,
   type ChoreListRow,
-  type RawChore,
 } from "@/types";
 
 export interface RescheduleInput {
@@ -125,12 +126,6 @@ async function liveGuardFields(
   }
 }
 
-function currentAssigneeIds(existing: RawChore): number[] {
-  if (existing.assignees !== undefined) return existing.assignees.map((a) => a.userId);
-  if (existing.assignedTo !== null && existing.assignedTo !== undefined) return [existing.assignedTo];
-  return [];
-}
-
 export async function reassignChore(input: ReassignInput, ctx: ToolContext): Promise<ReassignOutcome> {
   const existing = await loadChoreById(input.chore_id, ctx);
   const members = await ctx.service.members();
@@ -182,7 +177,7 @@ export async function reassignChore(input: ReassignInput, ctx: ToolContext): Pro
 
   const warnings = [
     notificationsSwitchedOff
-      ? `Notifications on "${safeName(existing.name)}" were switched off by this write. Donetick had them enabled with no reminder settings stored, a combination it crashes on when written back. Use edit_chore with notify to turn them on again.`
+      ? notificationsOffWarning(existing.name)
       : "",
     strategyPromoted
       ? `The assign strategy changed from no_assignee to ${body?.assignStrategy}, because a chore cannot both have an assignee and be set to assign nobody. Later occurrences will keep an assignee rather than reverting to unassigned.`

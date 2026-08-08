@@ -736,3 +736,87 @@ describe("an edit that switches notifications off says so", () => {
     expect((outcome as { warning?: string }).warning).toBeUndefined();
   });
 });
+
+describe("what a write reports back, and where each field comes from", () => {
+  // Every mutant in this area survived. The merges are the whole reason
+  // bodyAsRawFields exists: /details omits the write-shaped fields, so a projection
+  // built from it alone reports defaults for assign_strategy, assignees, is_rolling,
+  // is_private and notifications on a chore that has all of them.
+  test("create reports the fields it just wrote, which /details does not return", async () => {
+    const fake = fakeService({
+      // The real /details shape: none of the write-shaped keys, not even as nulls.
+      choreDetails: () => ({
+        id: 11,
+        name: "Deep clean",
+        description: null,
+        nextDueDate: "2026-08-10T13:00:00Z",
+        assignedTo: 2,
+        priority: 2,
+        status: 0,
+        frequencyType: "once",
+        createdBy: 1,
+        isActive: true,
+      }),
+      post: () => 11,
+    });
+
+    const outcome = await createChore(
+      {
+        name: "Deep clean",
+        assignees: ["Sam"],
+        is_private: true,
+        reschedule_from: "completion_date",
+        notify: { due_date: true },
+      },
+      ctxFor(fake.service),
+    );
+
+    if (outcome.kind !== "created") throw new Error(`expected a create, got ${outcome.kind}`);
+    expect(outcome.chore.assignees).toEqual(["Sam"]);
+    expect(outcome.chore.is_private).toBe(true);
+    expect(outcome.chore.is_rolling).toBe(true);
+    expect(outcome.chore.assign_strategy).not.toBeNull();
+    expect(outcome.chore.notifications).not.toBe("off");
+  });
+
+  test("edit reports the new value of a field it changed, not the pre-edit one", async () => {
+    // The existing test proves `existing` wins for a field /details omits. Reversing
+    // the spread order survives it, because the opposite direction had no test: with
+    // ...existing last, a rename reports the old name alongside a success.
+    const fake = fakeService({
+      chores: [listRow],
+      choreDetails: () => ({ ...detailsShapedRow, name: "Renamed", priority: 4 }),
+    });
+
+    const outcome = await editChore({ chore_id: 5, name: "Renamed" }, ctxFor(fake.service));
+
+    if (outcome.kind !== "edited") throw new Error(`expected an edit, got ${outcome.kind}`);
+    expect(outcome.chore.name).toBe("Renamed");
+    expect(outcome.chore.priority).toBe("P4");
+    // And the list-only field still comes from the row, since /details omits it.
+    expect(outcome.chore.labels).toEqual(["Kitchen"]);
+  });
+
+  test("a due-date clear that fails after the edit landed reports the edit, not a failure", async () => {
+    // The edit has already been written at this point. Reporting a flat failure tells
+    // the caller nothing landed, and the obvious retry re-applies a change that is
+    // already there.
+    const fake = fakeService({
+      chores: [listRow],
+      choreDetails: () => detailsShapedRow,
+      put: (path) => {
+        if (path.endsWith("/dueDate")) {
+          throw new DonetickError("Donetick refused: chore has been modified", { status: 403 });
+        }
+        return undefined;
+      },
+    });
+
+    const outcome = await editChore({ chore_id: 5, due_date: null }, ctxFor(fake.service));
+
+    if (outcome.kind !== "edited_detail_unavailable") {
+      throw new Error(`expected edited_detail_unavailable, got ${outcome.kind}`);
+    }
+    expect(outcome.message).toMatch(/succeeded|updated/i);
+  });
+});

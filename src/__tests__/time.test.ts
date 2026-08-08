@@ -289,3 +289,25 @@ describe("scopes and buckets cannot drift apart", () => {
     ).toThrow(/no rule for scope/);
   });
 });
+
+describe("humanizeDueIn is elapsed time, which CLAUDE.md once called DST-safe", () => {
+  // Pinned so the claim and the behaviour cannot drift apart again. America/New_York
+  // springs forward on 2026-03-08 and falls back on 2026-11-01.
+  test("a spring-forward night makes tomorrow 23 hours", () => {
+    const now = new Date("2026-03-07T14:00:00Z"); // 09:00 EST
+    const due = new Date("2026-03-08T13:00:00Z"); // 09:00 EDT, the next day
+    expect(humanizeDueIn(due, now)).toBe("in 23 hours");
+  });
+
+  test("a fall-back night makes tomorrow a day, with an hour to spare", () => {
+    const now = new Date("2026-10-31T13:00:00Z"); // 09:00 EDT
+    const due = new Date("2026-11-01T14:00:00Z"); // 09:00 EST, the next day
+    expect(humanizeDueIn(due, now)).toBe("in 1 day");
+  });
+
+  test("an ordinary day is a day", () => {
+    const now = new Date("2026-06-15T13:00:00Z");
+    const due = new Date("2026-06-16T13:00:00Z");
+    expect(humanizeDueIn(due, now)).toBe("in 1 day");
+  });
+});

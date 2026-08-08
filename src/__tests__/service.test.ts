@@ -105,6 +105,11 @@ describe("DonetickService", () => {
       "/api/v1/circles/members": [
         { id: 1, userId: 1, username: "jared", role: "admin", points: 0, pointsRedeemed: 0 },
         { id: 2, userId: 2, role: "member", points: 0, pointsRedeemed: 0 },
+        // Empty, not absent. Donetick stores an unset display name as "", which is why
+        // the fallback chain is || and not ??. Every fixture here omitted the field,
+        // and ?? handles an omitted field identically, so the comment saying || is
+        // deliberate had no test that could tell.
+        { id: 3, userId: 3, username: "sam", displayName: "", role: "member", points: 0, pointsRedeemed: 0 },
       ],
     });
     const service = new DonetickService(fake.client as never, { cacheTtlMs: 10_000 });
@@ -112,6 +117,7 @@ describe("DonetickService", () => {
     const members = await service.members();
     expect(members.find((m) => m.userId === 1)?.displayName).toBe("jared");
     expect(members.find((m) => m.userId === 2)?.displayName).toBe("user 2");
+    expect(members.find((m) => m.userId === 3)?.displayName).toBe("sam");
   });
 
   test("two different members are both kept", async () => {

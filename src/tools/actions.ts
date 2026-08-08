@@ -4,7 +4,13 @@ import { endpoints } from "@/endpoints";
 import { loadChoreById } from "@/tools/chore-lookup";
 import { resolveMember, safeName } from "@/resolve";
 import type { ToolContext } from "@/tools/context";
-import { isArchivedChore, type ChoreListRow } from "@/types";
+import {
+  isArchivedChore,
+  STATUS_IN_PROGRESS,
+  STATUS_PAUSED,
+  STATUS_PENDING_APPROVAL,
+  type ChoreListRow,
+} from "@/types";
 
 /** Same day in the given zone, which is not the same question as "within 24 hours". */
 function isSameCalendarDay(a: Date, b: Date, tz: string): boolean {
@@ -144,7 +150,8 @@ export async function completeChore(input: CompleteInput, ctx: ToolContext): Pro
   // that actually landed was reported as pending whenever the chore merely had
   // approval enabled, with a stale next due date alongside it.
   const status = statusOf(response);
-  const pendingApproval = status !== undefined ? status === 3 : chore.requireApproval === true;
+  const pendingApproval =
+    status !== undefined ? status === STATUS_PENDING_APPROVAL : chore.requireApproval === true;
 
   if (pendingApproval) {
     // From the response, not from the row read before the write. The /do answer on an
@@ -279,14 +286,14 @@ export async function skipChore(input: SkipInput, ctx: ToolContext): Promise<Ski
   // completion and its points are unrecoverable.
   const status = await liveStatus(chore, ctx);
 
-  if (status === 3) {
+  if (status === STATUS_PENDING_APPROVAL) {
     throw new Error(
       `"${safeName(chore.name)}" has a completion waiting on sign-off. Skipping it discards that submission: the chore drops to idle, the due date advances, and approve_chore then reports that nothing is pending, so whoever completed it loses the credit and any points. Settle it with approve_chore or reject_chore first.`,
     );
   }
 
-  if (status === 1 || status === 2) {
-    const state = status === 1 ? "running" : "paused";
+  if (status === STATUS_IN_PROGRESS || status === STATUS_PAUSED) {
+    const state = status === STATUS_IN_PROGRESS ? "running" : "paused";
     throw new Error(
       `"${safeName(chore.name)}" has a ${state} timer, and Donetick cannot skip a chore in that state: it answers 200 and does nothing, leaving the due date where it is. Complete it instead, which works from either timer state, or stop the timer in Donetick and skip it then.`,
     );

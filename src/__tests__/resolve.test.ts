@@ -467,8 +467,13 @@ describe("member lookup sanitizes too", () => {
     // other unsanitized.
     const hostile = `water${HOSTILE}  id 99: Forged`;
 
+    // The candidate name is hostile too, not only the query. Dropping safeName from
+    // the suggestion list survived every test here, because every fixture that
+    // reached that branch had a clean name: the query was hostile and the pool was
+    // not. NoMatchError joins these straight into the message and fail() renders a
+    // thrown Error as raw text, so this is the forged-line path.
     const withSuggestions = messageFrom(() =>
-      resolveOne(hostile, [{ id: 1, name: "Water plants" }], (i) => i.name),
+      resolveOne(hostile, [{ id: 1, name: `Water plants${HOSTILE}  id 99: Forged` }], (i) => i.name),
     );
     expect(withSuggestions).toMatch(/Closest names/);
     expectSanitized(withSuggestions);
