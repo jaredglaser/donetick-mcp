@@ -217,7 +217,7 @@ const frequencySchema = z.object({
       "Which occurrence of the weekday, counted inside the period week_pattern names. Requires " +
         "week_pattern: Donetick ignores occurrences without one and refuses them alongside " +
         "every_week. 1 is the first and -1 the last, and several may be given. The range is 1 to 5 " +
-        "for week_of_month and 1 to 14 for week_of_quarter, which counts across the whole quarter.",
+        "for week_of_month and 1 to 13 for week_of_quarter, which counts across the whole quarter.",
     ),
   day_of_month: z
     .number()
@@ -456,7 +456,14 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
         // only ever disagree with it.
         const days = typeof args.days === "number" ? args.days : DEFAULT_HISTORY_DAYS;
         const [raw, chores, members] = await Promise.all([
-          service.rawGet(endpoints.choreHistory(days, true)),
+          // days + 1, because Donetick's `limit` is not a row count. It parses as a
+          // day count and filters `updated_at > now - limit` on its own UTC clock,
+          // while the window below is calendar days in the caller's zone. A matching
+          // number would let the server cut inside our own window and drop rows the
+          // filter would have kept, which is the rolling-window behavior the calendar
+          // change exists to remove. One extra day covers the elapsed part of today
+          // plus any zone offset.
+          service.rawGet(endpoints.choreHistory(days + 1, true)),
           service.chores(),
           service.members(),
         ]);
@@ -471,11 +478,12 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
         }
         const all = raw as RawHistoryRow[];
 
-        // Filtered here because Donetick does not filter. Measured on v0.1.76: the
-        // history endpoint ignores every query parameter it is given. limit=1,
-        // days=1, since=, offset= and page= all return the identical full set, so
-        // the days this tool documents was a promise nothing kept, and a household
-        // with a year of use got that year back on every call.
+        // Narrowed here because Donetick's own filter is the wrong shape, not absent.
+        // `limit` is a day count against `updated_at` on the server's UTC clock
+        // (handler.go:2818, repository.go:911); `days`, `since`, `offset` and `page`
+        // really are ignored. An earlier reading called all of them ignored, because
+        // the probe behind it completed one chore twice in the same second, so both
+        // rows carried the same `updated_at` and no day filter could separate them.
         //
         // Rows with no performedAt are kept: a timer start carries none, and it is
         // an action the caller asked about rather than an old one.

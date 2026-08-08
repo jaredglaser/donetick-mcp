@@ -419,12 +419,17 @@ describe("list_activity", () => {
 
     const result = await tool.handler({});
     expect(result.isError).toBeUndefined();
-    expect(requestedPath).toMatch(/limit=7(&|$)/);
+    // days + 1. Donetick's `limit` is a day count against updated_at on its own UTC
+    // clock, so sending the same number lets the server cut inside the calendar
+    // window this tool applies afterward, which is the rolling behavior the calendar
+    // change exists to remove.
+    expect(requestedPath).toMatch(/limit=8(&|$)/);
   });
 
-  test("filters by days itself, since Donetick returns its whole history regardless", async () => {
-    // Measured on v0.1.76: limit, days, since, offset and page are all ignored by
-    // GET /chores/history, so the window this tool documents has to be applied here
+  test("narrows by days itself, since Donetick's own filter is the wrong shape", async () => {
+    // `limit` is a day count against updated_at on the server's clock, not a row
+    // count and not a filter on when the action was performed, so the window this
+    // tool documents has to be applied here
     // or not at all. Before this, "what did we get done this week" answered with
     // months-old completions presented as recent.
     const recent = historyRow({ id: 1, performedAt: "2026-06-14T09:00:00Z" });
