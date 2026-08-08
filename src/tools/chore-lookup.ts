@@ -104,10 +104,6 @@ export async function loadChoreById(
  * whatever is current and keeps the rest of the other change. Retried once, not in a
  * loop, so a genuine permission failure surfaces on the second attempt.
  *
- * Shared because there are two callers and only edit_chore had it. reassign_chore
- * takes the same merge path whenever it has to add someone new, and a concurrent edit
- * there failed outright with a message about another user having modified the chore.
- *
  * `send` runs before every attempt, so any guard inside it re-checks against the row
  * actually being written rather than the one first read.
  */

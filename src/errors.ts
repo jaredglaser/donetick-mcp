@@ -57,11 +57,10 @@ function bodyError(body: string): string | undefined {
  * already committed. Reported as a flat failure, the obvious next move is to retry,
  * which makes a duplicate.
  *
- * The set is narrow because an earlier version set this on every 5xx write, and
- * archive, unarchive and delete were measured not to write anything at all: each is
- * one UPDATE or DELETE that matched no rows. Saying "this may have been applied"
- * about a delete the caller has just confirmed is a false alarm about data loss, and
- * it contradicted the branch message it was appended to.
+ * The set is narrow on purpose. Archive, unarchive and delete are each one UPDATE or
+ * DELETE that matched no rows, so nothing was written; saying "this may have been
+ * applied" about a delete the caller has just confirmed is a false alarm about data
+ * loss.
  *
  * The scheduling writes are not in that set, and this block said they were for a
  * round after writesBeforeItCanFail below was corrected. They compute the next due

@@ -164,7 +164,6 @@ function requireNonBlankName(name: string | undefined, tool: string): void {
   }
 }
 
-/** Null and undefined both mean "no project", so the one caller that clears can pass either. */
 function resolveProjectId(name: string | null | undefined, projects: Project[]): number | null {
   if (name === undefined || name === null) return null;
   const wanted = normalizeName(name);
@@ -424,8 +423,8 @@ function assertNoThingTrigger(existing: RawChore): void {
  * own, since passing one is the repair.
  *
  * The predicate itself lives in frequency-health.ts, shared with summarizeFrequency,
- * because the two used to enumerate these shapes independently and disagreed three
- * times.
+ * because the description a reader gets and the refusal a writer gets have to be one
+ * decision.
  */
 function assertSchedulableFrequency(existing: RawChore): void {
   const health = frequencyHealth(existing);
@@ -485,8 +484,8 @@ function rebuildFrequency(
  *
  * ChoreListRow rather than RawChore is what enforces that. The /details view carries
  * none of the four fields ChoreListRow requires, so it is not assignable here and no
- * call site can reach this function with one. A runtime guard used to stand in for
- * that, guessing at the shape from three optional fields being absent at once.
+ * call site can reach this function with one. The compiler, not a runtime guess at
+ * the shape.
  */
 export function mergeEditRequest(existing: ChoreListRow, input: EditInput, ctx: BuildContext): ChoreRequestBody {
   assertNoThingTrigger(existing);

@@ -519,9 +519,7 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
         // Refused rather than defaulted to an empty list, which is the same rule
         // src/time.ts holds for a scope and src/service.ts for every other array:
         // "nothing happened this week" is an answer, and a proxy rewriting the
-        // response must not be able to produce it. service.ts's own function rather
-        // than its wording copied out, which is what the comment here used to say it
-        // was doing.
+        // response must not be able to produce it.
         const all = expectArray<RawHistoryRow>(raw, "chore history");
 
         // Narrowed here because Donetick's own filter is the wrong shape, not absent.
@@ -538,10 +536,6 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
         // things: asking for 1 day of activity at 09:00 would drop what was done at
         // 08:00 yesterday, which is a thing a person would call yesterday.
         // -(days - 1), so days: 1 is today and days: 7 is today and the six before it.
-        // Counting back a full N put the cutoff N days plus the elapsed part of today
-        // behind now, making the window N + 1 days wide while the schema promised it
-        // matched list_chores. A previous commit message claimed this and did not
-        // carry the change.
         const cutoff = startOfDay(addDays(now(), -(days - 1), timezone), timezone).getTime();
         const rows = all.filter((row) => {
           const at = dueDateOf(row.performedAt);

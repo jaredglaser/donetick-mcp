@@ -33,16 +33,13 @@ export function parseDueDate(input: string | null, now: Date, tz: string): Date 
 export function parseDueDate(input: string | null, now: Date, tz: string): Date | null {
   if (input === null) return null;
   const trimmed = input.trim();
-  // Null is the only way to say "no due date". An empty string used to mean it too,
-  // which made the same value mean opposite things in two tools: reschedule_chore
-  // read it as a clear, while edit_chore took the parse path, lost the stored date,
-  // and let ensureDueDateForRolling substitute today 09:00 on a rolling chore. It
-  // also broke the overload's promise, which types a string input as returning Date.
+  // Null is the only way to say "no due date". Accepting "" as a clear makes one
+  // value mean opposite things in two tools, and breaks the overload's promise that a
+  // string input returns a Date.
   //
-  // Its own message, not FORMAT_HELP. The fall-through below throws FORMAT_HELP for
-  // an empty string anyway, so this branch changed nothing and read as though it
-  // did; a caller who sent "" meaning "clear it" needs to be told which value does
-  // that, not handed a list of date formats none of which is what they wanted.
+  // Its own message, not FORMAT_HELP: the fall-through throws that anyway, so without
+  // a distinct one this branch changes nothing, and a caller who sent "" meaning
+  // "clear it" needs to be told which value does that.
   if (trimmed === "") {
     throw new Error(
       'An empty due date is not a way to clear one: pass null for "no due date". ' + FORMAT_HELP,

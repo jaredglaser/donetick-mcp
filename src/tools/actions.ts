@@ -99,12 +99,9 @@ export async function completeChore(input: CompleteInput, ctx: ToolContext): Pro
       // also swallowed an explicit timestamp: "I did it at 8pm tonight", asked at
       // noon, recorded noon and reported plain success, which is the opposite of
       // the refusal the schema promises.
-      // Both directions, not only forward. The clamp used to fire only when 09:00 was
-      // still ahead, so "today" asked at any hour after nine recorded 09:00: a
-      // thirteen-hour backdate at 22:00, which then set isPastCompletion and made the
-      // result explain that backdating had moved a rolling chore's next occurrence
-      // earlier. It had, and nobody asked for it. A bare "today" means now at every
-      // hour of the day.
+      // Both directions. Clamping only when 09:00 is still ahead records 09:00 for a
+      // "today" asked at any later hour, which is a backdate nobody requested and
+      // which then reports having moved a rolling chore's next occurrence.
       const sameDay = isSameCalendarDay(parsed, ctx.now(), ctx.timezone);
       const defaultedHour = !carriesTimeOfDay(input.completed_at);
       const effective = defaultedHour && sameDay ? ctx.now() : parsed;
@@ -175,30 +172,19 @@ export async function completeChore(input: CompleteInput, ctx: ToolContext): Pro
 
   const nextDue = nextDueDateOf(response);
 
-  // Measured live on an adaptive chore completed early: Donetick rescheduled it to
-  // the completion instant minus how early it was, so the next occurrence landed
-  // before the completion and the chore was overdue the moment it was done. Later
-  // completions land it a couple of milliseconds before now, permanently. Reporting
-  // a bare success there hands back a date the caller has no reason to question.
+  // Donetick can schedule the next occurrence behind now: adaptive does it on an
+  // early completion, and any chore finished more than one period late does it
+  // because the step starts from the previous due date. Reporting a bare success
+  // there hands back a date the caller has no reason to question.
   const nextDueInstant = nextDue.present && nextDue.value !== null ? new Date(nextDue.value) : null;
   const scheduledIntoThePast =
     nextDueInstant !== null &&
     !Number.isNaN(nextDueInstant.getTime()) &&
     nextDueInstant.getTime() < ctx.now().getTime();
-  // The cause is not the same in both cases, and stating the adaptive one
-  // unconditionally was wrong for the far more common one. Donetick steps from the
-  // previous due date rather than from the completion, so any chore finished more
-  // than one period late lands in the past: being a day late on a daily chore is
-  // enough. Adaptive is the case where it happens on an early completion instead.
-  // Adaptive first. Measured: adaptive scheduling ignores isRolling entirely, and a
-  // rolling adaptive chore completed early lands in the past exactly as a
-  // non-rolling one does. Testing isRolling first gave that chore the rolling
-  // mechanism, which is the wrong one, and dropped the adaptive sentence's
-  // actionable half, that it does not recover on its own.
-  //
-  // The rolling arm also requires isPastCompletion, matching rollingNote above. On
-  // its own it said "the completion date you gave it" about a date the caller never
-  // gave, and adaptive is the case that reaches it on a present-time completion.
+  // Adaptive first: adaptive scheduling ignores isRolling, so a rolling adaptive
+  // chore reaches both arms and only this one names a cause that is true of it and a
+  // repair it needs. The rolling arm requires isPastCompletion because it blames the
+  // caller's completion date, which a present-time completion never supplied.
   const pastNote = !scheduledIntoThePast || nextDueInstant === null
     ? ""
     : chore.frequencyType === "adaptive"

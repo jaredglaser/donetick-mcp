@@ -104,14 +104,9 @@ export interface ChoreListRow extends RawChore {
  * and it is the only view carrying lastCompletedDate, lastCompletedBy and
  * totalCompletedCount.
  *
- * completionWindow is on it, and was listed as omitted for a round: it is tagged
- * omitempty, so the one chore that reading measured had none set and
- * absent-for-that-row was written down as absent-from-the-view.
- *
- * projectId is not, despite carrying the same tag on the Go struct. The struct is not
- * the view: GetChoreDetailByID's Select lists completion_window and not project_id,
- * so the field is always nil and omitempty always drops it. Correcting the first
- * mistake by reading the struct produced this one in the same edit.
+ * completionWindow is on it and projectId is not, despite both carrying omitempty on
+ * the Go struct. The struct is not the view: GetChoreDetailByID's Select lists
+ * completion_window and not project_id. Read the query, not the tags.
  *
  * Assignable to RawChore and never to ChoreListRow, which is the whole reason it has
  * a name of its own.
@@ -165,8 +160,6 @@ export const CHORE_STATUS: Record<number, string> = {
 /**
  * The status values this server branches on, by name.
  *
- * Priority got PRIORITY_VALUE, MIN/MAX and a predicate; status got a table and three
- * bare literals in src/tools/actions.ts, on the one scale rule 7 calls out by name.
  * Derived from CHORE_STATUS so a renamed or renumbered value fails here at import
  * rather than silently changing which chores a guard refuses.
  */
@@ -221,10 +214,8 @@ export const PRIORITY_LABEL: Record<number, string> = {
  * `=== false` rather than `!chore.isActive`: the field is optional on some views,
  * and a row that omits it must not be reported as archived.
  *
- * One function because there were five copies, in the service's archived filter and
- * in four tools, each written out by hand. The member list has its own `isActive`
- * with the same spelling and a different meaning, which is exactly the kind of
- * neighbour that makes five copies drift into four.
+ * The member list has its own `isActive` with the same spelling and a different
+ * meaning, which is why this is a named function rather than an inline test.
  */
 export function isArchivedChore(chore: { isActive?: boolean }): boolean {
   return chore.isActive === false;
@@ -264,9 +255,8 @@ export const PRIORITY_VALUE: Record<string, number> = Object.fromEntries(
  * The labels a caller may pass, most urgent first and the unset one last, which is
  * the order they read in a tool schema.
  *
- * Derived for the same reason PRIORITY_VALUE is. This was a third hand-written copy
- * in src/tools/index.ts, so adding a level meant editing three lists and a fourth
- * that had drifted would still have looked right.
+ * Derived for the same reason PRIORITY_VALUE is: the scale is inverted, so a
+ * hand-written copy reads as plausible whatever it says.
  */
 export const PRIORITY_INPUT_VALUES: readonly string[] = [
   ...Object.entries(PRIORITY_LABEL)

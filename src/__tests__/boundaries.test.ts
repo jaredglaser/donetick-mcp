@@ -253,6 +253,30 @@ describe("module boundaries", () => {
     expect(offenders).toEqual([]);
   });
 
+  test("no comment narrates the repo's own history instead of stating a constraint", async () => {
+    // Rule 9 is the only structural rule nothing could check, and it is the one that
+    // drifted furthest: 28% of non-test source lines were comment. The recurring
+    // shape is a comment that explains what a past version did wrong, which tells a
+    // reader nothing about the code in front of them.
+    //
+    // Narrow on purpose. This catches the past-tense narrative marker, not comment
+    // length, because "this comment is too long" is a judgement and "this comment is
+    // about a previous commit" is not.
+    const NARRATIVE =
+      /\b(used to|an earlier version|a previous commit|the old fixture|nobody deleted|walked past it|sat green|each caught a round apart)\b/i;
+
+    const offenders: string[] = [];
+    for (const { path, text } of await readAll()) {
+      if (path.includes("__tests__")) continue;
+      text.split("\n").forEach((line, index) => {
+        if (!/^\s*(\/\/|\*)/.test(line)) return;
+        if (NARRATIVE.test(line)) offenders.push(`${path}:${index + 1}  ${line.trim()}`);
+      });
+    }
+
+    expect(offenders).toEqual([]);
+  });
+
   test("production modules import by alias, not by relative path", async () => {
     // Relative imports are for a test reaching its own subject. Anywhere else they
     // make a module's place in the graph depend on where it happens to sit.

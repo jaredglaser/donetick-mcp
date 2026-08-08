@@ -12,8 +12,7 @@ import {
 
 export function summarizeFrequency(chore: RawChore): string {
   // The same predicate the write side refuses on, so the two cannot describe one
-  // chore differently. They used to enumerate these shapes independently and
-  // disagreed three times, each caught a round apart.
+  // chore differently.
   const health = frequencyHealth(chore);
   if (!health.ok) return `broken: ${health.detail}`;
 
@@ -86,7 +85,7 @@ function ordinal(n: number): string {
  * dueDate, predue, nagging and completion are declared on the struct
  * (internal/chore/model/model.go:145-148) and read nowhere in the notifier package.
  *
- * So they are not settings, and an earlier version of this reporting them as
+ * So they are not settings, and reporting them as
  * on_due_date, before_due, when_overdue and on_completion told the caller a chore was
  * configured when nothing had been configured. Reminders are the whole of it.
  *

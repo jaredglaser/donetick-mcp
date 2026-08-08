@@ -139,10 +139,9 @@ export function buildFrequency(input: FrequencyInput, timezone: string, now: Dat
     // advanced correctly and held 13:00Z exactly; every 30 advanced 24 hours a step
     // rather than 30.
     //
-    // Only the counts that are not multiples of 24. An earlier version refused every
-    // hourly interval carrying a time, which blocked create, and through the matching
-    // arm of assertSchedulableFrequency every edit and reassign, on chores that
-    // behave exactly as configured.
+    // Only the counts that are not multiples of 24. Refusing every hourly interval
+    // with a time blocks create, and through assertSchedulableFrequency every edit and
+    // reassign, on chores that behave exactly as configured.
     if (input.type === "interval" && (input.unit ?? "days") === "hours") {
       const every = input.every ?? 1;
       if (every % 24 !== 0) {

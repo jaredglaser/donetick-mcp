@@ -2,8 +2,7 @@ import type { DonetickClient } from "@/client";
 import { endpoints } from "@/endpoints";
 
 export interface ProbeGate {
-  /** Runs the check once and records the result. Used at startup. */
-  run(): Promise<void>;
+    run(): Promise<void>;
   /**
    * The reason Donetick is unreachable, or undefined if it is fine. Cheap while
    * healthy: it costs a request only when the last known state was a failure.

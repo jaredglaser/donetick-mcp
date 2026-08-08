@@ -193,11 +193,6 @@ export async function reassignChore(input: ReassignInput, ctx: ToolContext): Pro
   };
 }
 
-/**
- * Both a P-label and a raw 0-4 integer are accepted: the projection reports priority
- * as a P-label (see PRIORITY_LABEL), so a caller that just read a chore's priority and
- * wants to set it back, or copy it from another chore, has an integer in hand already.
- */
 function resolvePriority(priority: string | number): number {
   if (typeof priority === "number") {
     if (isPriorityValue(priority)) return priority;

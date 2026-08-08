@@ -20,11 +20,10 @@
  * Not part of `bun test`: it needs Docker and takes a minute. Run it deliberately
  * with `bun run verify:live`.
  *
- * This script is not the server: it never speaks JSON-RPC and stdout is not a
- * transport here, so the "console.error only" rule in CLAUDE.md (stdout would
- * corrupt the protocol stream) does not apply. It prints its report to stdout on
- * purpose, so it can be piped or redirected like any other CLI report. Progress
- * from the container bootstrap goes to stderr to keep that report clean.
+ * This script is not the server: it never speaks JSON-RPC, so CLAUDE.md's stdout rule
+ * is scoped to src/ and this prints its report to stdout on purpose, to be piped or
+ * redirected like any other CLI report. Container bootstrap progress goes to stderr
+ * to keep that report clean.
  */
 
 import { DonetickClient } from "@/client";

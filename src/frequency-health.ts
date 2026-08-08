@@ -5,23 +5,13 @@ import type { RawChore } from "@/types";
  * Whether Donetick's scheduler can advance a stored recurrence, and if not, what to
  * say about it.
  *
- * One predicate, because there were two. src/projection.ts described a recurrence to
- * the caller and src/chore-request.ts refused to carry one forward, and they
- * enumerated the same seven shapes independently. They disagreed three separate
- * times, each caught a round apart: an interval count of 0 was described as "every 0
- * days" while every edit refused it; an hourly interval with a time read as "every 4
- * hours" while every edit refused it; and a day_of_the_month row carrying weekday
- * names was refused by every edit while the projection correctly called it fine. Each
- * time the fix was to edit the other copy into agreement, and nobody deleted the
- * second copy. PRIORITY_VALUE in types.ts already argues this case: a hand-maintained
- * second copy is the worst place for a transcription slip, because every value still
- * looks plausible.
+ * summarizeFrequency and assertSchedulableFrequency both call this. Do not add a
+ * second enumeration: the description a reader gets and the refusal a writer gets
+ * have to be one decision.
  *
- * Every shape below is measured against a live v0.1.76 container, and every one of
- * them is accepted by Donetick's request binding. Its own validateFrequencyLogic
- * would reject four of them, but that validator is dead code: its registration is
- * commented out, so the failure only appears later, from the scheduler, on the first
- * completion.
+ * Every shape below is accepted by Donetick's request binding. Its own
+ * validateFrequencyLogic would reject four of them and is dead code, so the failure
+ * arrives later, from the scheduler, on the first completion.
  */
 export type FrequencyHealth =
   | { ok: true }

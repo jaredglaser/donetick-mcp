@@ -64,7 +64,7 @@ export function listChores(args: ListArgs, ctx: ListContext): ListResult {
     return bucket(due, scope, ctx.now, zoneFor(chore, ctx.timezone), args.days ?? 7);
   });
 
-  // An unmatched filter used to yield zero rows, which reads as "you have nothing in
+  // An unmatched filter yielding zero rows reads as "you have nothing in
   // the Garage project" when the truth is "there is no Garage project". The caller
   // cannot tell those apart from an empty list, and the write path already throws
   // with suggestions on the same string.
@@ -127,7 +127,7 @@ export function listChores(args: ListArgs, ctx: ListContext): ListResult {
     const wanted = normalizeName(args.search);
     // A blank search matches every chore, since "x".includes("") is true, so it reads
     // as an unfiltered list rather than as the no-op it is. resolveOne rejects a blank
-    // query for the same reason; the two used to disagree.
+    // query for the same reason.
     if (wanted.length === 0) {
       throw new Error("search cannot be blank. Omit it to list without a name filter.");
     }
