@@ -104,9 +104,14 @@ export interface ChoreListRow extends RawChore {
  * and it is the only view carrying lastCompletedDate, lastCompletedBy and
  * totalCompletedCount.
  *
- * completionWindow and projectId are on it, and were listed as omitted for a round.
- * Both are tagged omitempty, so the one chore the original reading measured had
- * neither set and absent-for-that-row was written down as absent-from-the-view.
+ * completionWindow is on it, and was listed as omitted for a round: it is tagged
+ * omitempty, so the one chore that reading measured had none set and
+ * absent-for-that-row was written down as absent-from-the-view.
+ *
+ * projectId is not, despite carrying the same tag on the Go struct. The struct is not
+ * the view: GetChoreDetailByID's Select lists completion_window and not project_id,
+ * so the field is always nil and omitempty always drops it. Correcting the first
+ * mistake by reading the struct produced this one in the same edit.
  *
  * Assignable to RawChore and never to ChoreListRow, which is the whole reason it has
  * a name of its own.
@@ -124,7 +129,6 @@ export interface ChoreDetails {
   createdBy: number;
   syncVersion?: number;
   completionWindow?: number | null;
-  projectId?: number | null;
   notes?: string | null;
   /** Timer fields. Present on this view alone, and not read by anything here yet. */
   duration?: number;

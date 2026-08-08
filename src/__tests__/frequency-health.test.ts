@@ -53,16 +53,27 @@ const BROKEN: Array<[string, ChoreListRow]> = [
     row({ frequencyType: "days_of_the_week", frequencyMetadata: { days: ["saturday"], weekPattern: "week_of_month" } }),
   ],
   [
-    "week_of_quarter, stored occurrence of 14",
-    row({ frequencyType: "days_of_the_week", frequencyMetadata: { days: ["monday"], weekPattern: "week_of_quarter", occurrences: [14] } }),
+    "week_of_quarter, stored occurrence of 15",
+    row({ frequencyType: "days_of_the_week", frequencyMetadata: { days: ["monday"], weekPattern: "week_of_quarter", occurrences: [15] } }),
   ],
   [
     "week_of_month, stored occurrence of 6",
     row({ frequencyType: "days_of_the_week", frequencyMetadata: { days: ["monday"], weekPattern: "week_of_month", occurrences: [6] } }),
   ],
   [
-    "week_of_quarter, stored weekNumbers of 14",
-    row({ frequencyType: "days_of_the_week", frequencyMetadata: { days: ["monday"], weekPattern: "week_of_quarter", weekNumbers: [14] } }),
+    "week_of_month, stored occurrence of 0",
+    row({ frequencyType: "days_of_the_week", frequencyMetadata: { days: ["monday"], weekPattern: "week_of_month", occurrences: [0] } }),
+  ],
+  // -1 is "the last" in occurrences and nothing at all in weekNumbers: getOccurrences
+  // maps it to the string "last" on one branch and formats it with %d on the other,
+  // so this row 500s on every completion while its twin below is fine.
+  [
+    "week_of_month, -1 stored in the legacy weekNumbers",
+    row({ frequencyType: "days_of_the_week", frequencyMetadata: { days: ["monday"], weekPattern: "week_of_month", weekNumbers: [-1] } }),
+  ],
+  [
+    "week_of_quarter, -1 stored in the legacy weekNumbers",
+    row({ frequencyType: "days_of_the_week", frequencyMetadata: { days: ["monday"], weekPattern: "week_of_quarter", weekNumbers: [-1] } }),
   ],
   [
     "days_of_the_week, a name no weekday matches",
@@ -111,6 +122,17 @@ const HEALTHY: Array<[string, ChoreListRow]> = [
   [
     "every_week needs no occurrences",
     row({ frequencyType: "days_of_the_week", frequencyMetadata: { days: ["saturday"], weekPattern: "every_week" } }),
+  ],
+  // A quarter is 92 days in Q3 and Q4, thirteen weeks and one day, so one weekday
+  // gets a fourteenth occurrence. Measured 2026-08-08: wednesday with [14] completes
+  // and reschedules to 2026-09-30. A bound of 13 refused this on the merge path.
+  [
+    "week_of_quarter, occurrence 14 is reachable",
+    row({ frequencyType: "days_of_the_week", frequencyMetadata: { days: ["wednesday"], weekPattern: "week_of_quarter", occurrences: [14] } }),
+  ],
+  [
+    "week_of_quarter, 14 in the legacy weekNumbers is reachable too",
+    row({ frequencyType: "days_of_the_week", frequencyMetadata: { days: ["wednesday"], weekPattern: "week_of_quarter", weekNumbers: [14] } }),
   ],
   [
     "week_of_quarter, occurrence 13 is the ceiling and works",

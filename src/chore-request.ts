@@ -1,7 +1,7 @@
 import { parseDueDate } from "@/dates";
 import { dueDateOf } from "@/time";
 import { frequencyHealth } from "@/frequency-health";
-import { buildFrequency, type FrequencyInput } from "@/frequency";
+import { buildFrequency, type FrequencyInput, type FrequencyOutput } from "@/frequency";
 import { findMember, normalizeName, safeName } from "@/resolve";
 import {
   PRIORITY_VALUE,
@@ -303,14 +303,19 @@ export function requireDueDateFor(
   // being non-nil rather than on the value, and 0 is not nullish, so it survives the
   // ?? chain and reaches the wire as a real window. Measured: a chore with
   // completionWindow 0 and no due date answers 502 on every completion, same as 4.
+  // Both messages name the repair and say which tool has it. Donetick accepts a create
+  // with either shape, so chores in it exist, and this guard sits on the merge path:
+  // every whole-chore rewrite hits it, including reassign_chore, which has no
+  // parameter that can fix either condition. Saying only what is wrong left a caller
+  // holding a chore that could not be reassigned and no way to find out why.
   if (completionWindow !== null && completionWindow !== undefined) {
     throw new Error(
-      "A chore with a completion window needs a due date: Donetick measures the window against it and cannot complete a chore that has none.",
+      "A chore with a completion window needs a due date: Donetick measures the window against it and cannot complete a chore that has none. This blocks every tool that rewrites the whole chore, reassign_chore included. Repair it with edit_chore, passing due_date, or completion_window: null to drop the window.",
     );
   }
   if (frequencyType === "adaptive") {
     throw new Error(
-      "An adaptive chore needs a due date: Donetick's skip scheduler reads it without checking whether it is there, so the chore can be created and then never skipped.",
+      "An adaptive chore needs a due date: Donetick's skip scheduler reads it without checking whether it is there, so the chore can be created and then never skipped. This blocks every tool that rewrites the whole chore, reassign_chore included. Repair it with edit_chore, passing due_date, or a different frequency.",
     );
   }
 }
@@ -407,6 +412,46 @@ function assertSchedulableFrequency(existing: RawChore): void {
   );
 }
 
+/** The wall-clock HH:MM out of a stored time, which Donetick keeps as a full instant. */
+const STORED_TIME_RE = /T(\d{2}):(\d{2})/;
+
+/**
+ * Builds the new recurrence, carrying the stored time of day across when the caller
+ * did not name one.
+ *
+ * Attempted rather than predicated. buildFrequency refuses a time on a type that
+ * ignores it, and on an hourly interval whose count is not a whole number of days;
+ * restating those conditions here would be two copies of one rule, and the copy would
+ * be the one that decides whether a working chore can still be edited. So the
+ * with-time build is tried and the plain one is the fallback: the only inputs where
+ * the first fails and the second succeeds are exactly the ones that cannot carry a
+ * time, and an input that is wrong for some other reason fails both and reports its
+ * own error.
+ */
+function rebuildFrequency(
+  input: FrequencyInput,
+  storedTime: string | null | undefined,
+  ctx: BuildContext,
+): FrequencyOutput {
+  const carried =
+    input.time === undefined && typeof storedTime === "string"
+      ? STORED_TIME_RE.exec(storedTime)
+      : null;
+
+  if (carried) {
+    try {
+      return buildFrequency(
+        { ...input, time: `${carried[1]}:${carried[2]}` },
+        ctx.timezone,
+        ctx.now,
+      );
+    } catch {
+      // Falls through to the plain build, which reports any real problem with the input.
+    }
+  }
+  return buildFrequency(input, ctx.timezone, ctx.now);
+}
+
 /**
  * Donetick has no partial update for most fields; PUT /api/v1/chores/ replaces the
  * whole object. The merge base must therefore be the /chores list row, never the
@@ -430,9 +475,20 @@ export function mergeEditRequest(existing: ChoreListRow, input: EditInput, ctx: 
   // checking before the merge refused the fix along with the problem.
   if (input.frequency === undefined) assertSchedulableFrequency(existing);
 
-  const frequency =
+  // A new recurrence replaces frequencyMetadata wholesale, so the stored time of day
+  // goes with it unless the caller restated it. "Make it every 5 days instead of
+  // every 3" silently dropped a 09:00 firing time, and nothing reported the loss:
+  // both counts summarise as "every N days" and ProjectedChore has no field for the
+  // stored time, so the read-back could not show it either. Carried forward only when
+  // the caller named no time and the new type still reads one.
+  const rebuilt =
     input.frequency !== undefined
-      ? buildFrequency(input.frequency, ctx.timezone, ctx.now)
+      ? rebuildFrequency(input.frequency, existing.frequencyMetadata?.time, ctx)
+      : undefined;
+
+  const frequency =
+    rebuilt !== undefined
+      ? rebuilt
       : {
           frequencyType: existing.frequencyType,
           frequency: existing.frequency ?? 1,

@@ -1,4 +1,4 @@
-import { MONTHS, WEEKDAYS } from "@/frequency";
+import { MONTHS, WEEKDAYS, isReachableOccurrence, occurrenceLimitFor } from "@/frequency";
 import type { RawChore } from "@/types";
 
 /**
@@ -126,20 +126,21 @@ export function frequencyHealth(chore: RawChore): FrequencyHealth {
       );
     }
 
-    // The stored side of the bound frequency.ts enforces on input. Checked here too
-    // because this server wrote rows with an occurrence of 14 before that bound was
-    // corrected, and nothing else notices them: measured, a week_of_quarter chore
-    // with [14] answers 500 on every completion for monday, tuesday, saturday and
-    // sunday, and the split moves with the calendar year, so the three that work
-    // today are not safe either.
+    // Per array, not over the two concatenated. -1 is "the last" in `occurrences` and
+    // matches nothing in the legacy `weekNumbers`, so merging them into one list made
+    // a row that 500s on every completion read as healthy, and the projection then
+    // described it as "the last monday of every month".
     if (picksAnOccurrence) {
-      const stored = [...(meta.occurrences ?? []), ...(meta.weekNumbers ?? [])];
-      const limit = meta.weekPattern === "week_of_quarter" ? 13 : 5;
-      const outOfRange = stored.filter((n) => typeof n === "number" && n !== -1 && (n < 1 || n > limit));
-      if (outOfRange.length > 0) {
+      const pattern = String(meta.weekPattern);
+      const unreachable = (["occurrences", "weekNumbers"] as const).flatMap((field) =>
+        (meta[field] ?? [])
+          .filter((n) => !isReachableOccurrence(n, pattern, field))
+          .map((n) => `${JSON.stringify(n)} in ${field}`),
+      );
+      if (unreachable.length > 0) {
         return broken(
-          `a ${meta.weekPattern} pattern with an occurrence of ${outOfRange.join(", ")}, outside the 1 to ${limit} its scheduler can reach`,
-          `Pass frequency: {type: "days_of_the_week", days: ["saturday"], week_pattern: "${meta.weekPattern}", occurrences: [1]}, or -1 for the last.`,
+          `a ${pattern} pattern with ${unreachable.join(", ")}, which its scheduler never matches (1 to ${occurrenceLimitFor(pattern)}, or -1 for the last in occurrences)`,
+          `Pass frequency: {type: "days_of_the_week", days: ["saturday"], week_pattern: "${pattern}", occurrences: [1]}, or -1 for the last.`,
         );
       }
     }

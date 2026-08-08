@@ -134,9 +134,17 @@ export async function editChore(
 
   // The body that actually landed, kept for the read-back merge below: it holds the
   // write-shaped fields /details omits, and after a retry it is the second one.
+  //
+  // `merged` is the row that body was built on, which after a retry is not `existing`.
+  // Everything below that describes the write has to read this one: reporting labels
+  // off the pre-retry row hid a label the other writer added, and comparing the stale
+  // row's notification flag against the retried body's could invent the warning or
+  // miss it.
   let body: ChoreRequestBody;
+  let mergeBase: ChoreListRow = existing;
 
   const put = async (base: ChoreListRow): Promise<void> => {
+    mergeBase = base;
     body = mergeEditRequest(base, input, buildCtx);
     // Inside put, so the retry re-checks. The clear lands on a separate endpoint
     // after this write, so the merged body still carries the old date and the guard
@@ -211,29 +219,29 @@ export async function editChore(
       }. The edit itself succeeded; call get_chore to see the current state.`,
     };
   }
-  // labelsV2 is forced back to the pre-edit row rather than taken from body or
-  // detail: body's labelsV2 is the write shape ({id}, no name) and edit input
-  // has no way to change labels, while detail omits labelsV2 entirely. existing is
-  // the only source with the read-shaped labels this edit actually left in place.
+  // labelsV2 is forced back to the merge base rather than taken from body or detail:
+  // body's labelsV2 is the write shape ({id}, no name) and edit input has no way to
+  // change labels, while detail omits labelsV2 entirely. The base is the only source
+  // with the read-shaped labels this edit actually left in place.
   const merged = {
-    ...existing,
+    ...mergeBase,
     ...bodyAsRawFields(body!),
     ...detail,
-    labelsV2: existing.labelsV2 ?? null,
+    labelsV2: mergeBase.labelsV2 ?? null,
   } as RawChore;
   // The one field an unrelated edit can change on its own. mergeNotification turns
   // notifications off when the stored row has them on with no metadata, because the
   // alternative reaches a nil deref in a Donetick goroutine and takes the process
   // down. That tradeoff is argued in chore-request.ts and stated in edit_chore's
   // description, but the description is not what the caller reads after the write.
-  const notificationsSwitchedOff = existing.notification === true && body!.notification === false;
+  const notificationsSwitchedOff = mergeBase.notification === true && body!.notification === false;
 
   return {
     kind: "edited",
     chore: projectChore(merged, buildCtx.members, buildCtx.projects, buildCtx.now),
     ...(notificationsSwitchedOff
       ? {
-          warning: `Notifications on "${safeName(existing.name)}" were switched off by this edit. Donetick had them enabled with no reminder settings stored, a combination it crashes on when written back. Pass notify with the reminders you want to turn them on again.`,
+          warning: `Notifications on "${safeName(mergeBase.name)}" were switched off by this edit. Donetick had them enabled with no reminder settings stored, a combination it crashes on when written back. Pass notify with the reminders you want to turn them on again.`,
         }
       : {}),
   };

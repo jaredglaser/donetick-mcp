@@ -22,6 +22,40 @@ export const WEEK_PATTERNS = ["every_week", "week_of_month", "week_of_quarter"] 
 
 export type WeekPattern = (typeof WEEK_PATTERNS)[number];
 
+/**
+ * The highest occurrence Donetick's scheduler can ever match in a period.
+ *
+ * 14 for a quarter, not 13. Q3 and Q4 are 92 days, which is thirteen weeks and one
+ * day, so one weekday gets a fourteenth occurrence every year: measured 2026-08-08 on
+ * v0.1.76, days ["wednesday"] with occurrences [14] completes and reschedules to
+ * 2026-09-30, the fourteenth Wednesday of Q3 2026. A hard bound of 13 refused that
+ * chore on the merge path, which made it uneditable and unreassignable through this
+ * server.
+ */
+export function occurrenceLimitFor(weekPattern: string): number {
+  return weekPattern === "week_of_quarter" ? 14 : 5;
+}
+
+/**
+ * Whether the scheduler can match this stored occurrence.
+ *
+ * -1 means "the last" in `occurrences` and nothing at all in `weekNumbers`.
+ * getOccurrences maps -1 to the string "last" on the Occurrences branch alone
+ * (scheduler.go:201-207); the legacy WeekNumbers branch formats with %d, so a stored
+ * -1 there becomes "-1", matches none of "1".."5" or "last", and the 730-day walk
+ * exhausts into a 500 on every completion. The two arrays were checked as one list,
+ * which is how a value that is valid in one and fatal in the other read as fine.
+ */
+export function isReachableOccurrence(
+  value: unknown,
+  weekPattern: string,
+  field: "occurrences" | "weekNumbers",
+): boolean {
+  if (typeof value !== "number" || !Number.isInteger(value)) return false;
+  if (value === -1) return field === "occurrences";
+  return value >= 1 && value <= occurrenceLimitFor(weekPattern);
+}
+
 export type FrequencyUnit = "hours" | "days" | "weeks" | "months" | "years";
 
 export const FREQUENCY_UNITS: readonly FrequencyUnit[] = [
@@ -197,15 +231,24 @@ export function buildFrequency(input: FrequencyInput, timezone: string, now: Dat
               "first of each period, or [-1] for the last.",
           );
         }
+        // Deliberately one below occurrenceLimitFor on a quarter, and this is the one
+        // place the two sides differ on purpose. A quarter's fourteenth occurrence
+        // exists only in Q3 and Q4 and only for the weekday the quarter starts on, so
+        // a new chore asking for it schedules for some weekdays and answers 500 on
+        // every completion for the rest, and which is which moves with the calendar
+        // year. frequencyHealth allows a stored 14 because refusing one blocks every
+        // whole-chore rewrite on a chore that may well be working; refusing it here
+        // costs a caller nothing but a different number.
         const OCCURRENCE_LIMIT = input.week_pattern === "week_of_quarter" ? 13 : 5;
         const bad = input.occurrences.filter(
           (n) => !Number.isInteger(n) || (n !== -1 && (n < 1 || n > OCCURRENCE_LIMIT)),
         );
         if (bad.length > 0) {
-          // Donetick matches an occurrence against the positions that exist in the
-          // period. One that never matches exhausts its search and fails the same way.
           throw new Error(
-            `${JSON.stringify(bad)} is not a valid occurrence for ${input.week_pattern}. Use -1 for the last, or 1 through ${OCCURRENCE_LIMIT}.`,
+            `${JSON.stringify(bad)} is not a valid occurrence for ${input.week_pattern}. Use -1 for the last, or 1 through ${OCCURRENCE_LIMIT}.` +
+              (input.week_pattern === "week_of_quarter"
+                ? " A quarter can hold a 14th of one weekday, but only in Q3 and Q4 and only for the weekday that quarter starts on, so it is not a schedule to choose."
+                : ""),
           );
         }
       }

@@ -254,9 +254,13 @@ describe("completeChore", () => {
     expect(result.completed).toBe(true);
   });
 
-  test('completed_at "today" after 09:00 keeps the resolved 09:00 instant', async () => {
-    // Still in the past at that point, so there is nothing to clamp and the
-    // caller's own resolution stands.
+  test('completed_at "today" means now at every hour, not 09:00', async () => {
+    // This test asserted the opposite, on the reasoning that 09:00 was already in the
+    // past so there was nothing to clamp. There was: parseDueDate resolves a bare day
+    // to 09:00 for a due date, and a completion asked for at 16:00 local was recorded
+    // seven hours early. At 22:00 it was thirteen, and the backdate then set
+    // isPastCompletion and made the result explain that a rolling chore's next
+    // occurrence had moved earlier because of it.
     const afternoon = new Date("2026-08-06T20:00:00Z"); // 16:00 America/New_York
     const fake = fakeService({ chores: [listRow] });
     const ctx = { service: fake.service as never, now: () => afternoon, timezone: tz };
@@ -264,7 +268,32 @@ describe("completeChore", () => {
     await completeChore({ chore_id: 7, completed_at: "today" }, ctx);
 
     const body = fake.calls.find((c) => c.method === "POST")!.body as Record<string, unknown>;
-    expect(body.completedTime).toBe("2026-08-06T13:00:00.000Z");
+    expect(body.completedTime).toBe(afternoon.toISOString());
+  });
+
+  test('"today" late in the evening is not reported as a backdated completion', async () => {
+    // The consequence, rather than the value: isPastCompletion drives a note about
+    // having moved a rolling chore's next occurrence, which was untrue and unasked for.
+    const evening = new Date("2026-08-07T02:00:00Z"); // 22:00 on the 6th, America/New_York
+    const fake = fakeService({ chores: [{ ...listRow, isRolling: true }] });
+    const ctx = { service: fake.service as never, now: () => evening, timezone: tz };
+
+    const result = await completeChore({ chore_id: 7, completed_at: "today" }, ctx);
+
+    expect(result.message).not.toMatch(/backdat/i);
+  });
+
+  test('"yesterday" still records yesterday rather than being clamped to now', async () => {
+    // The clamp is for the calendar day the caller is on. Widening it to every bare
+    // day would throw away the one thing completed_at is for.
+    const afternoon = new Date("2026-08-06T20:00:00Z");
+    const fake = fakeService({ chores: [listRow] });
+    const ctx = { service: fake.service as never, now: () => afternoon, timezone: tz };
+
+    await completeChore({ chore_id: 7, completed_at: "yesterday" }, ctx);
+
+    const body = fake.calls.find((c) => c.method === "POST")!.body as Record<string, unknown>;
+    expect(body.completedTime).toBe("2026-08-05T13:00:00.000Z");
   });
 
   test("an explicit future time later today is refused, not quietly rewritten to now", async () => {
@@ -889,6 +918,37 @@ describe("claims made off a row that may be stale", () => {
 
     await expect(skipChore({ chore_id: 7 }, ctxFor(fake.service as never))).rejects.toThrow(
       /running timer/,
+    );
+  });
+
+  test("an adaptive skip is not reported as a failure for holding its due date", async () => {
+    // SkipChore sets completedDate to the chore's own nextDueDate and the adaptive arm
+    // schedules completedDate.Add(completedDate.Sub(nextDueDate)), a zero delta, so the
+    // date it returns is always the one it was given. The no-op detection read that as
+    // "nothing was skipped, you probably have a running timer" and threw, after the
+    // history row had already been written.
+    const fake = fakeService({
+      chores: [{ ...listRow, frequencyType: "adaptive" }],
+      post: () => ({ ...listRow, frequencyType: "adaptive", nextDueDate: listRow.nextDueDate }),
+    });
+
+    const result = await skipChore({ chore_id: 7 }, ctxFor(fake.service));
+
+    expect(result.next_due_date).toBe(listRow.nextDueDate);
+    expect(result.message).toMatch(/Skipped/);
+    expect(result.message).toMatch(/adaptive/i);
+  });
+
+  test("a non-adaptive chore holding its due date is still reported as a no-op", async () => {
+    // The other side of the same boundary: excluding adaptive must not disable the
+    // detection for everything else.
+    const fake = fakeService({
+      chores: [{ ...listRow, frequencyType: "interval" }],
+      post: () => ({ ...listRow, nextDueDate: listRow.nextDueDate }),
+    });
+
+    await expect(skipChore({ chore_id: 7 }, ctxFor(fake.service))).rejects.toThrow(
+      /nothing was skipped/,
     );
   });
 

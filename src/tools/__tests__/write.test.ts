@@ -445,6 +445,48 @@ describe("editChore", () => {
       expect(fake.calls).toContain("invalidateChores");
     });
 
+    test("what it reports after a retry describes the row that landed", async () => {
+      // The retry re-merges onto the newer row, and everything below the write used to
+      // read the pre-retry one: labels came from the row that lost, so a label the
+      // other writer added went unreported, and the notification warning compared the
+      // stale flag against the retried body's, which can invent it or miss it.
+      const versions = [
+        versioned("2026-08-06T10:00:00Z", { notification: true, notificationMetadata: null, labelsV2: [] }),
+        versioned("2026-08-06T10:00:05Z", {
+          notification: false,
+          notificationMetadata: null,
+          labelsV2: [{ id: 10, name: "Kitchen" }],
+        }),
+      ];
+      let read = 0;
+      let attempts = 0;
+      const fake = fakeService({
+        chores: () => [versions[Math.min(read++, versions.length - 1)]!],
+        put: () => {
+          attempts += 1;
+          if (attempts === 1) {
+            throw new DonetickError("chore has been modified by another user", {
+              status: 403,
+              retryable: true,
+              invalidatesCache: true,
+            });
+          }
+          return undefined;
+        },
+        choreDetails: () => detailsShapedRow,
+      });
+
+      const outcome = await editChore({ chore_id: 5, name: "Renamed" }, ctxFor(fake.service));
+
+      expect(attempts).toBe(2);
+      if (outcome.kind !== "edited") throw new Error(`expected an edit, got ${outcome.kind}`);
+      // The label the other writer added is reported.
+      expect(outcome.chore.labels).toEqual(["Kitchen"]);
+      // And the warning is not raised off the pre-retry row's notification flag: the
+      // row that was actually written already had them off.
+      expect(outcome.warning).toBeUndefined();
+    });
+
     test("gives up after one retry rather than looping on a permission failure", async () => {
       let attempts = 0;
       const fake = fakeService({

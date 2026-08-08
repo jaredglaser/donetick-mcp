@@ -93,9 +93,15 @@ export async function completeChore(input: CompleteInput, ctx: ToolContext): Pro
       // also swallowed an explicit timestamp: "I did it at 8pm tonight", asked at
       // noon, recorded noon and reported plain success, which is the opposite of
       // the refusal the schema promises.
+      // Both directions, not only forward. The clamp used to fire only when 09:00 was
+      // still ahead, so "today" asked at any hour after nine recorded 09:00: a
+      // thirteen-hour backdate at 22:00, which then set isPastCompletion and made the
+      // result explain that backdating had moved a rolling chore's next occurrence
+      // earlier. It had, and nobody asked for it. A bare "today" means now at every
+      // hour of the day.
       const sameDay = isSameCalendarDay(parsed, ctx.now(), ctx.timezone);
       const defaultedHour = !carriesTimeOfDay(input.completed_at);
-      const effective = defaultedHour && sameDay && parsed.getTime() > nowMs ? ctx.now() : parsed;
+      const effective = defaultedHour && sameDay ? ctx.now() : parsed;
 
       if (effective.getTime() > nowMs) {
         throw new Error(
@@ -299,19 +305,42 @@ export async function skipChore(input: SkipInput, ctx: ToolContext): Promise<Ski
   // against the date the chore had going in. The guards above catch the states known
   // to cause it; this catches the ones that are not known yet, which is the half a
   // guard built on a status enum cannot cover.
-  if (nextDue.present && nextDue.value !== null && nextDue.value === chore.nextDueDate) {
+  //
+  // Adaptive is excluded because for adaptive an unchanged due date is the correct
+  // outcome, not a symptom. SkipChore sets completedDate to the chore's own
+  // nextDueDate (handler.go:1841) and the adaptive arm schedules
+  // completedDate.Add(completedDate.Sub(nextDueDate)), which is a zero delta, so the
+  // date it returns is always the one it was given. The skip itself lands: the
+  // history row is written either way. Refusing here reported a skip that succeeded
+  // as a failure, blamed a timer that was not running, and invited a retry that
+  // writes a second skip row.
+  const holdsItsDate = chore.frequencyType === "adaptive";
+
+  if (
+    !holdsItsDate &&
+    nextDue.present &&
+    nextDue.value !== null &&
+    nextDue.value === chore.nextDueDate
+  ) {
     throw new Error(
       `Donetick accepted the skip of "${safeName(chore.name)}" and left its due date at ${nextDue.value}, so nothing was skipped. That happens when the chore is in a state its skip handler cannot act on, such as a running timer. Check it with get_chore.`,
     );
   }
 
   const archivedNote = inactiveNote(chore);
+  // Said rather than left to look like an oversight: an adaptive skip records the
+  // skip and deliberately leaves the due date alone, so a caller who skips one and
+  // then reads the same date back has not hit a bug.
+  const heldNote =
+    holdsItsDate && nextDue.present && nextDue.value === chore.nextDueDate
+      ? " Its due date is unchanged, which is what an adaptive recurrence does on a skip: it reschedules from the completion, and a skip records no completion to move it to."
+      : "";
   return {
     id: chore.id,
     name: chore.name,
     next_due_date: nextDue.present ? nextDue.value : null,
     message: nextDue.present
-      ? `Skipped "${safeName(chore.name)}".${archivedNote}`
+      ? `Skipped "${safeName(chore.name)}".${archivedNote}${heldNote}`
       : `Skipped "${safeName(chore.name)}".${archivedNote} Donetick did not report the new due date; call get_chore to see it.`,
   };
 }

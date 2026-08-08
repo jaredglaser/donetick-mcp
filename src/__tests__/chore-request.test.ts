@@ -1178,3 +1178,135 @@ describe("the hourly guard's boundaries", () => {
     ).toThrow(/freezes/);
   });
 });
+
+describe("a new recurrence and the stored time of day", () => {
+  // Donetick has no partial update and buildFrequency writes metadata.time only when
+  // the caller names one, so "every 5 days instead of every 3" used to drop a stored
+  // 09:00 firing time. Nothing reported it: both counts summarise as "every N days"
+  // and ProjectedChore carries no field for the stored time.
+  const withTime = (metadata: Record<string, unknown>): ChoreListRow =>
+    ({ ...existing, frequencyType: "interval", frequency: 3, frequencyMetadata: metadata }) as ChoreListRow;
+
+  test("changing only the count keeps the stored time", () => {
+    const base = withTime({ unit: "days", time: "1970-01-01T09:00:00-04:00", timezone: tz });
+
+    const body = mergeEditRequest(base, { frequency: { type: "interval", every: 5, unit: "days" } }, ctx());
+
+    expect(body.frequency).toBe(5);
+    expect(String(body.frequencyMetadata.time)).toMatch(/T09:00:00/);
+  });
+
+  test("a time the caller states wins over the stored one", () => {
+    const base = withTime({ unit: "days", time: "1970-01-01T09:00:00-04:00", timezone: tz });
+
+    const body = mergeEditRequest(
+      base,
+      { frequency: { type: "interval", every: 5, unit: "days", time: "18:30" } },
+      ctx(),
+    );
+
+    expect(String(body.frequencyMetadata.time)).toMatch(/T18:30:00/);
+  });
+
+  test("a chore with no stored time does not acquire one", () => {
+    const base = withTime({ unit: "days", timezone: tz });
+
+    const body = mergeEditRequest(base, { frequency: { type: "interval", every: 5, unit: "days" } }, ctx());
+
+    expect(body.frequencyMetadata.time).toBeUndefined();
+  });
+
+  test("a new type that ignores a time is not refused for carrying one forward", () => {
+    // The rule 13 case. buildFrequency throws for a time on a type that reads none, so
+    // carrying the stored one across unconditionally would turn "make this weekly"
+    // into a refusal on every chore that had a time.
+    const base = withTime({ unit: "days", time: "1970-01-01T09:00:00-04:00", timezone: tz });
+
+    const body = mergeEditRequest(base, { frequency: { type: "weekly" } }, ctx());
+
+    expect(body.frequencyType).toBe("weekly");
+    expect(body.frequencyMetadata.time).toBeUndefined();
+  });
+
+  test("an hourly interval that cannot hold a time is not refused either", () => {
+    // Same shape: 4 hours with a time freezes on the second completion, so
+    // buildFrequency refuses the pair. The edit still has to go through.
+    const base = withTime({ unit: "hours", time: "1970-01-01T09:00:00-04:00", timezone: tz });
+
+    const body = mergeEditRequest(
+      base,
+      { frequency: { type: "interval", every: 4, unit: "hours" } },
+      ctx(),
+    );
+
+    expect(body.frequency).toBe(4);
+    expect(body.frequencyMetadata.time).toBeUndefined();
+  });
+
+  test("an input that is wrong for its own reasons still reports that reason", () => {
+    // The carry-forward is a try/fallback, so a genuinely bad input must not be
+    // swallowed into a silent plain build.
+    const base = withTime({ unit: "days", time: "1970-01-01T09:00:00-04:00", timezone: tz });
+
+    expect(() =>
+      mergeEditRequest(base, { frequency: { type: "interval", every: 3, unit: "fortnights" as never } }, ctx()),
+    ).toThrow(/Unknown unit/);
+  });
+});
+
+describe("the due-date guard names a repair and the tool that has it", () => {
+  // The guard sits on the merge path, so it blocks reassign_chore too, and
+  // reassign_chore has no parameter that can clear a completion window or change a
+  // frequency. A message that said only what was wrong left the caller with a chore
+  // they could not reassign and no way to find out why.
+  // completionWindow cleared in the base: the shared fixture carries one, and the
+  // window branch runs first, so an adaptive case built on it would assert against
+  // the wrong message.
+  const noDue = (over: Record<string, unknown>): ChoreListRow =>
+    ({ ...existing, nextDueDate: null, completionWindow: null, ...over }) as ChoreListRow;
+
+  test("the completion-window refusal names edit_chore and both repairs", () => {
+    const message = (() => {
+      try {
+        mergeEditRequest(noDue({ completionWindow: 4 }), { name: "x" }, ctx());
+        return "";
+      } catch (e) {
+        return (e as Error).message;
+      }
+    })();
+
+    expect(message).toMatch(/completion window needs a due date/);
+    expect(message).toMatch(/edit_chore/);
+    expect(message).toMatch(/completion_window: null/);
+    expect(message).toMatch(/reassign_chore/);
+  });
+
+  test("the adaptive refusal names edit_chore and both repairs", () => {
+    const message = (() => {
+      try {
+        mergeEditRequest(noDue({ frequencyType: "adaptive" }), { name: "x" }, ctx());
+        return "";
+      } catch (e) {
+        return (e as Error).message;
+      }
+    })();
+
+    expect(message).toMatch(/adaptive chore needs a due date/);
+    expect(message).toMatch(/edit_chore/);
+    expect(message).toMatch(/reassign_chore/);
+  });
+
+  test("the repair the message names actually works", () => {
+    // Rule 13's other half: a named repair that the tool then refuses is worse than
+    // no message at all.
+    expect(() =>
+      mergeEditRequest(noDue({ completionWindow: 4 }), { completion_window: null }, ctx()),
+    ).not.toThrow();
+    expect(() =>
+      mergeEditRequest(noDue({ completionWindow: 4 }), { due_date: "2026-07-01" }, ctx()),
+    ).not.toThrow();
+    expect(() =>
+      mergeEditRequest(noDue({ frequencyType: "adaptive" }), { due_date: "2026-07-01" }, ctx()),
+    ).not.toThrow();
+  });
+});
