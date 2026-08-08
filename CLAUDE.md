@@ -6,13 +6,13 @@ Operating rules for an agent working in `donetick-mcp`, a stdio MCP server on Bu
 
 1. **Imports.** Use `@/` for anything under `src/`. Inside a `__tests__/` directory, use a relative import for a sibling under test (`../index`, `../read`) and `@/` for anything outside that directory. Never mix the two styles in a single non-test file; production code always uses `@/`.
 
-2. **Testing.** Tests live in `__tests__/` co-located with the source they cover, use `bun:test`, and run with `bun test --isolate`. Never sleep in a test. Every module that depends on time takes an injected clock (a `now: () => Date` or `now: () => number`) precisely so a test can pass a fixed instant instead of waiting on a real one.
+2. **Testing.** Tests live in `__tests__/` co-located with the source they cover, use `bun:test`, and run with `bun test --isolate`. Never sleep in a test. Every module that depends on time takes an injected clock (a `now: () => Date` or `now: () => number`) precisely so a test can pass a fixed instant instead of waiting on a real one. A test that cannot fail is worse than none, because it reports coverage that does not exist. After writing one, revert the behavior it covers and confirm it fails.
 
 3. **I/O boundaries.** `src/client.ts` is the only module that touches the network. `src/cache.ts` and `src/probe.ts` are the only modules that hold state, and both hold it in an instance created once at startup, never at module scope. Domain helpers (`src/time.ts`, `src/projection.ts`, `src/resolve.ts`, `src/tools/read.ts`) take their clock and their data as arguments and hold nothing themselves.
 
 4. **MCP boundary.** Only `src/index.ts` may import `@modelcontextprotocol/server`. Tool definitions elsewhere are plain data: a name, a description, a zod raw shape for the input, and a handler function. Anything constructed inside the server factory in `src/index.ts` has per-connection lifetime, so the `DonetickService` and its caches are built once outside the factory and closed over, not rebuilt per connection.
 
-5. **Never guess a wire field name.** Donetick's internal `/api/v1` is undocumented. A wrong field name on a write often produces a 200 with the wrong effect rather than an error, so check `src/types.ts`, `src/endpoints.ts`, and, when in doubt, the live instance before trusting a guess.
+5. **Never guess a wire field name.** Donetick's internal `/api/v1` is undocumented. A wrong field name on a write often produces a 200 with the wrong effect rather than an error, so check `src/types.ts`, `src/endpoints.ts`, and, when in doubt, the live instance before trusting a guess. A bound enforced on input is not enforced on data already stored. Whatever the input schema refuses, the checks that read a stored shape must refuse too.
 
 6. **Priority is inverted.** P1 is the most urgent, P4 is the least, and `0` means unset. Never map an ascending low/medium/high scale onto it. See `PRIORITY_LABEL` in `src/types.ts`.
 
@@ -25,6 +25,16 @@ Operating rules for an agent working in `donetick-mcp`, a stdio MCP server on Bu
 10. **No em dashes, en dashes, or `--` used as a dash, anywhere in this repo's prose or code comments.** Avoid delve, robust, comprehensive, meticulous, leverage, utilize, facilitate, essentially, fundamentally, and "it's worth noting". No excessive emoji.
 
 11. **Dependencies are pinned to exact versions.** No `^` or `~` in `package.json`.
+
+12. **Measure where a fact stops being true.** A behavior confirmed in one case is not confirmed for the class it belongs to. Before acting on a measurement, measure the nearest case that should fall outside it.
+
+13. **A wrong refusal costs more than the bug it prevents.** A guard on the merge path blocks every tool that rewrites a whole chore, so a chore it wrongly refuses becomes uneditable through this server and the message names a repair that is not needed. Before adding one, construct the nearest shape that should pass and prove it does.
+
+14. **One predicate, not two that agree today.** When a write refuses a shape, the read that describes it must come from the same function. Two copies of one invariant drift, and each reads as plausible on its own.
+
+15. **A fixture must contain the value it exists to catch.** Before adding one, ask which value it is quietly not testing.
+
+16. **"Measured" is a claim with a date on it.** Rewriting code under such a claim does not carry the measurement forward. Re-measure it or delete it.
 
 ## Commands
 
