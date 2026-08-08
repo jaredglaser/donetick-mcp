@@ -94,7 +94,14 @@ export function mapHttpError(input: {
  * missing chore. Nudge reaches this only on a genuine instance fault, where "may have
  * been applied" is true of a notification anyway.
  */
-function writesBeforeItCanFail(input: { path: string; method: string }): boolean {
+function writesBeforeItCanFail(input: { path: string; method: string; body: string }): boolean {
+  // A retrieve failure is not a partial write. The whole-chore endpoint reads the
+  // existing row before it changes anything, so a 500 saying it could not retrieve
+  // the chore means nothing was written, and telling the caller their edit may have
+  // landed sends them reconciling a change that does not exist. Reached when a chore
+  // is deleted elsewhere while this server's cache still holds it.
+  if (/Failed to retrieve chore/i.test(input.body)) return false;
+
   return (
     !isCreatorOnlyWrite(input.path, input.method) &&
     !isSchedulingWrite(input.path, input.method) &&
@@ -168,6 +175,12 @@ function classifyHttpError(input: {
     if (isIdScopedWrite(path, method)) {
       return new DonetickError(
         "That chore no longer exists, or is no longer visible to this account.",
+        { status, retryable: true, invalidatesCache: true },
+      );
+    }
+    if (/Failed to retrieve chore/i.test(body)) {
+      return new DonetickError(
+        "That chore no longer exists, or is no longer visible to this account. If it was in a list a moment ago, it was probably deleted elsewhere.",
         { status, retryable: true, invalidatesCache: true },
       );
     }

@@ -42,7 +42,13 @@ export async function setSubtaskCompleted(
 
   const subtasks = chore.subTasks ?? [];
   if (subtasks.length === 0) {
-    throw new Error(`"${safeName(chore.name)}" has no subtasks.`);
+    // Hedged, because this path never contacts the server. The row can come from a
+    // cache that is up to its TTL old, so a chore deleted elsewhere is
+    // indistinguishable here from a live one with an empty checklist, and stating the
+    // second as fact is a claim this tool has not checked.
+    throw new Error(
+      `"${safeName(chore.name)}" has no subtasks, according to this server's cached copy of it. If you expected some, the chore may have changed or been deleted since that copy was read; get_chore will say.`,
+    );
   }
 
   const subtask = resolveOne(

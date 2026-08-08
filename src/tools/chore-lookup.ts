@@ -2,6 +2,22 @@ import type { ChoreListRow } from "@/types";
 import { DonetickError } from "@/errors";
 import type { ToolContext } from "@/tools/context";
 
+/**
+ * Whether an error from GET /:id/details means the chore is not there.
+ *
+ * Exported because get_chore reads /details a second time after the id resolves, and
+ * on a cache hit it never passes through the diagnosis below. A deleted chore held in
+ * a warm cache therefore surfaced as "The Donetick instance returned an error", which
+ * reads as a broken instance rather than a chore that is gone.
+ *
+ * Only the statuses that mean absent. Measured on v0.1.76: /details answers a missing
+ * id with a 500, not a 404, so both are in here, and a timeout or a revoked token
+ * must keep its own reason rather than becoming a missing chore.
+ */
+export function isMissingChoreError(error: unknown): boolean {
+  return error instanceof DonetickError && (error.status === 404 || error.status >= 500);
+}
+
 function requireChoreId(chore_id: number | undefined): number {
   if (typeof chore_id !== "number") {
     throw new Error(
@@ -22,7 +38,7 @@ async function loadFrom(
   const found = all.find((chore) => chore.id === id);
   if (!found) {
     throw new Error(
-      `No chore with id ${id} is in ${whichList}. It may have been deleted, or archived since the list was last read.`,
+      `No chore with id ${id} is in ${whichList}. It may have been deleted, or it may never have existed.`,
     );
   }
   return found;
@@ -62,8 +78,7 @@ export async function loadChoreById(
     // timeout, a revoked token, or a genuine instance fault into "that chore does
     // not exist", which sends the user looking for data they were told was gone.
     // The 500 is in here because /details answers a missing id with one.
-    const missing = error instanceof DonetickError && (error.status === 404 || error.status >= 500);
-    if (!missing) throw error;
+    if (!isMissingChoreError(error)) throw error;
     throw new Error(
       `No chore with id ${id} exists on this account. Use list_chores to see what is there.`,
     );

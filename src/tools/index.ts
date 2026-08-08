@@ -33,7 +33,7 @@ import {
 } from "@/tools/schedule";
 import { setSubtaskCompleted, type SetSubtaskInput } from "@/tools/subtasks";
 import { createChore, deleteChore, editChore } from "@/tools/write";
-import { loadChoreById } from "@/tools/chore-lookup";
+import { isMissingChoreError, loadChoreById } from "@/tools/chore-lookup";
 import type { ToolContext } from "@/tools/context";
 import { CHORE_HISTORY_STATUS, type ChoreListRow, type Member, type RawChore } from "@/types";
 import { getChore, listChores, type ListArgs } from "@/tools/read";
@@ -411,11 +411,23 @@ export function buildToolDefinitions(deps: ToolContext): ToolDefinition[] {
       },
       handler: guard(async (args) => {
         const resolved = await resolveChore(args);
-        const [detail, members, projects] = await Promise.all([
-          service.choreDetails(resolved.id),
-          service.members(),
-          service.projects(),
-        ]);
+        const [members, projects] = await Promise.all([service.members(), service.projects()]);
+
+        // Diagnosed rather than surfaced. On a cache hit the id resolves out of a
+        // stale list without ever reaching loadChoreById's probe, so a chore deleted
+        // elsewhere reached here as a bare instance error. The cache is invalidated
+        // too: nothing else on this path writes, so the same wrong answer would
+        // otherwise repeat for the rest of the TTL.
+        let detail: Partial<RawChore>;
+        try {
+          detail = (await service.choreDetails(resolved.id)) as Partial<RawChore>;
+        } catch (error) {
+          if (!isMissingChoreError(error)) throw error;
+          service.invalidateChores();
+          throw new Error(
+            `No chore with id ${resolved.id} exists on this account any more. It was in this server's cached list, so it was probably deleted elsewhere in the last few seconds. Use list_chores to see what is there.`,
+          );
+        }
         // ChoreListRow and ChoreDetails are different views of a chore, and neither is
         // a superset of the other; the two types spell out which field lives where.
         // Detail spreads last so its fields win, but since /details never sets the

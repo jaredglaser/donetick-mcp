@@ -294,6 +294,67 @@ describe("get_chore merging", () => {
   });
 });
 
+describe("get_chore on a chore deleted while the cache was warm", () => {
+  // The id resolves out of the stale list without reaching loadChoreById's probe, so
+  // the second read's 500 was surfaced as a bare instance error, and nothing on this
+  // path writes, so the stale row survived and repeated the wrong answer for the TTL.
+  const row = {
+    id: 5, name: "Deleted elsewhere", nextDueDate: null, assignedTo: null, priority: 0,
+    status: 0, frequencyType: "once", createdBy: 1, assignStrategy: "no_assignee",
+    assignees: [], labelsV2: [], frequencyMetadata: {},
+  };
+
+  function fakeFor(detailsError: unknown) {
+    let invalidations = 0;
+    const fake = {
+      ...service,
+      chores: async () => [row],
+      allChores: async () => [row],
+      choreDetails: async () => {
+        throw detailsError;
+      },
+      invalidateChores: () => {
+        invalidations += 1;
+      },
+    };
+    return { fake, invalidations: () => invalidations };
+  }
+
+  test("says the chore is gone rather than that the instance errored", async () => {
+    const { fake } = fakeFor(new DonetickError("Failed to fetch chore details", { status: 500 }));
+    const tools = buildToolDefinitions({ ...deps, service: fake as never });
+
+    const result = await tools.find((t) => t.name === "get_chore")!.handler({ chore_id: 5 });
+
+    expect(result.isError).toBe(true);
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toMatch(/No chore with id 5 exists/);
+    expect(text).not.toMatch(/instance returned an error/i);
+  });
+
+  test("invalidates the cache, so the next call does not repeat it", async () => {
+    const { fake, invalidations } = fakeFor(
+      new DonetickError("Failed to fetch chore details", { status: 500 }),
+    );
+    const tools = buildToolDefinitions({ ...deps, service: fake as never });
+
+    await tools.find((t) => t.name === "get_chore")!.handler({ chore_id: 5 });
+
+    expect(invalidations()).toBe(1);
+  });
+
+  test("a timeout keeps its own reason instead of becoming a missing chore", async () => {
+    const { fake } = fakeFor(new DonetickError("The request timed out after 15000ms.", { status: 0 }));
+    const tools = buildToolDefinitions({ ...deps, service: fake as never });
+
+    const result = await tools.find((t) => t.name === "get_chore")!.handler({ chore_id: 5 });
+
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toMatch(/timed out/);
+    expect(text).not.toMatch(/No chore with id/);
+  });
+});
+
 describe("list_activity", () => {
   const historyRow = (overrides: Record<string, unknown>) => ({
     id: 100,

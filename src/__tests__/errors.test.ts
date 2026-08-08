@@ -392,3 +392,41 @@ describe("a 5xx on a write says nothing about whether it applied", () => {
     expect(err.indeterminate).toBe(false);
   });
 });
+
+
+describe("a 500 that reports a failed retrieve", () => {
+  // Reached when a chore is deleted elsewhere while this server's cache still holds
+  // it: the whole-chore PUT reads the row before changing anything, so nothing was
+  // written. It is in none of the three path sets, so it was stamped indeterminate
+  // and the caller was told an edit that never happened might have.
+  const retrieveFailure = {
+    status: 500,
+    body: JSON.stringify({ error: "Failed to retrieve chore" }),
+    path: "/api/v1/chores/",
+    method: "PUT",
+  };
+
+  test("is not indeterminate, because a read failure wrote nothing", () => {
+    expect(mapHttpError(retrieveFailure).indeterminate).toBe(false);
+  });
+
+  test("names the chore rather than blaming the instance", () => {
+    const err = mapHttpError(retrieveFailure);
+    expect(err.message).toMatch(/no longer exists/i);
+    expect(err.message).not.toMatch(/instance returned an error/i);
+  });
+
+  test("invalidates the cache, since the cached row is what caused it", () => {
+    expect(mapHttpError(retrieveFailure).invalidatesCache).toBe(true);
+  });
+
+  test("an unrelated 500 on the same endpoint is still indeterminate", () => {
+    const other = mapHttpError({
+      status: 500,
+      body: JSON.stringify({ error: "db locked" }),
+      path: "/api/v1/chores/",
+      method: "PUT",
+    });
+    expect(other.indeterminate).toBe(true);
+  });
+});
